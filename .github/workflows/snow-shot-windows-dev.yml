@@ -64,9 +64,11 @@ jobs:
             $command = Get-Command $tool -ErrorAction Stop
             Write-Output "$tool`: $($command.Source)"
           }
-          $cmakeVersion = (& cmake --version | Select-Object -First 1)
-          if ($LASTEXITCODE -ne 0 -or $cmakeVersion -ne "cmake version 4.2.3") {
-            throw "Expected pinned CMake 4.2.3, found $cmakeVersion."
+          $cmakeOutput = @(& cmake --version)
+          $cmakeExitCode = $LASTEXITCODE
+          $cmakeVersion = $cmakeOutput[0].Trim()
+          if ($cmakeExitCode -ne 0 -or $cmakeVersion -ne "cmake version 4.2.3") {
+            throw "Expected pinned CMake 4.2.3, found $cmakeVersion (exit $cmakeExitCode)."
           }
           if ($env:VCToolsVersion -notmatch '^14\.51\.') { throw "MSVC 14.51 is required." }
           & makensis /VERSION
