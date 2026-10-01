@@ -56,6 +56,18 @@
             <translation>正在加载预览…</translation>
         </message>
         <message>
+            <source>More</source>
+            <translation>更多</translation>
+        </message>
+        <message>
+            <source>More actions</source>
+            <translation>更多操作</translation>
+        </message>
+        <message>
+            <source>Pin this screenshot to the screen</source>
+            <translation>将此截图固定到屏幕</translation>
+        </message>
+        <message>
             <source>Pin to screen</source>
             <translation>固定到屏幕</translation>
         </message>
@@ -82,6 +94,183 @@
         <message>
             <source>This action cannot be undone</source>
             <translation>此操作无法撤销</translation>
+        </message>
+        <message>
+            <source>This screenshot cannot be pinned</source>
+            <translation>此截图无法固定到屏幕</translation>
+        </message>
+    </context>
+    <context>
+        <name>PinnedWindowManagementPageWidget</name>
+        <message>
+            <source>%1-%2 of %3</source>
+            <translation>%1-%2 / %3</translation>
+        </message>
+        <message numerus="yes">
+            <source>%n pinned window(s)</source>
+            <translation>
+            <numerusform>%n 个固定到屏幕窗口</numerusform>
+        </translation>
+        </message>
+        <message>
+            <source>All sources</source>
+            <translation>所有来源</translation>
+        </message>
+        <message>
+            <source>Bulk actions for selected pinned windows</source>
+            <translation>对选中的固定到屏幕窗口执行批量操作</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Change the source or date range to see more pinned windows</source>
+            <translation>更改来源或日期范围以查看更多固定到屏幕窗口</translation>
+        </message>
+        <message>
+            <source>Clipboard</source>
+            <translation>剪贴板</translation>
+        </message>
+        <message>
+            <source>Closed</source>
+            <translation>已关闭</translation>
+        </message>
+        <message>
+            <source>Date</source>
+            <translation>日期</translation>
+        </message>
+        <message>
+            <source>Default</source>
+            <translation>默认</translation>
+        </message>
+        <message>
+            <source>Delete</source>
+            <translation>删除</translation>
+        </message>
+        <message numerus="yes">
+            <source>Delete %n selected item(s)?</source>
+            <translation>
+            <numerusform>删除选中的 %n 项？</numerusform>
+        </translation>
+        </message>
+        <message>
+            <source>Delete all pinned windows</source>
+            <translation>删除所有固定到屏幕窗口</translation>
+        </message>
+        <message>
+            <source>Delete all pinned windows?</source>
+            <translation>删除所有固定到屏幕窗口？</translation>
+        </message>
+        <message>
+            <source>Delete selected pinned windows</source>
+            <translation>删除选中的固定到屏幕窗口</translation>
+        </message>
+        <message>
+            <source>Delete this pinned window?</source>
+            <translation>删除此固定到屏幕窗口？</translation>
+        </message>
+        <message>
+            <source>Deselect all</source>
+            <translation>取消全选</translation>
+        </message>
+        <message>
+            <source>Deselect all pinned windows</source>
+            <translation>取消选择所有固定到屏幕窗口</translation>
+        </message>
+        <message>
+            <source>End date</source>
+            <translation>结束日期</translation>
+        </message>
+        <message>
+            <source>Group: %1</source>
+            <translation>分组：%1</translation>
+        </message>
+        <message>
+            <source>No matching pinned windows</source>
+            <translation>没有符合条件的固定到屏幕窗口</translation>
+        </message>
+        <message>
+            <source>No pinned windows</source>
+            <translation>暂无固定到屏幕窗口</translation>
+        </message>
+        <message>
+            <source>Not Closed</source>
+            <translation>未关闭</translation>
+        </message>
+        <message>
+            <source>Other / legacy</source>
+            <translation>其他 / 旧记录</translation>
+        </message>
+        <message>
+            <source>Pin to Screen Management</source>
+            <translation>固定到屏幕管理</translation>
+        </message>
+        <message>
+            <source>Pinned images and text will appear here</source>
+            <translation>固定到屏幕的图片和文字将显示在这里</translation>
+        </message>
+        <message>
+            <source>Pinned window image</source>
+            <translation>固定到屏幕窗口的图片</translation>
+        </message>
+        <message>
+            <source>Refresh pinned windows</source>
+            <translation>刷新固定到屏幕窗口</translation>
+        </message>
+        <message>
+            <source>Restore</source>
+            <translation>恢复</translation>
+        </message>
+        <message>
+            <source>Saved records and their open windows will be removed</source>
+            <translation>已保存的记录及其打开的窗口将被移除</translation>
+        </message>
+        <message>
+            <source>Screenshot</source>
+            <translation>截图</translation>
+        </message>
+        <message>
+            <source>Screenshot history</source>
+            <translation>截图历史</translation>
+        </message>
+        <message>
+            <source>Select all</source>
+            <translation>全选</translation>
+        </message>
+        <message>
+            <source>Select all entries on this page</source>
+            <translation>选择此页的所有条目</translation>
+        </message>
+        <message>
+            <source>Select record</source>
+            <translation>选择记录</translation>
+        </message>
+        <message numerus="yes">
+            <source>Selected %n item(s)</source>
+            <translation>
+            <numerusform>已选择 %n 项</numerusform>
+        </translation>
+        </message>
+        <message>
+            <source>Selected files</source>
+            <translation>所选文件</translation>
+        </message>
+        <message>
+            <source>Show</source>
+            <translation>显示</translation>
+        </message>
+        <message>
+            <source>Source</source>
+            <translation>来源</translation>
+        </message>
+        <message>
+            <source>Start date</source>
+            <translation>开始日期</translation>
+        </message>
+        <message>
+            <source>The saved record and its open window will be removed</source>
+            <translation>此记录及其打开的窗口将被移除</translation>
         </message>
     </context>
     <context>
@@ -126,7 +315,7 @@
         </message>
         <message>
             <source>Copied and pinned screenshots will appear here</source>
-            <translation>复制或固定的截图会显示在这里</translation>
+            <translation>已复制或固定到屏幕的截图会显示在这里</translation>
         </message>
         <message>
             <source>Copy to clipboard</source>
@@ -240,6 +429,10 @@
             <translation>始终置顶</translation>
         </message>
         <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
             <source>Click-through</source>
             <translation>鼠标穿透</translation>
         </message>
@@ -272,6 +465,10 @@
             <translation>当前：%1%</translation>
         </message>
         <message>
+            <source>Decrease 10%</source>
+            <translation>减少 10%</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>默认</translation>
         </message>
@@ -282,6 +479,18 @@
         <message>
             <source>Delete Specified Group</source>
             <translation>删除指定分组</translation>
+        </message>
+        <message>
+            <source>Destroy</source>
+            <translation>销毁</translation>
+        </message>
+        <message>
+            <source>Destroy pinned window</source>
+            <translation>销毁固定到屏幕窗口</translation>
+        </message>
+        <message>
+            <source>Destroy this pinned window? This action cannot be undone.</source>
+            <translation>确定销毁此固定到屏幕窗口吗？此操作无法撤销。</translation>
         </message>
         <message>
             <source>Display text recognition results</source>
@@ -306,10 +515,6 @@
         <message>
             <source>Flip vertically</source>
             <translation>垂直翻转</translation>
-        </message>
-        <message>
-            <source>Focus mode</source>
-            <translation>专注模式</translation>
         </message>
         <message>
             <source>Group: %1</source>
@@ -340,6 +545,10 @@
             <translation>图像尺寸过大。</translation>
         </message>
         <message>
+            <source>Increase 10%</source>
+            <translation>增加 10%</translation>
+        </message>
+        <message>
             <source>Load new content</source>
             <translation>加载新内容</translation>
         </message>
@@ -353,11 +562,11 @@
         </message>
         <message>
             <source>Opacity</source>
-            <translation>透明度</translation>
+            <translation>不透明度</translation>
         </message>
         <message>
             <source>Opacity: %1%</source>
-            <translation>透明度：%1%</translation>
+            <translation>不透明度：%1%</translation>
         </message>
         <message>
             <source>Process image</source>
@@ -396,8 +605,16 @@
             <translation>显示所有窗口</translation>
         </message>
         <message>
+            <source>Show border</source>
+            <translation>显示边框</translation>
+        </message>
+        <message>
             <source>Show main interface</source>
             <translation>显示主界面</translation>
+        </message>
+        <message>
+            <source>The image could not be saved automatically: %1</source>
+            <translation>无法自动保存图像：%1</translation>
         </message>
         <message>
             <source>The new content could not be loaded</source>
@@ -405,23 +622,54 @@
         </message>
         <message>
             <source>The pinned image copy could not be started</source>
-            <translation>无法启动已固定图像的复制</translation>
+            <translation>无法启动已固定到屏幕的图像的复制</translation>
         </message>
         <message>
             <source>The pinned image could not be copied: %1</source>
-            <translation>无法复制已固定的图像：%1</translation>
+            <translation>无法复制已固定到屏幕的图像：%1</translation>
         </message>
         <message>
             <source>The pinned image could not be prepared</source>
-            <translation>无法准备已固定的图像</translation>
+            <translation>无法准备已固定到屏幕的图像</translation>
         </message>
         <message>
             <source>The pinned image save could not be started</source>
-            <translation>无法启动已固定图像的保存</translation>
+            <translation>无法启动已固定到屏幕的图像的保存</translation>
         </message>
         <message>
             <source>Thumbnail mode</source>
             <translation>缩略图模式</translation>
+        </message>
+        <message>
+            <source>Window Management</source>
+            <translation>窗口管理</translation>
+        </message>
+    </context>
+    <context>
+        <name>WindowGroupSwitcher</name>
+        <message>
+            <source>%1, %2 not closed windows, %3 total</source>
+            <translation>%1，%2 个未关闭窗口，共 %3 个</translation>
+        </message>
+        <message>
+            <source>Click a group to switch. Esc to cancel.</source>
+            <translation>点击分组以切换，按 Esc 取消。</translation>
+        </message>
+        <message>
+            <source>Current</source>
+            <translation>当前</translation>
+        </message>
+        <message>
+            <source>Release shortcut keys or click a group to switch. Esc to cancel.</source>
+            <translation>松开所有快捷键或点击分组以切换，按 Esc 取消。</translation>
+        </message>
+        <message>
+            <source>Switch Window Group</source>
+            <translation>切换窗口分组</translation>
+        </message>
+        <message>
+            <source>Windows · not closed / total</source>
+            <translation>窗口 · 未关闭 / 总数</translation>
         </message>
     </context>
     <context>
@@ -435,8 +683,40 @@
             <translation>取消</translation>
         </message>
         <message>
+            <source>Clear Default group</source>
+            <translation>清空默认分组</translation>
+        </message>
+        <message>
+            <source>Clear group</source>
+            <translation>清空分组</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>默认</translation>
+        </message>
+        <message>
+            <source>Delete "%1" and all its pinned windows, including closed windows? This action cannot be undone.</source>
+            <translation>删除“%1”及其中所有固定到屏幕窗口（包括已关闭的窗口）？此操作无法撤销。</translation>
+        </message>
+        <message>
+            <source>Delete all pinned windows in "%1", including closed windows? The Default group will remain. This action cannot be undone.</source>
+            <translation>删除“%1”中的所有固定到屏幕窗口（包括已关闭的窗口）？默认分组将保留。此操作无法撤销。</translation>
+        </message>
+        <message>
+            <source>Delete empty groups</source>
+            <translation>删除空分组</translation>
+        </message>
+        <message>
+            <source>Delete every group with no pinned windows other than closed ones? Closed pinned windows saved in those groups will also be permanently deleted. This action cannot be undone.</source>
+            <translation>删除所有仅包含已关闭的固定到屏幕窗口或没有固定到屏幕窗口的分组？这些分组中保存的已关闭的固定到屏幕窗口也将被永久删除。此操作无法撤销。</translation>
+        </message>
+        <message>
+            <source>Delete group</source>
+            <translation>删除分组</translation>
+        </message>
+        <message>
+            <source>Delete groups</source>
+            <translation>删除分组</translation>
         </message>
         <message>
             <source>Group %1</source>
@@ -457,6 +737,13 @@
         <message>
             <source>This group name is already in use</source>
             <translation>该分组名称已被使用</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::presentation::WindowGroupSwitcherController</name>
+        <message>
+            <source>Could not switch window group. Please try again.</source>
+            <translation>无法切换窗口分组，请重试。</translation>
         </message>
     </context>
 </TS>

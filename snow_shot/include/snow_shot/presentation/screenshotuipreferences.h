@@ -1,6 +1,8 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTUIPREFERENCES_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTUIPREFERENCES_H
 
+#include "snow_shot/presentation/screenshotselectiondisplayunit.h"
+
 #include <QColor>
 #include <QString>
 #include <QtGlobal>
@@ -14,12 +16,14 @@ enum class ScreenshotColorPickerDisplayMode {
 };
 
 struct ScreenshotUiPreferences {
+    ScreenshotSelectionDisplayUnit selectionDisplayUnit = kDefaultScreenshotSelectionDisplayUnit;
     bool selectionTransitionAnimationEnabled = true;
     ScreenshotColorPickerDisplayMode colorPickerDisplayMode =
         ScreenshotColorPickerDisplayMode::HideOutsideSelection;
     QColor selectionBorderColor = QColor(0x40, 0x96, 0xff);
     QColor selectionMaskColor = QColor(0, 0, 0, 128);
     qreal shortcutHintOpacity = 1.0;
+    bool screenshotAreaTypeHintEnabled = true;
     QColor cursorGuideLineColor = QColor(0, 0, 0, 0);
     QColor monitorCenterGuideLineColor = QColor(0, 0, 0, 0);
     QColor colorPickerCenterGuideLineColor = QColor(0, 0, 0, 0);
@@ -83,7 +87,7 @@ screenshotColorPickerOpacity(ScreenshotColorPickerDisplayMode mode,
         return state.intelligentSelecting || state.manualSelecting ? 1.0 : 0.0;
     }
     if (mode == ScreenshotColorPickerDisplayMode::HideOutsideSelection &&
-        !state.pointInsideSelection) {
+        !state.intelligentSelecting && !state.pointInsideSelection) {
         return 0.0;
     }
     if (state.manualSelecting || state.movingSelection) {

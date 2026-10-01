@@ -30,6 +30,14 @@
       "fit": "contain"
     },
     {
+      "variant": "brand",
+      "symbol": "SnowShotMiniLogo",
+      "name": "snow-shot-mini-logo",
+      "source": "../src/presentation/components/icons/resources/snow-shot-mini-logo.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
       "variant": "outlined",
       "symbol": "AlignBottom",
       "name": "align-bottom",
@@ -82,6 +90,30 @@
       "symbol": "Angle",
       "name": "angle",
       "source": "../src/presentation/components/icons/resources/angle.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ArrowRatio",
+      "name": "arrow-ratio",
+      "source": "../src/presentation/components/icons/resources/arrow-ratio.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ArrowShaftPlain",
+      "name": "arrow-shaft-plain",
+      "source": "../src/presentation/components/icons/resources/arrow-shaft-plain.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ArrowShaftTapered",
+      "name": "arrow-shaft-tapered",
+      "source": "../src/presentation/components/icons/resources/arrow-shaft-tapered.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -255,6 +287,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "ArrowheadIndentedTriangle",
+      "name": "arrowhead-indented-triangle",
+      "source": "../src/presentation/components/icons/resources/arrowhead-indented-triangle.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ArrowheadIndentedTriangleStart",
+      "name": "arrowhead-indented-triangle-start",
+      "source": "../src/presentation/components/icons/resources/arrowhead-indented-triangle-start.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "ArrowheadNone",
       "name": "arrowhead-none",
       "source": "../src/presentation/components/icons/resources/arrowhead-none.svg",
@@ -327,6 +375,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "AutoScrollInterval",
+      "name": "auto-scroll-interval",
+      "source": "../src/presentation/components/icons/resources/auto-scroll-interval.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "Blur",
       "name": "blur",
       "source": "../src/presentation/components/icons/resources/blur.svg",
@@ -346,6 +402,14 @@
       "symbol": "Delete",
       "name": "delete",
       "source": "../src/presentation/components/icons/resources/delete.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "DestroyPinnedWindow",
+      "name": "destroy-pinned-window",
+      "source": "../src/presentation/components/icons/resources/destroy-pinned-window.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -455,6 +519,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "FullScreenCanvas",
+      "name": "full-screen-canvas",
+      "source": "../src/presentation/components/icons/resources/full-screen-canvas.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "Group",
       "name": "group",
       "source": "../src/presentation/components/icons/resources/group.svg",
@@ -519,6 +591,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "LogicalPixels",
+      "name": "logical-pixels",
+      "source": "../src/presentation/components/icons/resources/logical-pixels.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "MagicWand",
       "name": "magic-wand",
       "source": "../src/presentation/components/icons/resources/magic-wand.svg",
@@ -543,6 +623,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "MoveSelectionHorizontal",
+      "name": "move-selection-horizontal",
+      "source": "../src/presentation/components/icons/resources/move-selection-horizontal.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "MoveSelectionVertical",
+      "name": "move-selection-vertical",
+      "source": "../src/presentation/components/icons/resources/move-selection-vertical.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "OcrTranslate",
       "name": "ocr-translate",
       "source": "../src/presentation/components/icons/resources/ocr-translate.svg",
@@ -559,6 +655,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "PhysicalPixels",
+      "name": "physical-pixels",
+      "source": "../src/presentation/components/icons/resources/physical-pixels.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "PinClipboard",
       "name": "pin-clipboard",
       "source": "../src/presentation/components/icons/resources/pin-clipboard.svg",
@@ -570,6 +674,14 @@
       "symbol": "PinToScreen",
       "name": "pin-to-screen",
       "source": "../src/presentation/components/icons/resources/pin-to-screen.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "PinToScreenManagement",
+      "name": "pin-to-screen-management",
+      "source": "../src/presentation/components/icons/resources/pin-to-screen-management.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -639,9 +751,25 @@
     },
     {
       "variant": "outlined",
+      "symbol": "RecordingPostProcessing",
+      "name": "recording-post-processing",
+      "source": "../src/presentation/components/icons/resources/recording-post-processing.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "RecordingRender",
       "name": "recording-render",
       "source": "../src/presentation/components/icons/resources/recording-render.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "RecordingRenderSettings",
+      "name": "recording-render-settings",
+      "source": "../src/presentation/components/icons/resources/recording-render-settings.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -674,6 +802,14 @@
       "symbol": "RefreshCapture",
       "name": "refresh-capture",
       "source": "../src/presentation/components/icons/resources/refresh-capture.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "Restart",
+      "name": "restart",
+      "source": "../src/presentation/components/icons/resources/restart.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -722,6 +858,54 @@
       "symbol": "ScreenshotFullScreen",
       "name": "screenshot-full-screen",
       "source": "../src/presentation/components/icons/resources/screenshot-full-screen.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ScreenshotRegionAdd",
+      "name": "screenshot-region-add",
+      "source": "../src/presentation/components/icons/resources/screenshot-region-add.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ScreenshotRegionCurved",
+      "name": "screenshot-region-curved",
+      "source": "../src/presentation/components/icons/resources/screenshot-region-curved.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ScreenshotRegionFreehand",
+      "name": "screenshot-region-freehand",
+      "source": "../src/presentation/components/icons/resources/screenshot-region-freehand.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ScreenshotRegionPolyline",
+      "name": "screenshot-region-polyline",
+      "source": "../src/presentation/components/icons/resources/screenshot-region-polyline.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ScreenshotRegionRectangle",
+      "name": "screenshot-region-rectangle",
+      "source": "../src/presentation/components/icons/resources/screenshot-region-rectangle.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ScreenshotRegionReduce",
+      "name": "screenshot-region-reduce",
+      "source": "../src/presentation/components/icons/resources/screenshot-region-reduce.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -1002,6 +1186,14 @@
       "symbol": "Window",
       "name": "window",
       "source": "../src/presentation/components/icons/resources/window.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "WindowGroupSwitch",
+      "name": "window-group-switch",
+      "source": "../src/presentation/components/icons/resources/window-group-switch.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

@@ -12,6 +12,14 @@
             <translation>新增</translation>
         </message>
         <message>
+            <source>Add Template</source>
+            <translation>新增範本</translation>
+        </message>
+        <message>
+            <source>Add screenshot region</source>
+            <translation>新增截圖區域</translation>
+        </message>
+        <message>
             <source>Add template</source>
             <translation>新增範本</translation>
         </message>
@@ -21,7 +29,7 @@
         </message>
         <message>
             <source>Adjust opacity</source>
-            <translation>調整透明度</translation>
+            <translation>調整不透明度</translation>
         </message>
         <message>
             <source>Align bottom</source>
@@ -60,6 +68,14 @@
             <translation>箭頭</translation>
         </message>
         <message>
+            <source>Arrow ratio (scroll to adjust)</source>
+            <translation>箭頭比例（捲動調整）</translation>
+        </message>
+        <message>
+            <source>Arrow shaft type</source>
+            <translation>箭桿類型</translation>
+        </message>
+        <message>
             <source>Arrow stroke color</source>
             <translation>箭頭筆畫色彩</translation>
         </message>
@@ -80,6 +96,10 @@
             <translation>自動捲動</translation>
         </message>
         <message>
+            <source>Auto-scroll interval (scroll to adjust; click to reset to 200 ms)</source>
+            <translation>自動捲動間隔（滾輪調整；按一下重設為 200 ms）</translation>
+        </message>
+        <message>
             <source>Avatar</source>
             <translation>頭像</translation>
         </message>
@@ -90,6 +110,10 @@
         <message>
             <source>Blue</source>
             <translation>藍色</translation>
+        </message>
+        <message>
+            <source>Brightness</source>
+            <translation>亮度</translation>
         </message>
         <message>
             <source>Bring forward</source>
@@ -124,6 +148,10 @@
             <translation>圓形</translation>
         </message>
         <message>
+            <source>Click-through</source>
+            <translation>滑鼠穿透</translation>
+        </message>
+        <message>
             <source>Close recording</source>
             <translation>關閉錄製</translation>
         </message>
@@ -154,6 +182,18 @@
         <message>
             <source>Corner radius (scroll to adjust)</source>
             <translation>圓角半徑（捲動調整）</translation>
+        </message>
+        <message>
+            <source>Could not capture selected elements</source>
+            <translation>無法擷取所選元素</translation>
+        </message>
+        <message>
+            <source>Could not delete the draw template</source>
+            <translation>無法刪除繪圖範本</translation>
+        </message>
+        <message>
+            <source>Could not save the draw template</source>
+            <translation>無法儲存繪圖範本</translation>
         </message>
         <message>
             <source>Cross-line fill</source>
@@ -196,6 +236,10 @@
             <translation>目前浮水印字型大小</translation>
         </message>
         <message>
+            <source>Curve region</source>
+            <translation>曲線區域</translation>
+        </message>
+        <message>
             <source>Curved arrow</source>
             <translation>曲線箭頭</translation>
         </message>
@@ -222,6 +266,14 @@
         <message>
             <source>Delete</source>
             <translation>刪除</translation>
+        </message>
+        <message>
+            <source>Delete Draw Template</source>
+            <translation>刪除繪圖範本</translation>
+        </message>
+        <message>
+            <source>Delete draw template "%1"? This action cannot be undone.</source>
+            <translation>刪除繪圖範本「%1」？此操作無法復原。</translation>
         </message>
         <message>
             <source>Delete selected elements</source>
@@ -260,12 +312,20 @@
             <translation>拖曳工具列</translation>
         </message>
         <message>
+            <source>Draw Template</source>
+            <translation>繪圖範本</translation>
+        </message>
+        <message>
             <source>Edit</source>
             <translation>編輯</translation>
         </message>
         <message>
             <source>Edit selection</source>
             <translation>編輯選取範圍</translation>
+        </message>
+        <message>
+            <source>Effect Settings</source>
+            <translation>效果設定</translation>
         </message>
         <message>
             <source>Elbow arrow</source>
@@ -320,6 +380,10 @@
             <translation>末端箭頭 圓點</translation>
         </message>
         <message>
+            <source>End arrowhead indented triangle</source>
+            <translation>末端箭頭 內凹三角形</translation>
+        </message>
+        <message>
             <source>End arrowhead none</source>
             <translation>末端箭頭 無</translation>
         </message>
@@ -338,6 +402,10 @@
         <message>
             <source>Eraser</source>
             <translation>橡皮擦</translation>
+        </message>
+        <message>
+            <source>Exit</source>
+            <translation>結束</translation>
         </message>
         <message>
             <source>Export Settings</source>
@@ -380,6 +448,10 @@
             <translation>格式</translation>
         </message>
         <message>
+            <source>Freehand region</source>
+            <translation>自由繪製區域</translation>
+        </message>
+        <message>
             <source>Full-width</source>
             <translation>全形</translation>
         </message>
@@ -398,6 +470,10 @@
         <message>
             <source>Half-width</source>
             <translation>半形</translation>
+        </message>
+        <message>
+            <source>Hide selection toolbar</source>
+            <translation>隱藏選取範圍工具列</translation>
         </message>
         <message>
             <source>Highlight</source>
@@ -460,6 +536,10 @@
             <translation>鍵盤大小</translation>
         </message>
         <message>
+            <source>LaTeX Formula Recognition</source>
+            <translation>LaTeX 公式辨識</translation>
+        </message>
+        <message>
             <source>Line</source>
             <translation>直線</translation>
         </message>
@@ -474,6 +554,10 @@
         <message>
             <source>Line text fill</source>
             <translation>線條文字填充</translation>
+        </message>
+        <message>
+            <source>Logical Pixel Selection</source>
+            <translation>邏輯像素選取範圍</translation>
         </message>
         <message>
             <source>Mask color</source>
@@ -516,6 +600,18 @@
             <translation>滑鼠點擊顏色 透明</translation>
         </message>
         <message>
+            <source>Mouse highlight</source>
+            <translation>滑鼠醒目提示</translation>
+        </message>
+        <message>
+            <source>Mouse highlight color</source>
+            <translation>滑鼠醒目提示色彩</translation>
+        </message>
+        <message>
+            <source>Mouse highlight preview</source>
+            <translation>滑鼠醒目提示預覽</translation>
+        </message>
+        <message>
             <source>Mouse trail color</source>
             <translation>滑鼠軌跡顏色</translation>
         </message>
@@ -528,12 +624,24 @@
             <translation>滑鼠軌跡顏色 透明</translation>
         </message>
         <message>
+            <source>Move selection horizontally (press and hold to drag)</source>
+            <translation>水平移動選取範圍（按住並拖曳）</translation>
+        </message>
+        <message>
+            <source>Move selection vertically (press and hold to drag)</source>
+            <translation>垂直移動選取範圍（按住並拖曳）</translation>
+        </message>
+        <message>
+            <source>No matching templates</source>
+            <translation>沒有符合的範本</translation>
+        </message>
+        <message>
             <source>No templates yet</source>
             <translation>尚無範本</translation>
         </message>
         <message>
             <source>Opacity</source>
-            <translation>透明度</translation>
+            <translation>不透明度</translation>
         </message>
         <message>
             <source>Open recording folder</source>
@@ -580,12 +688,20 @@
             <translation>畫筆醒目提示描邊寬度 %1 (%2px)</translation>
         </message>
         <message>
+            <source>Physical Pixel Selection</source>
+            <translation>實體像素選取範圍</translation>
+        </message>
+        <message>
             <source>Pick color from canvas</source>
             <translation>從畫布擷取色彩</translation>
         </message>
         <message>
             <source>Pin to screen</source>
-            <translation>釘選到螢幕</translation>
+            <translation>固定到螢幕</translation>
+        </message>
+        <message>
+            <source>Plain shaft</source>
+            <translation>普通箭桿</translation>
         </message>
         <message>
             <source>Please enter a template name</source>
@@ -594,6 +710,18 @@
         <message>
             <source>Please enter a template value</source>
             <translation>請輸入範本值</translation>
+        </message>
+        <message>
+            <source>Polyline region</source>
+            <translation>折線區域</translation>
+        </message>
+        <message>
+            <source>Post-processing effects</source>
+            <translation>後製效果</translation>
+        </message>
+        <message>
+            <source>Progress Bar Color</source>
+            <translation>進度條顏色</translation>
         </message>
         <message>
             <source>Punctuation</source>
@@ -612,6 +740,10 @@
             <translation>錄製麥克風</translation>
         </message>
         <message>
+            <source>Record mouse clicks</source>
+            <translation>記錄滑鼠點擊</translation>
+        </message>
+        <message>
             <source>Record screen</source>
             <translation>錄製螢幕</translation>
         </message>
@@ -628,6 +760,10 @@
             <translation>錄製格式</translation>
         </message>
         <message>
+            <source>Recording settings</source>
+            <translation>錄影設定</translation>
+        </message>
+        <message>
             <source>Rectangle</source>
             <translation>矩形</translation>
         </message>
@@ -638,6 +774,10 @@
         <message>
             <source>Rectangle highlight</source>
             <translation>矩形醒目提示</translation>
+        </message>
+        <message>
+            <source>Rectangle region</source>
+            <translation>矩形區域</translation>
         </message>
         <message>
             <source>Red</source>
@@ -732,12 +872,28 @@
             <translation>圖形</translation>
         </message>
         <message>
+            <source>Show Playback Time</source>
+            <translation>顯示播放時間</translation>
+        </message>
+        <message>
+            <source>Show Progress Bar</source>
+            <translation>顯示進度條</translation>
+        </message>
+        <message>
+            <source>Show QR Code</source>
+            <translation>顯示二維碼</translation>
+        </message>
+        <message>
             <source>Show cursor in recording</source>
             <translation>在錄製中顯示游標</translation>
         </message>
         <message>
             <source>Show keystrokes in recording</source>
             <translation>在錄製中顯示按鍵</translation>
+        </message>
+        <message>
+            <source>Show original image</source>
+            <translation>顯示原圖</translation>
         </message>
         <message>
             <source>Smart Erase</source>
@@ -820,6 +976,10 @@
             <translation>起始箭頭 圓點</translation>
         </message>
         <message>
+            <source>Start arrowhead indented triangle</source>
+            <translation>起始箭頭 內凹三角形</translation>
+        </message>
+        <message>
             <source>Start arrowhead none</source>
             <translation>起始箭頭 無</translation>
         </message>
@@ -864,8 +1024,20 @@
             <translation>筆畫寬度 %1</translation>
         </message>
         <message>
+            <source>Subtract screenshot region</source>
+            <translation>減去截圖區域</translation>
+        </message>
+        <message>
             <source>Table recognition</source>
             <translation>表格辨識</translation>
+        </message>
+        <message>
+            <source>Tapered shaft</source>
+            <translation>漸寬箭桿</translation>
+        </message>
+        <message>
+            <source>Tapered shafts support standard, triangle, triangle outline, and indented triangle arrowheads.</source>
+            <translation>漸寬箭桿支援標準、三角形、空心三角形和內凹三角形箭頭。</translation>
         </message>
         <message>
             <source>Template</source>
@@ -964,10 +1136,6 @@
             <translation>透明</translation>
         </message>
         <message>
-            <source>Unavailable while recording</source>
-            <translation>錄製期間無法使用</translation>
-        </message>
-        <message>
             <source>Undo</source>
             <translation>復原</translation>
         </message>
@@ -1016,12 +1184,24 @@
             <translation>毫秒</translation>
         </message>
         <message>
+            <source>ms</source>
+            <comment>Auto-scroll interval unit</comment>
+            <translation>ms</translation>
+        </message>
+        <message>
             <source>px</source>
             <translation>px</translation>
         </message>
         <message>
             <source>{text} represents the current watermark text; timestamp formats such as {YYYY-MM-DD_HH-mm-ss} are supported</source>
             <translation>{text} 代表目前的浮水印文字；支援 {YYYY-MM-DD_HH-mm-ss} 等時間戳記格式</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::presentation::GlobalCanvasController</name>
+        <message>
+            <source>Could not change canvas click-through.</source>
+            <translation>無法切換畫布的滑鼠穿透狀態。</translation>
         </message>
     </context>
 </TS>

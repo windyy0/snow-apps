@@ -99,8 +99,9 @@ void inputMappingAndOwnership() {
     detail::MacGlobalMouseInput input;
     Event down(kCGEventLeftMouseDown);
     CGEventSetIntegerValueField(down.value, kCGEventSourceUnixProcessID, 1234);
-    require(!input.handle(kCGEventLeftMouseDown, down.value, config()).event,
-            "another process's synthetic event must not acquire ownership");
+    require(input.handle(kCGEventLeftMouseDown, down.value, config()).event.has_value(),
+            "forwarded session input must be able to start a configured gesture");
+    input.reset();
     CGEventSetIntegerValueField(down.value, kCGEventSourceUnixProcessID, 0);
     input.heldButtons = Qt::RightButton;
     require(!input.handle(kCGEventLeftMouseDown, down.value, config()).consumed,
@@ -156,7 +157,7 @@ void inputMappingAndOwnership() {
     require(input.handle(kCGEventLeftMouseDown, lostDown.value, config()).event.has_value(),
             "gesture before dropped-release recovery");
     static_cast<void>(input.interrupt());
-    input.resynchronize({}, 0, false);
+    input.resynchronize({});
     Event freshDown(kCGEventLeftMouseDown);
     require(input.handle(kCGEventLeftMouseDown, freshDown.value, config()).event.has_value(),
             "a release missed during timeout must not poison the next gesture");
@@ -172,6 +173,76 @@ void inputMappingAndOwnership() {
             "local Qt presses retain normal drag and release routing");
     require(!input.handle(kCGEventLeftMouseUp, release.value, {}).consumed,
             "local press must get its Qt release");
+}
+
+void forwardedSessionInput() {
+    for (const auto source : {kCGEventSourceStatePrivate, kCGEventSourceStateCombinedSessionState,
+                              kCGEventSourceStateHIDSystemState}) {
+        detail::MacGlobalMouseInput input;
+        const auto forwarded = [source](Event& event) {
+            CGEventSetIntegerValueField(event.value, kCGEventSourceUnixProcessID, 1234);
+            CGEventSetIntegerValueField(event.value, kCGEventSourceStateID, source);
+        };
+        Event down(kCGEventLeftMouseDown);
+        forwarded(down);
+        const auto begin = input.handle(kCGEventLeftMouseDown, down.value, config());
+        require(begin.consumed && begin.event && begin.event->kind == Kind::Begin,
+                "forwarded modifier + mouse press starts a gesture regardless of source state");
+        Event move(kCGEventLeftMouseDragged, kCGEventFlagMaskCommand, 0, {100, 120});
+        forwarded(move);
+        const auto update = input.handle(kCGEventLeftMouseDragged, move.value, {});
+        require(update.event && update.event->id == begin.event->id && !update.consumed &&
+                    CGEventGetType(move.value) == kCGEventMouseMoved &&
+                    CGEventGetFlags(move.value) == 0,
+                "forwarded drag updates selection and preserves unmodified cursor movement");
+        Event up(kCGEventLeftMouseUp, 0, 0, {150, 160});
+        forwarded(up);
+        const auto finish = input.handle(kCGEventLeftMouseUp, up.value, {});
+        require(finish.consumed && finish.event && finish.event->kind == Kind::Finish &&
+                    finish.event->id == begin.event->id && !input.gesture.active(),
+                "forwarded release completes the selection instead of leaving capture active");
+        Event escape(kCGEventKeyDown, 0);
+        forwarded(escape);
+        CGEventSetIntegerValueField(escape.value, kCGKeyboardEventKeycode, 53);
+        const auto cancel = input.handle(kCGEventKeyDown, escape.value, {});
+        require(cancel.consumed && cancel.event && cancel.event->kind == Kind::Cancel,
+                "forwarded Escape can cancel capture still preparing after release");
+        input.reset();
+        require(input.gesture.beginButtonDrag(Action::ScreenshotCopy, {}).event.has_value(),
+                "GUI button drag begins before forwarded native input arrives");
+        Event directMove(kCGEventLeftMouseDragged, 0, 0, {100, 120});
+        forwarded(directMove);
+        const auto directUpdate = input.handle(kCGEventLeftMouseDragged, directMove.value, {});
+        require(directUpdate.event && directUpdate.event->kind == Kind::Update &&
+                    !directUpdate.consumed &&
+                    CGEventGetType(directMove.value) == kCGEventLeftMouseDragged,
+                "GUI-started drag receives forwarded movement and keeps Qt drag routing");
+        const auto directFinish = input.handle(kCGEventLeftMouseUp, up.value, {});
+        require(directFinish.event && directFinish.event->kind == Kind::Finish &&
+                    !directFinish.consumed && !input.gesture.active(),
+                "GUI-started drag receives forwarded release and lets Qt balance its press");
+        input.reset();
+        const auto unmatched = input.handle(kCGEventLeftMouseDown, down.value, {});
+        require(!unmatched.consumed && !unmatched.event &&
+                    CGEventGetType(down.value) == kCGEventLeftMouseDown &&
+                    CGEventGetFlags(down.value) == kCGEventFlagMaskCommand,
+                "ordinary screenshot input passes through when global capture is unavailable");
+        input.reset();
+        const auto recoveryBegin = input.handle(kCGEventLeftMouseDown, down.value, config());
+        require(recoveryBegin.event && input.interrupt(),
+                "forwarded gesture is cancelled when the session tap is interrupted");
+        input.resynchronize({Qt::LeftButton, kCGEventFlagMaskCommand, false});
+        const auto recoveryRelease = input.handle(kCGEventLeftMouseUp, up.value, {});
+        require(recoveryRelease.consumed && !recoveryRelease.event && !input.gesture.active(),
+                "combined-session recovery preserves a forwarded press until its release");
+        const auto nextBegin = input.handle(kCGEventLeftMouseDown, down.value, config());
+        require(nextBegin.event && input.interrupt(),
+                "forwarded input remains usable after a recovered release");
+        input.resynchronize({});
+        const auto afterLostRelease = input.handle(kCGEventLeftMouseDown, down.value, config());
+        require(afterLostRelease.event.has_value(),
+                "combined-session recovery retires a forwarded release missed during timeout");
+    }
 }
 
 struct Fixture {
@@ -216,9 +287,10 @@ struct Fixture {
             enabled = value && !enableFails;
         };
         api.tapEnabled = [this](CFMachPortRef) { return enabled.load(); };
-        api.buttons = [this] { return Qt::MouseButtons(heldButtons.load()); };
-        api.modifierFlags = [] { return kCGEventFlagMaskCommand; };
-        api.escapeDown = [] { return false; };
+        api.inputState = [this] {
+            return detail::MacGlobalMouseInputState{Qt::MouseButtons(heldButtons.load()),
+                                                    kCGEventFlagMaskCommand, false};
+        };
         api.cursor = [] { return std::optional<QPoint>(QPoint(-10, 20)); };
         api.sessionActive = [this] { return sessionActive.load(); };
         api.requestAccess = [this] { ++requests; };
@@ -246,6 +318,15 @@ struct Fixture {
         }
         require(false, "backend state transition timed out");
     }
+    void awaitTap(bool available) {
+        for (int i = 0; i < 20; ++i) {
+            const auto state = backend->permissionState();
+            if (state.status == Status::Ready && state.tapAvailable == available)
+                return;
+            static_cast<void>(changed.tryAcquire(1, 500));
+        }
+        require(false, "tap availability transition timed out");
+    }
     void onWorker(std::function<void()> scenario) {
         QSemaphore completed;
         auto* done = &completed;
@@ -257,6 +338,58 @@ struct Fixture {
         require(completed.tryAcquire(1, 5000), "worker scenario must complete");
     }
 };
+void listeningFollowsBindings() {
+    Fixture f;
+    f.backend->configure({{}, true});
+    f.backend->usePermissionSnapshot(true, true);
+    f.start();
+    f.awaitTap(false);
+    require(f.installs == 0, "empty bindings must not install a native listener");
+    f.backend->configure(config());
+    f.awaitTap(true);
+    require(f.installs == 1, "adding the first binding installs the listener");
+    f.backend->configure({{}, true});
+    f.awaitTap(false);
+    require(!f.enabled && f.removals == 1, "removing the last binding retires the listener");
+    f.backend->refreshPermission();
+    f.backend->configure(config());
+    f.awaitTap(true);
+    quint64 id = 0;
+    f.onWorker([&] {
+        Event down(kCGEventLeftMouseDown);
+        f.callback(nullptr, kCGEventLeftMouseDown, down.value, f.context);
+        std::lock_guard lock(f.mutex);
+        id = f.events.back().id;
+    });
+    f.backend->configure({{}, true});
+    f.backend->cancel(id);
+    f.onWorker([&] {
+        require(f.enabled, "a swallowed press must retain its listener until release");
+        Event up(kCGEventLeftMouseUp, 0);
+        require(f.callback(nullptr, kCGEventLeftMouseUp, up.value, f.context) == nullptr,
+                "clearing bindings must still consume the matching release");
+    });
+    f.awaitTap(false);
+
+    f.heldButtons = Qt::LeftButton;
+    f.backend->beginButtonDrag(Action::ScreenshotCopy);
+    f.awaitTap(true);
+    f.onWorker([&] {
+        {
+            std::lock_guard lock(f.mutex);
+            require(f.events.back().kind == Kind::Begin,
+                    "explicit button drags must start without configured bindings");
+            id = f.events.back().id;
+        }
+        Event up(kCGEventLeftMouseUp, 0);
+        require(f.callback(nullptr, kCGEventLeftMouseUp, up.value, f.context) == up.value,
+                "explicit button drags preserve the Qt release");
+    });
+    f.backend->cancel(id);
+    f.awaitTap(false);
+    require(f.permissionQueries == 0, "idle and temporary listeners use shared permissions");
+}
+
 void sharedPermissionSnapshot() {
     Fixture f;
     std::atomic_int refreshes{0};
@@ -401,9 +534,8 @@ int smoke() {
     }
     require(state.status == Status::Ready && state.tapAvailable,
             "real native tap must become ready");
-    // The production translator rejects posted events. A test-only native API
-    // adapter marks precisely our tagged events as hardware at the callback
-    // boundary; no production bypass or global preference is introduced.
+    // Limit this smoke test to our tagged events, without changing their native
+    // source metadata. Posted session input must traverse the production path.
     struct Probe {
         CGEventTapCallBack callback = nullptr;
         void* context = nullptr;
@@ -420,11 +552,7 @@ int smoke() {
                 auto& p = *static_cast<Probe*>(info);
                 if (!event || CGEventGetIntegerValueField(event, kCGEventSourceUserData) != marker)
                     return event;
-                const auto pid = CGEventGetIntegerValueField(event, kCGEventSourceUnixProcessID);
-                CGEventSetIntegerValueField(event, kCGEventSourceUnixProcessID, 0);
-                auto result = p.callback(proxy, type, event, p.context);
-                CGEventSetIntegerValueField(event, kCGEventSourceUnixProcessID, pid);
-                return result;
+                return p.callback(proxy, type, event, p.context);
             },
             &probe);
     };
@@ -466,8 +594,10 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     if (app.arguments().contains(QStringLiteral("--native-hook-smoke")))
         return smoke();
+    forwardedSessionInput();
     inputMappingAndOwnership();
     lifecycleAndRecovery();
     sharedPermissionSnapshot();
+    listeningFollowsBindings();
     return 0;
 }

@@ -33,10 +33,15 @@ fn main() {
                     config
                 });
             let config = NativeRecordingConfig {
+                audio_mode: Default::default(),
+                format: snow_recording_export::ExportFormat::Mp4,
+                loop_animated_images: false,
+                video: Default::default(),
                 effects: snow_recording_runtime::macos::NativeEffectsConfig {
                     clicks: args.iter().any(|arg| arg == "effects"),
                     trail: args.iter().any(|arg| arg == "effects"),
                     keyboard: None,
+                    ..Default::default()
                 },
                 capture,
                 output: snow_media::geometry::PixelSize::new(1280, 720)?,

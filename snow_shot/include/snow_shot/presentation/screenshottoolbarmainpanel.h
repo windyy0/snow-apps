@@ -3,8 +3,11 @@
 
 #include "icon_core.h"
 
+#include "widgets/control_scale.h"
+
 #include <QFrame>
 #include <QMargins>
+#include <QPainterPath>
 #include <QVector>
 
 class QBoxLayout;
@@ -22,6 +25,7 @@ class ScreenshotToolbarPanel : public QFrame {
   public:
     explicit ScreenshotToolbarPanel(QWidget* parent = nullptr);
     void setPanelScale(qreal scale);
+    [[nodiscard]] QPainterPath surfacePath() const;
     static QString separatorStyleSheet();
 
   protected:
@@ -33,7 +37,8 @@ class ScreenshotToolbarPanel : public QFrame {
 };
 
 // Shared visual shell for the screenshot and recording toolbars.
-class ScreenshotToolbarMainPanel final : public ScreenshotToolbarPanel {
+class ScreenshotToolbarMainPanel final : public ScreenshotToolbarPanel,
+                                         public adqt::widgets::AdControlScaleParticipant {
   public:
     struct Options {
         bool showDragHandle = false;
@@ -59,6 +64,8 @@ class ScreenshotToolbarMainPanel final : public ScreenshotToolbarPanel {
     void resetContentLayout();
     void addTrailingDragHandle();
     void setPhysicalScale(qreal scale);
+    void prepareControlScale(const adqt::widgets::AdControlScaleContext&) override {}
+    void commitControlScale(const adqt::widgets::AdControlScaleContext& context) override;
 
   private:
     void changeEvent(QEvent* event) override;

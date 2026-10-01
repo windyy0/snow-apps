@@ -1,6 +1,9 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARPRESENTER_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARPRESENTER_H
 
+#include "snow_shot/presentation/screenshotselectiondisplayunit.h"
+#include "snow_shot/image/screenshotregiongeometry.h"
+
 #include <QColor>
 #include <QPoint>
 #include <QPointF>
@@ -13,17 +16,22 @@ class ScreenshotGeometryMapper;
 class ScreenshotOverlayCoordinator;
 
 struct ScreenshotToolbarPresentationState {
+    ScreenshotSelectionDisplayUnit selectionDisplayUnit = kDefaultScreenshotSelectionDisplayUnit;
     QRect selectionPixels;
     QRectF selectionCanvas;
     bool inactive = true;
     bool selectionToolbarMode = false;
     bool intelligentSelecting = false;
+    bool selectionDragging = false;
     bool editing = false;
     bool ocrAvailable = true;
+    bool selectionResizable = true;
+    bool cornerRadiusApplicable = true;
     bool aspectRatioLocked = false;
     int cornerRadius = 0;
     int shadowWidth = 0;
     QColor shadowColor = QColor(0x33, 0x33, 0x33);
+    ScreenshotRegionType regionType = ScreenshotRegionType::Rectangle;
 };
 
 class ScreenshotToolbarPresenter final {

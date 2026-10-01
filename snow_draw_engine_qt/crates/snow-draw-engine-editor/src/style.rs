@@ -31,11 +31,12 @@ use crate::{
     SHAPE_STYLE_PROPERTY_START_ARROWHEAD, SHAPE_STYLE_PROPERTY_STROKE,
     SHAPE_STYLE_PROPERTY_STROKE_STYLE, SHAPE_STYLE_PROPERTY_STROKE_WIDTH, SelectionArrowState,
     SelectionRectState, SerialNumberStyle, ShapeKind, ShapeStyle, ShapeStylePatch,
-    StyleToolbarSource, TEXT_STYLE_MIXED_COLOR, TEXT_STYLE_MIXED_CORNER_RADII,
-    TEXT_STYLE_MIXED_FILL, TEXT_STYLE_MIXED_FILL_STYLE, TEXT_STYLE_MIXED_FONT_FAMILY,
-    TEXT_STYLE_MIXED_FONT_SIZE, TEXT_STYLE_MIXED_HORIZONTAL_ALIGN, TEXT_STYLE_MIXED_OPACITY,
-    TEXT_STYLE_MIXED_STROKE, TEXT_STYLE_MIXED_STROKE_WIDTH, TEXT_STYLE_MIXED_VERTICAL_ALIGN,
-    TextLayoutOverride, TextStyle, arrow_with_style, selection_bounds_from_selection,
+    StyleToolbarSource, TEXT_STYLE_ALL_PROPERTIES, TEXT_STYLE_MIXED_COLOR,
+    TEXT_STYLE_MIXED_CORNER_RADII, TEXT_STYLE_MIXED_FILL, TEXT_STYLE_MIXED_FILL_STYLE,
+    TEXT_STYLE_MIXED_FONT_FAMILY, TEXT_STYLE_MIXED_FONT_SIZE, TEXT_STYLE_MIXED_HORIZONTAL_ALIGN,
+    TEXT_STYLE_MIXED_OPACITY, TEXT_STYLE_MIXED_STROKE, TEXT_STYLE_MIXED_STROKE_WIDTH,
+    TEXT_STYLE_MIXED_VERTICAL_ALIGN, TextLayoutOverride, TextStyle, arrow_with_style,
+    selection_bounds_from_selection,
     text::{text_layout_override_size, text_with_style_attributes},
 };
 
@@ -93,6 +94,8 @@ impl ShapeStyle {
             end_arrowhead: self.end_arrowhead,
             stroke_style: self.stroke_style,
             arrow_type: self.arrow_type,
+            arrow_shaft_type: self.arrow_shaft_type,
+            arrow_ratio: self.arrow_ratio,
         }
     }
 
@@ -114,6 +117,8 @@ impl ShapeStyle {
         self.end_arrowhead = style.end_arrowhead;
         self.stroke_style = style.stroke_style;
         self.arrow_type = style.arrow_type;
+        self.arrow_shaft_type = style.arrow_shaft_type;
+        self.arrow_ratio = snow_draw_engine_core::arrow::normalize_arrow_ratio(style.arrow_ratio);
         self
     }
 
@@ -136,6 +141,8 @@ impl ShapeStyle {
             end_arrowhead: None,
             stroke_style: style.stroke_style,
             arrow_type: ArrowType::Straight,
+            arrow_shaft_type: Default::default(),
+            arrow_ratio: 1.0,
             opacity: 1.0,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             shape: style.shape,
@@ -204,6 +211,13 @@ impl ShapeStylePatch {
         if properties & SHAPE_STYLE_PROPERTY_STROKE_STYLE != 0 {
             current.stroke_style = self.style.stroke_style;
         }
+        if properties & crate::SHAPE_STYLE_PROPERTY_ARROW_RATIO != 0 {
+            current.arrow_ratio =
+                snow_draw_engine_core::arrow::normalize_arrow_ratio(self.style.arrow_ratio);
+        }
+        if properties & crate::SHAPE_STYLE_PROPERTY_ARROW_SHAFT_TYPE != 0 {
+            current.arrow_shaft_type = self.style.arrow_shaft_type;
+        }
         if properties & SHAPE_STYLE_PROPERTY_ARROW_TYPE != 0 {
             current.arrow_type = self.style.arrow_type;
         }
@@ -268,6 +282,8 @@ struct ShapeStyleSample {
     start_arrowhead: Option<Option<Arrowhead>>,
     end_arrowhead: Option<Option<Arrowhead>>,
     arrow_type: Option<ArrowType>,
+    arrow_shaft_type: Option<snow_draw_engine_core::arrow::ArrowShaftType>,
+    arrow_ratio: Option<f64>,
     opacity: f64,
     highlight_shape: Option<snow_draw_engine_document::HighlightShape>,
     shape: Option<snow_draw_engine_document::HighlightShape>,
@@ -285,6 +301,8 @@ impl ShapeStyleSample {
             start_arrowhead: None,
             end_arrowhead: None,
             arrow_type: None,
+            arrow_shaft_type: None,
+            arrow_ratio: None,
             opacity: rectangle.opacity,
             highlight_shape: rectangle
                 .is_highlight()
@@ -304,6 +322,10 @@ impl ShapeStyleSample {
             start_arrowhead: (!arrow.is_line()).then_some(arrow.start_arrowhead),
             end_arrowhead: (!arrow.is_line()).then_some(arrow.end_arrowhead),
             arrow_type: (!arrow.is_pen_highlight()).then_some(arrow.arrow_type),
+            arrow_shaft_type: (!arrow.is_line() && !arrow.is_pen_highlight())
+                .then_some(arrow.arrow_shaft_type),
+            arrow_ratio: (!arrow.is_line() && !arrow.is_pen_highlight())
+                .then_some(arrow.arrow_ratio),
             opacity: arrow.opacity,
             highlight_shape: None,
             shape: None,
@@ -321,6 +343,8 @@ impl ShapeStyleSample {
             start_arrowhead: None,
             end_arrowhead: None,
             arrow_type: None,
+            arrow_shaft_type: None,
+            arrow_ratio: None,
             opacity: free_draw.opacity,
             highlight_shape: None,
             shape: None,
@@ -351,6 +375,8 @@ impl ArrowStyle {
             end_arrowhead: arrow.end_arrowhead,
             stroke_style: arrow.stroke_style,
             arrow_type: arrow.arrow_type,
+            arrow_shaft_type: arrow.arrow_shaft_type,
+            arrow_ratio: arrow.arrow_ratio,
         }
     }
 }
@@ -367,6 +393,8 @@ impl ShapeStyle {
             end_arrowhead: None,
             stroke_style: line.stroke_style,
             arrow_type: normalized_line_arrow_type(line.arrow_type),
+            arrow_shaft_type: Default::default(),
+            arrow_ratio: 1.0,
             opacity: line.opacity,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             shape: snow_draw_engine_document::HighlightShape::Rectangle,
@@ -384,6 +412,8 @@ impl ShapeStyle {
             end_arrowhead: None,
             stroke_style: free_draw.stroke_style,
             arrow_type: ArrowType::Curve,
+            arrow_shaft_type: Default::default(),
+            arrow_ratio: 1.0,
             opacity: free_draw.opacity,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             shape: snow_draw_engine_document::HighlightShape::Rectangle,
@@ -525,9 +555,14 @@ fn text_with_style(
     id: snow_draw_engine_document::ElementId,
     text: &TextData,
     style: &TextStyle,
+    properties: u32,
     layouts: &[TextLayoutOverride],
 ) -> Result<TextData, ErrorCode> {
-    let mut updated = text_with_style_attributes(text, style);
+    let mut updated =
+        text_with_style_attributes(text, &patched_text_style(text, style, properties));
+    if updated.font_size == text.font_size && updated.font_family == text.font_family {
+        return Ok(updated);
+    }
     if updated.auto_resize {
         let layout = text_layout_override_size(layouts, id)?;
         updated = text_with_auto_resize_layout(&updated, layout)?;
@@ -541,6 +576,44 @@ fn text_with_style(
         updated = text_with_wrapped_layout(&updated, layout)?;
     }
     Ok(updated)
+}
+
+fn patched_text_style(text: &TextData, style: &TextStyle, properties: u32) -> TextStyle {
+    let mut patched = TextStyle::from_text(text);
+    if properties & TEXT_STYLE_MIXED_COLOR != 0 {
+        patched.color = style.color;
+    }
+    if properties & TEXT_STYLE_MIXED_FONT_SIZE != 0 {
+        patched.font_size = style.font_size;
+    }
+    if properties & TEXT_STYLE_MIXED_FONT_FAMILY != 0 {
+        patched.font_family = style.font_family.clone();
+    }
+    if properties & TEXT_STYLE_MIXED_FILL != 0 {
+        patched.fill = style.fill;
+    }
+    if properties & TEXT_STYLE_MIXED_FILL_STYLE != 0 {
+        patched.fill_style = style.fill_style;
+    }
+    if properties & TEXT_STYLE_MIXED_STROKE != 0 {
+        patched.stroke = style.stroke;
+    }
+    if properties & TEXT_STYLE_MIXED_STROKE_WIDTH != 0 {
+        patched.stroke_width = style.stroke_width;
+    }
+    if properties & TEXT_STYLE_MIXED_CORNER_RADII != 0 {
+        patched.corner_radii = style.corner_radii;
+    }
+    if properties & TEXT_STYLE_MIXED_HORIZONTAL_ALIGN != 0 {
+        patched.horizontal_align = style.horizontal_align;
+    }
+    if properties & TEXT_STYLE_MIXED_VERTICAL_ALIGN != 0 {
+        patched.vertical_align = style.vertical_align;
+    }
+    if properties & TEXT_STYLE_MIXED_OPACITY != 0 {
+        patched.opacity = style.opacity;
+    }
+    patched
 }
 
 #[cfg(test)]
@@ -1152,6 +1225,12 @@ impl Editor {
             if style.end_arrowhead != first.end_arrowhead {
                 mixed |= SHAPE_STYLE_MIXED_END_ARROWHEAD;
             }
+            if style.arrow_ratio != first.arrow_ratio {
+                mixed |= crate::SHAPE_STYLE_MIXED_ARROW_RATIO;
+            }
+            if style.arrow_shaft_type != first.arrow_shaft_type {
+                mixed |= crate::SHAPE_STYLE_MIXED_ARROW_SHAFT_TYPE;
+            }
             if style.arrow_type != first.arrow_type {
                 mixed |= SHAPE_STYLE_MIXED_ARROW_TYPE;
             }
@@ -1421,8 +1500,10 @@ impl Editor {
         &mut self,
         document: &DocumentModel,
         rectangle_style: RectangleShapeStyle,
-        arrow_style: ArrowStyle,
+        mut arrow_style: ArrowStyle,
     ) {
+        arrow_style.arrow_ratio =
+            snow_draw_engine_core::arrow::normalize_arrow_ratio(arrow_style.arrow_ratio);
         if self.state.default_rectangle_shape_style == rectangle_style
             && self.state.default_arrow_style == arrow_style
         {
@@ -1732,14 +1813,37 @@ impl Editor {
         Ok(None)
     }
 
+    pub fn set_text_creation_style(
+        &mut self,
+        style: TextStyle,
+        properties: u32,
+    ) -> Result<(), ErrorCode> {
+        validate_text_style(&style)?;
+        if properties & !TEXT_STYLE_ALL_PROPERTIES != 0 {
+            return Err(ErrorCode::InvalidArgument);
+        }
+        self.state.default_text = text_with_style_attributes(
+            &self.state.default_text,
+            &patched_text_style(&self.state.default_text, &style, properties),
+        );
+        Ok(())
+    }
+
     pub fn set_text_style(
         &mut self,
         document: &DocumentModel,
         style: TextStyle,
+        properties: u32,
         layouts: &[TextLayoutOverride],
     ) -> Result<Option<EditorCommand>, ErrorCode> {
         validate_text_style(&style)?;
-        let next_default = text_with_style_attributes(&self.state.default_text, &style);
+        if properties & !TEXT_STYLE_ALL_PROPERTIES != 0 {
+            return Err(ErrorCode::InvalidArgument);
+        }
+        let next_default = text_with_style_attributes(
+            &self.state.default_text,
+            &patched_text_style(&self.state.default_text, &style, properties),
+        );
 
         let selected_text_ids = self
             .state
@@ -1757,7 +1861,8 @@ impl Editor {
 
             for id in self.state.selection.ids.iter().copied() {
                 if let Ok(current_text) = document.text(id) {
-                    let updated_text = text_with_style(id, current_text, &style, layouts)?;
+                    let updated_text =
+                        text_with_style(id, current_text, &style, properties, layouts)?;
                     validate_text(&updated_text)?;
                     next_selection_elements.push(SelectionRectState {
                         id,
@@ -1841,6 +1946,19 @@ impl Editor {
             SERIAL_NUMBER_STYLE_ALL_PROPERTIES
         };
 
+        self.set_serial_number_style_patch(document, style, properties)
+    }
+
+    pub fn set_serial_number_style_patch(
+        &mut self,
+        document: &DocumentModel,
+        style: SerialNumberStyle,
+        properties: u32,
+    ) -> Result<Option<EditorCommand>, ErrorCode> {
+        validate_serial_number_style(&style)?;
+        if properties == 0 || properties & !SERIAL_NUMBER_STYLE_ALL_PROPERTIES != 0 {
+            return Err(ErrorCode::InvalidArgument);
+        }
         let selected_serial_ids = self
             .state
             .selection
@@ -1987,6 +2105,8 @@ mod tests {
             end_arrowhead: Some(Arrowhead::Arrow),
             stroke_style: StrokeStyle::Dotted,
             arrow_type: ArrowType::Curve,
+            arrow_shaft_type: Default::default(),
+            arrow_ratio: 1.0,
         };
         let mut updated_style =
             ShapeStyle::from_rectangle_shape_style(rectangle_style).with_arrow_style(arrow_style);
@@ -2417,6 +2537,171 @@ mod tests {
     }
 
     #[test]
+    fn tapered_arrow_mixed_selection_and_style_changes() {
+        use snow_draw_engine_core::arrow::ArrowShaftType;
+        let mut document = DocumentModel::new();
+        let mut insert = Transaction::new("insert mixed shafts");
+        let mut ids = Vec::new();
+        for (i, shaft) in [ArrowShaftType::Plain, ArrowShaftType::Tapered]
+            .into_iter()
+            .enumerate()
+        {
+            let id = document.allocate_element_id();
+            let mut arrow = ArrowData::from_global_points(
+                &[
+                    Point::new(0.0, i as f64 * 30.0),
+                    Point::new(100.0, i as f64 * 30.0),
+                ],
+                ColorRgba8::default(),
+                2.0,
+                StrokeStyle::Solid,
+                ArrowType::Straight,
+                None,
+                Some(Arrowhead::Triangle),
+            )
+            .unwrap();
+            arrow.arrow_shaft_type = shaft;
+            insert.insert_arrow(id, ElementMeta::default(), arrow);
+            ids.push(id);
+        }
+        document.apply_transaction(insert).unwrap();
+        let mut editor = Editor::new(Default::default()).unwrap();
+        editor.set_selection_state_with_document(Some(&document), ids.clone(), Some(ids[0]));
+        assert_ne!(
+            editor.shape_style_mixed(&document) & crate::SHAPE_STYLE_MIXED_ARROW_SHAFT_TYPE,
+            0
+        );
+        let mut style = editor.shape_style(&document);
+        style.arrow_shaft_type = ArrowShaftType::Tapered;
+        let Some(EditorCommand::ApplyTransaction(command)) = editor
+            .set_shape_style_patch(
+                &document,
+                ShapeStylePatch {
+                    kind: ShapeKind::Arrow,
+                    style,
+                    properties: crate::SHAPE_STYLE_PROPERTY_ARROW_SHAFT_TYPE,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("shaft change needs transaction")
+        };
+        document.apply_transaction(command.transaction).unwrap();
+        assert_eq!(
+            editor.shape_style_mixed(&document) & crate::SHAPE_STYLE_MIXED_ARROW_SHAFT_TYPE,
+            0
+        );
+        for selected in &editor.state.selection.arrows {
+            assert_eq!(selected.arrow.arrow_shaft_type, ArrowShaftType::Tapered);
+        }
+        style.end_arrowhead = Some(Arrowhead::Circle);
+        style.arrow_type = ArrowType::Elbow;
+        let Some(EditorCommand::ApplyTransaction(command)) = editor
+            .set_shape_style_patch(
+                &document,
+                ShapeStylePatch {
+                    kind: ShapeKind::Arrow,
+                    style,
+                    properties: SHAPE_STYLE_PROPERTY_END_ARROWHEAD
+                        | SHAPE_STYLE_PROPERTY_ARROW_TYPE,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("head change needs transaction")
+        };
+        document.apply_transaction(command.transaction).unwrap();
+        for selected in &editor.state.selection.arrows {
+            assert_eq!(selected.arrow.arrow_shaft_type, ArrowShaftType::Tapered);
+            assert!(snow_draw_engine_document::tapered_arrow_geometry(&selected.arrow).is_none());
+        }
+    }
+
+    #[test]
+    fn arrow_ratio_mixed_selection_and_style_changes() {
+        use snow_draw_engine_core::arrow::ArrowShaftType;
+        let mut document = DocumentModel::new();
+        let mut insert = Transaction::new("insert mixed shafts");
+        let mut ids = Vec::new();
+        for (i, shaft) in [ArrowShaftType::Plain, ArrowShaftType::Tapered]
+            .into_iter()
+            .enumerate()
+        {
+            let id = document.allocate_element_id();
+            let mut arrow = ArrowData::from_global_points(
+                &[
+                    Point::new(0.0, i as f64 * 30.0),
+                    Point::new(100.0, i as f64 * 30.0),
+                ],
+                ColorRgba8::default(),
+                2.0,
+                StrokeStyle::Solid,
+                ArrowType::Straight,
+                None,
+                Some(Arrowhead::Triangle),
+            )
+            .unwrap();
+            arrow.arrow_shaft_type = shaft;
+            arrow.arrow_ratio = 1.0 + i as f64;
+            insert.insert_arrow(id, ElementMeta::default(), arrow);
+            ids.push(id);
+        }
+        document.apply_transaction(insert).unwrap();
+        let mut editor = Editor::new(Default::default()).unwrap();
+        editor.set_selection_state_with_document(Some(&document), ids.clone(), Some(ids[0]));
+        assert_ne!(
+            editor.shape_style_mixed(&document) & crate::SHAPE_STYLE_MIXED_ARROW_RATIO,
+            0
+        );
+        let mut style = editor.shape_style(&document);
+        style.arrow_ratio = 2.5;
+        let Some(EditorCommand::ApplyTransaction(command)) = editor
+            .set_shape_style_patch(
+                &document,
+                ShapeStylePatch {
+                    kind: ShapeKind::Arrow,
+                    style,
+                    properties: crate::SHAPE_STYLE_PROPERTY_ARROW_RATIO,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("shaft change needs transaction")
+        };
+        document.apply_transaction(command.transaction).unwrap();
+        assert_eq!(
+            editor.shape_style_mixed(&document) & crate::SHAPE_STYLE_MIXED_ARROW_RATIO,
+            0
+        );
+        for selected in &editor.state.selection.arrows {
+            assert_eq!(selected.arrow.arrow_ratio, 2.5);
+            assert_eq!(selected.arrow.stroke_width, 2.0);
+        }
+        style.end_arrowhead = Some(Arrowhead::Circle);
+        style.arrow_type = ArrowType::Elbow;
+        let Some(EditorCommand::ApplyTransaction(command)) = editor
+            .set_shape_style_patch(
+                &document,
+                ShapeStylePatch {
+                    kind: ShapeKind::Arrow,
+                    style,
+                    properties: SHAPE_STYLE_PROPERTY_END_ARROWHEAD
+                        | SHAPE_STYLE_PROPERTY_ARROW_TYPE,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("head change needs transaction")
+        };
+        document.apply_transaction(command.transaction).unwrap();
+        for selected in &editor.state.selection.arrows {
+            assert_eq!(selected.arrow.arrow_ratio, 2.5);
+            assert_eq!(selected.arrow.stroke_width, 2.0);
+            assert!(snow_draw_engine_document::tapered_arrow_geometry(&selected.arrow).is_none());
+        }
+    }
+
+    #[test]
     fn selected_lines_report_and_resolve_mixed_arrow_types() {
         let mut document = DocumentModel::new();
         let mut insert = Transaction::new("insert mixed line types");
@@ -2565,6 +2850,49 @@ mod tests {
         assert_eq!(numbered.number, original.number);
         assert_eq!(numbered.font_family, original.font_family);
         assert_eq!(numbered.stroke_width, original.stroke_width);
+    }
+
+    #[test]
+    fn explicit_serial_font_patch_preserves_unrelated_mixed_properties() {
+        let mut document = DocumentModel::new();
+        let first_id = document.allocate_element_id();
+        let second_id = document.allocate_element_id();
+        let first = SerialNumberData::default();
+        let second = SerialNumberData {
+            number: 27,
+            font_size: 52.0,
+            font_family: Some("Other font".to_owned()),
+            color: ColorRgba8 {
+                r: 10,
+                g: 20,
+                b: 30,
+                a: 255,
+            },
+            ..SerialNumberData::default()
+        };
+        let mut insert = Transaction::new("insert mixed serials");
+        insert.insert_serial_number(first_id, ElementMeta::default(), first.clone());
+        insert.insert_serial_number(second_id, ElementMeta::default(), second.clone());
+        document.apply_transaction(insert).unwrap();
+        let mut editor = Editor::new(Default::default()).unwrap();
+        editor.set_selection_state(vec![first_id, second_id], Some(first_id));
+        let mut style = editor.serial_number_style(&document);
+        style.font_size = 43.0;
+        let command = editor
+            .set_serial_number_style_patch(&document, style, SERIAL_NUMBER_STYLE_MIXED_FONT_SIZE)
+            .unwrap()
+            .unwrap();
+        let EditorCommand::ApplyTransaction(command) = command else {
+            panic!("expected transaction")
+        };
+        document.apply_transaction(command.transaction).unwrap();
+        for (id, original) in [(first_id, first), (second_id, second)] {
+            let changed = document.serial_number(id).unwrap();
+            assert_eq!(changed.font_size, 43.0);
+            assert_eq!(changed.number, original.number);
+            assert_eq!(changed.color, original.color);
+            assert_eq!(changed.font_family, original.font_family);
+        }
     }
 
     #[test]
@@ -2743,7 +3071,8 @@ mod tests {
             size: TextLayoutSize::with_content(120.0, 80.0, 88.0, 80.0),
         }];
 
-        let updated = text_with_style(id, &text, &style, &layouts).unwrap();
+        let updated =
+            text_with_style(id, &text, &style, TEXT_STYLE_ALL_PROPERTIES, &layouts).unwrap();
 
         assert_eq!(updated.font_size, 60.0);
         assert!(!updated.auto_resize);
@@ -2762,12 +3091,56 @@ mod tests {
 
         // Without a host measurement the stored geometry stays untouched.
         text.vertical_align = snow_draw_engine_document::TextVerticalAlign::Top;
-        let unchanged = text_with_style(id, &text, &style, &[]).unwrap();
+        let unchanged = text_with_style(id, &text, &style, TEXT_STYLE_ALL_PROPERTIES, &[]).unwrap();
         assert_eq!(unchanged.height(), 40.0);
         assert_eq!(
             unchanged.layout.ink(),
             snow_draw_engine_document::InkBox::new(100.0, 40.0)
         );
+    }
+
+    #[test]
+    fn stroke_width_patch_preserves_mixed_text_fonts_and_resized_layouts() {
+        let mut document = DocumentModel::new();
+        let first_id = document.allocate_element_id();
+        let second_id = document.allocate_element_id();
+        let first = TextData {
+            font_size: 24.0,
+            layout: TextLayoutSize::with_content(110.0, 42.0, 105.0, 42.0),
+            auto_resize: true,
+            ..TextData::default()
+        };
+        let second = TextData {
+            font_size: 48.0,
+            layout: TextLayoutSize::with_content(220.0, 84.0, 210.0, 84.0),
+            auto_resize: true,
+            ..TextData::default()
+        };
+        let mut insert = Transaction::new("insert text");
+        insert.insert_text(first_id, ElementMeta::default(), first.clone());
+        insert.insert_text(second_id, ElementMeta::default(), second.clone());
+        document.apply_transaction(insert).unwrap();
+
+        let mut editor = Editor::new(snow_draw_engine_core::EngineConfig::default()).unwrap();
+        editor.set_selection_state(vec![first_id, second_id], Some(first_id));
+        let mut style = TextStyle::from_text(&first);
+        style.stroke_width = 8.0;
+        let command = editor
+            .set_text_style(&document, style, TEXT_STYLE_MIXED_STROKE_WIDTH, &[])
+            .unwrap()
+            .unwrap();
+        let EditorCommand::ApplyTransaction(command) = command else {
+            panic!()
+        };
+        document.apply_transaction(command.transaction).unwrap();
+
+        for (id, original) in [(first_id, first), (second_id, second)] {
+            let updated = document.text(id).unwrap();
+            assert_eq!(updated.stroke_width, 8.0);
+            assert_eq!(updated.font_size, original.font_size);
+            assert_eq!(updated.layout, original.layout);
+            assert_eq!(updated.center, original.center);
+        }
     }
 
     #[test]

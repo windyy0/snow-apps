@@ -6,6 +6,7 @@
 #include "snow_shot/storage/settingsadapters.h"
 
 #include "snow_ui_selector.h"
+#include "../src/presentation/selector/screenshotselectorserviceclient.h"
 
 #include <QApplication>
 #include <QFile>
@@ -163,6 +164,30 @@ void shortcutExitConfirmationSettingsPersistAndReset(const QString& configuratio
     require(!invalid.valid, "shortcut exit confirmation preference must reject nonboolean values");
 }
 
+void autoRecognizeQrCodeSettingsPersistAndReset(const QString& configurationPath) {
+    snow_shot::presentation::GlobalShortcutManager shortcuts;
+    settings::BuiltInSettingsBackend backend(shortcuts);
+    constexpr auto binding = settings::SettingsSwitchBinding::ScreenshotAutoRecognizeQrCode;
+    require(backend.switchValue(binding), "automatic QR recognition must default to enabled");
+    require(backend.applySwitchValue(binding, false) && !backend.switchValue(binding) &&
+                !storage::ScreenshotSettings().autoRecognizeQrCode(),
+            "automatic QR recognition must be disabled through the settings backend");
+    require(storage::ApplicationStorage::instance().configuration().flushNow().success,
+            "automatic QR recognition preference must be flushable");
+    storage::ConfigurationStore reloaded(configurationPath, true, true, 60000);
+    require(!reloaded.value(QStringLiteral("screenshot/auto_recognize_qr_code")).toBool(),
+            "disabled automatic QR recognition must survive a configuration reload");
+    require(backend.resetSection(settings::SettingsSectionReset::ScreenshotCapture) &&
+                !backend.switchValue(binding),
+            "system screenshot reset must preserve automatic QR recognition");
+    require(backend.resetSection(settings::SettingsSectionReset::ScreenshotSettings) &&
+                backend.switchValue(binding),
+            "function screenshot reset must enable automatic QR recognition");
+    const auto invalid = storage::ConfigurationSchema::normalize(
+        QStringLiteral("screenshot/auto_recognize_qr_code"), QStringLiteral("enabled"));
+    require(!invalid.valid, "automatic QR recognition preference must reject nonboolean values");
+}
+
 void ownUiCapturePreferencesPersistAndReset() {
     snow_shot::presentation::GlobalShortcutManager shortcuts;
     settings::BuiltInSettingsBackend backend(shortcuts);
@@ -197,7 +222,8 @@ void toolbarLayoutSectionResetsRemainIndependent() {
         backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools);
     const storage::ScreenshotToolbarLayout expectedDefaultActionLayout{
         {{QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
-          QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition")},
+          QStringLiteral("latex-recognition"), QStringLiteral("barcode-recognition"),
+          QStringLiteral("table-recognition")},
          {QStringLiteral("record-screen")},
          {QStringLiteral("pin-to-screen")},
          {QStringLiteral("text-recognition")},
@@ -220,22 +246,24 @@ void toolbarLayoutSectionResetsRemainIndependent() {
     const storage::ScreenshotToolbarLayout actionLayout{
         {{QStringLiteral("quick-save"), QStringLiteral("save-as-file")}},
         {QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
-         QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition"),
-         QStringLiteral("record-screen"), QStringLiteral("pin-to-screen"),
-         QStringLiteral("text-recognition"), QStringLiteral("text-translation"),
-         QStringLiteral("scrolling-screenshot")},
+         QStringLiteral("latex-recognition"), QStringLiteral("barcode-recognition"),
+         QStringLiteral("table-recognition"), QStringLiteral("record-screen"),
+         QStringLiteral("pin-to-screen"), QStringLiteral("text-recognition"),
+         QStringLiteral("text-translation"), QStringLiteral("scrolling-screenshot")},
     };
     require(backend.applyToolbarLayout(storage::ScreenshotToolbarLayoutKind::DrawingTools,
                                        drawingLayout) &&
                 backend.applyToolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools,
                                            actionLayout),
             "toolbar reset fixture must persist independent layouts");
+    const auto savedDrawingLayout =
+        backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::DrawingTools);
     const auto savedActionLayout =
         backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools);
 
     require(backend.resetSection(settings::SettingsSectionReset::ScreenshotInterfaceSettings) &&
                 backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::DrawingTools) ==
-                    drawingLayout &&
+                    savedDrawingLayout &&
                 backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools) ==
                     defaultActionLayout,
             "Screenshot Interface reset must restore only the screenshot action layout");
@@ -333,6 +361,11 @@ void phasedSchedulingPreservesLatestPendingAndInitialCadence() {
     qint64 now = 0;
     ScreenshotSelectorCoordinator coordinator(nullptr, [&now]() { return now; });
     int initialCount = 0, refinementCount = 0;
+#ifdef Q_OS_MACOS
+    constexpr int staleInitials = 0;
+#else
+    constexpr int staleInitials = 1;
+#endif
     QObject::connect(&coordinator, &ScreenshotSelectorCoordinator::initialResultReady, &coordinator,
                      [&](bool ok, const QVector<QRectF>& rects) {
                          require(ok && rects.first().width() == 10,
@@ -361,17 +394,18 @@ void phasedSchedulingPreservesLatestPendingAndInitialCadence() {
     now = 170;
     deliver(a);
     QCoreApplication::sendPostedEvents();
-    require(initialCount == 1 && submissions.size() == 2 && submissions.last().query.x == 3 &&
-                refinements.isEmpty(),
-            "A must display before C starts; B and A refinement must be skipped");
+    require(initialCount == staleInitials && submissions.size() == 2 &&
+                submissions.last().query.x == 3 && refinements.isEmpty(),
+            "C must start after A finishes; stale macOS frames must not display");
     const Submission c = submissions.last();
     deliver(c);
     QCoreApplication::sendPostedEvents();
-    require(initialCount == 2 && refinements.size() == 1,
+    require(initialCount == 1 + staleInitials && refinements.size() == 1,
             "slow initial response must not add another stability delay");
     deliver(c, SNOW_UI_SELECTOR_REFINEMENT);
     QCoreApplication::sendPostedEvents();
-    require(refinementCount == 1 && initialCount == 2 && !coordinator.hitTestInFlight(),
+    require(refinementCount == 1 && initialCount == 1 + staleInitials &&
+                !coordinator.hitTestInFlight(),
             "refinement must not act as initial completion");
     request(3);
     require(submissions.size() == 2 && refinements.size() == 1,
@@ -387,7 +421,7 @@ void phasedSchedulingPreservesLatestPendingAndInitialCadence() {
     deliver(d);
     QCoreApplication::sendPostedEvents();
     const Submission newC = submissions.last();
-    require(newC.query.generation != c.query.generation && initialCount == 3,
+    require(newC.query.generation != c.query.generation && initialCount == 1 + 2 * staleInitials,
             "returning to a position needs a fresh generation");
     now = 190;
     deliver(newC);
@@ -414,14 +448,15 @@ void phasedSchedulingPreservesLatestPendingAndInitialCadence() {
     coordinator.resetHitTestState();
     deliver(window);
     QCoreApplication::sendPostedEvents();
-    require(initialCount == 5, "reset must reject old initial results");
+    require(initialCount == 3 + 2 * staleInitials, "reset must reject old initial results");
     now = 300;
     request(7);
     const Submission oldEpoch = submissions.last();
     require(coordinator.startRefresh({}), "second refresh failed");
     deliver(oldEpoch);
     QCoreApplication::sendPostedEvents();
-    require(initialCount == 5 && coordinator.ready(), "refresh must reject prior capture events");
+    require(initialCount == 3 + 2 * staleInitials && coordinator.ready(),
+            "refresh must reject prior capture events");
     // Continuous switching must keep displaying the active initial results.
     const int invalidationsBeforeMovement = invalidations;
     request(10);
@@ -431,8 +466,8 @@ void phasedSchedulingPreservesLatestPendingAndInitialCadence() {
         deliver(active);
         QCoreApplication::sendPostedEvents();
     }
-    require(initialCount == 25 && coordinator.hitTestInFlight(),
-            "continuous movement must not starve foreground display");
+    require(initialCount == 3 + 22 * staleInitials && coordinator.hitTestInFlight(),
+            "continuous movement must submit latest targets without displaying stale macOS frames");
     require(
         invalidations == invalidationsBeforeMovement,
         "foreground movement with no submitted refinement must not access the refinement queue");
@@ -507,6 +542,49 @@ void permissionRevocationDuringRefinementAppliesFallback() {
     automaticReply = true;
 }
 
+void accessibilityInitializationRefinesAndCancelsWithCapture() {
+    automaticReply = false;
+    submissions.clear();
+    refinements.clear();
+    qint64 now = 0;
+    ScreenshotSelectorCoordinator coordinator(nullptr, [&] { return now; });
+    int initial = 0, refined = 0;
+    bool replaced = false;
+    QObject::connect(&coordinator, &ScreenshotSelectorCoordinator::initialResultReady, &coordinator,
+                     [&](bool, const QVector<QRectF>&) { ++initial; });
+    QObject::connect(&coordinator, &ScreenshotSelectorCoordinator::refinementReady, &coordinator,
+                     [&](const QVector<QRectF>&, quint32, bool replacePath) {
+                         ++refined;
+                         replaced = replacePath;
+                     });
+    require(coordinator.startRefresh({}), "initialization fixture refresh failed");
+    QCoreApplication::sendPostedEvents();
+    require(
+        coordinator.requestHitTest(QPoint(10, 20), ScreenshotSelectorHitTestMode::WindowSubElement),
+        "initialization query failed");
+    const Submission query = submissions.last();
+    now = 100;
+    deliver(query, SNOW_UI_SELECTOR_INITIAL, SNOW_UI_SELECTOR_ACCESSIBILITY_PENDING);
+    QCoreApplication::sendPostedEvents();
+    require(initial == 1 && refinements.size() == 1, "pending activation must admit refinement");
+    deliver(query, SNOW_UI_SELECTOR_REFINEMENT, SNOW_UI_SELECTOR_DECODING_PENDING);
+    deliver(query, SNOW_UI_SELECTOR_FINISHED, SNOW_UI_SELECTOR_COMPLETE);
+    QCoreApplication::sendPostedEvents();
+    require(refined == 2, "initialized tree must deliver progressive and terminal frames");
+    deliver(query, SNOW_UI_SELECTOR_FINISHED, SNOW_UI_SELECTOR_PROVIDER_FAILURE);
+    QCoreApplication::sendPostedEvents();
+#ifdef Q_OS_MACOS
+    require(replaced, "failed window identity must discard previously displayed child frames");
+#else
+    require(!replaced, "Windows refinement behavior must remain unchanged");
+#endif
+    coordinator.releaseCache();
+    deliver(query, SNOW_UI_SELECTOR_FINISHED, SNOW_UI_SELECTOR_COMPLETE);
+    QCoreApplication::sendPostedEvents();
+    require(refined == 3, "capture cancellation must reject initialization results");
+    automaticReply = true;
+}
+
 void diagnosticEnvironmentOverridesRemainAvailable() {
 #ifdef Q_OS_MACOS
     qputenv("SNOW_SHOT_SELECTOR_BACKEND", "msaa");
@@ -539,6 +617,34 @@ void diagnosticEnvironmentOverridesRemainAvailable() {
     qunsetenv("SNOW_SHOT_SELECTOR_BACKEND");
     qunsetenv("SNOW_SHOT_UI_SELECTOR_BACKEND");
 #endif
+}
+
+void nativeWindowIdentitySurvivesClientCallbacksAndRefinement() {
+    automaticReply = false;
+    setApi(QStringLiteral("uia"));
+    ScreenshotSelectorResult received;
+    ScreenshotSelectorServiceClient client(
+        {{}, [&](const ScreenshotSelectorResult& result) { received = result; }});
+    require(client.startRefresh(1, {}), "native identity fixture refresh failed");
+    QCoreApplication::sendPostedEvents();
+    for (const auto hit : {std::optional<std::uintptr_t>(7), std::optional<std::uintptr_t>(0),
+                           std::optional<std::uintptr_t>()}) {
+        require(client.startHitTest(1, 1, 1, QPoint(10, 20),
+                                    ScreenshotSelectorHitTestMode::WindowSubElement),
+                "native identity fixture query failed");
+        Submission reply = submissions.last();
+        reply.query.mode = SNOW_UI_SELECTOR_HIT_TEST_MODE_UI_ELEMENT;
+        reply.query.window_id = hit.value_or(0);
+        reply.query.window_hit_tested = static_cast<uint8_t>(hit.has_value());
+        deliver(reply);
+        QCoreApplication::sendPostedEvents();
+        require(received.nativeWindowId == hit, "client must copy native window identity");
+        require(client.startRefinement(received), "native identity refinement rejected");
+        const auto& query = refinements.last().query;
+        require(query.window_id == hit.value_or(0) && query.window_hit_tested == hit.has_value(),
+                "refinement must preserve desktop, window, and unresolved native hits");
+    }
+    automaticReply = true;
 }
 } // namespace
 
@@ -575,6 +681,16 @@ uint8_t snow_ui_selector_service_refresh(SnowUiSelectorService* service, uint64_
     service->refresh(epoch, 1, service->userdata);
     return 1;
 }
+uint8_t snow_ui_selector_service_refresh_with_displays(SnowUiSelectorService* service,
+                                                       uint64_t epoch,
+                                                       SnowUiSelectorBackend backend,
+                                                       const uintptr_t* excluded, size_t count,
+                                                       const SnowUiSelectorDisplay* displays,
+                                                       size_t displayCount) {
+    if (displays == nullptr || displayCount == 0)
+        return 0;
+    return snow_ui_selector_service_refresh(service, epoch, backend, excluded, count);
+}
 uint8_t snow_ui_selector_service_query(SnowUiSelectorService* service,
                                        const SnowUiSelectorQuery* query) {
     currentMode = query->mode;
@@ -599,6 +715,11 @@ int main(int argc, char** argv) {
     static_cast<void>(
         applicationStorage.initialize({temporary.filePath(QStringLiteral("bin")),
                                        temporary.filePath(QStringLiteral("data")), 60000}));
+    if (application.arguments().contains(QStringLiteral("--toolbar-layout-only"))) {
+        toolbarLayoutSectionResetsRemainIndependent();
+        applicationStorage.shutdown();
+        return 0;
+    }
     const bool selectorOnly = application.arguments().contains(QStringLiteral("--selector-only"));
     if (application.arguments().contains(
             QStringLiteral("--shortcut-exit-confirmation-settings-only"))) {
@@ -607,10 +728,18 @@ int main(int argc, char** argv) {
         applicationStorage.shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--auto-qr-settings-only"))) {
+        autoRecognizeQrCodeSettingsPersistAndReset(
+            temporary.filePath(QStringLiteral("data/config.json")));
+        applicationStorage.shutdown();
+        return 0;
+    }
     if (!selectorOnly) {
         settingsPersistAndResetToUia(temporary.filePath(QStringLiteral("data/config.json")));
         shutterSoundSettingsPersistAndReset(temporary.filePath(QStringLiteral("data/config.json")));
         shortcutExitConfirmationSettingsPersistAndReset(
+            temporary.filePath(QStringLiteral("data/config.json")));
+        autoRecognizeQrCodeSettingsPersistAndReset(
             temporary.filePath(QStringLiteral("data/config.json")));
         ownUiCapturePreferencesPersistAndReset();
         toolbarLayoutSectionResetsRemainIndependent();
@@ -623,6 +752,8 @@ int main(int argc, char** argv) {
     phasedSchedulingPreservesLatestPendingAndInitialCadence();
     permissionFallbackIsAppliedAndWarningIsThrottled();
     permissionRevocationDuringRefinementAppliesFallback();
+    accessibilityInitializationRefinesAndCancelsWithCapture();
+    nativeWindowIdentitySurvivesClientCallbacksAndRefinement();
     require(created == destroyed, "selector leaked a native service");
     applicationStorage.shutdown();
     return 0;

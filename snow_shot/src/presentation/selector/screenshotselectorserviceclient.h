@@ -2,6 +2,7 @@
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTSELECTORSERVICECLIENT_H
 
 #include "snow_shot/presentation/screenshotselectorworkflowports.h"
+#include "snow_shot/presentation/screenshottypes.h"
 
 #include <QObject>
 #include <QPoint>
@@ -26,7 +27,6 @@ class ScreenshotSelectorServiceClient final : public QObject {
                                              QObject* parent = nullptr);
     ~ScreenshotSelectorServiceClient() override;
 
-    [[nodiscard]] static quint32 displayIdAtCursor();
     [[nodiscard]] bool hasService() const;
     [[nodiscard]] bool ensureService();
     [[nodiscard]] bool releaseCache();
@@ -34,6 +34,9 @@ class ScreenshotSelectorServiceClient final : public QObject {
 
     [[nodiscard]] bool startRefresh(quint64 requestId,
                                     const QVector<std::uintptr_t>& excludedHwnds);
+    [[nodiscard]] bool startRefreshWithDisplays(quint64 requestId,
+                                                const QVector<std::uintptr_t>& excludedHwnds,
+                                                const QVector<CapturedDisplayModel>& displays);
     [[nodiscard]] bool startHitTest(quint64 epoch, quint64 requestId, quint64 generation,
                                     const QPoint& physicalPoint, ScreenshotSelectorHitTestMode mode,
                                     quint32 displayId = 0);
@@ -48,6 +51,10 @@ class ScreenshotSelectorServiceClient final : public QObject {
     ScreenshotSelectorServiceClientCallbacks m_callbacks;
     SnowUiSelectorService* m_service = nullptr;
     int m_serviceBackend = -1;
+#ifdef Q_OS_MACOS
+    QVector<std::uintptr_t> m_excludedWindowIds;
+    QVector<CapturedDisplayModel> m_displays;
+#endif
 };
 
 #endif // SNOW_SHOT_PRESENTATION_SCREENSHOTSELECTORSERVICECLIENT_H

@@ -1,4 +1,5 @@
 #include "navigation_menu.h"
+#include "detail/pointer_region.h"
 
 #include "detail/popup_geometry.h"
 
@@ -405,6 +406,34 @@ AdNavigationMenu::ColorScheme resolvedColorScheme(AdNavigationMenu::ColorScheme 
   }
   return themeScheme == adqt::theme::ThemeScheme::Dark ? AdNavigationMenu::ColorScheme::Dark
                                                        : AdNavigationMenu::ColorScheme::Light;
+}
+
+QColor compositeOnto(const QColor& foreground, const QColor& background) {
+  if (!foreground.isValid()) {
+    return background;
+  }
+  if (!background.isValid() || foreground.alphaF() >= 0.999F) {
+    QColor opaque = foreground;
+    if (opaque.isValid()) {
+      opaque.setAlpha(255);
+    }
+    return opaque;
+  }
+
+  const float alpha = std::clamp(foreground.alphaF(), 0.0F, 1.0F);
+  QColor mixed;
+  mixed.setRedF(foreground.redF() * alpha + background.redF() * (1.0F - alpha));
+  mixed.setGreenF(foreground.greenF() * alpha + background.greenF() * (1.0F - alpha));
+  mixed.setBlueF(foreground.blueF() * alpha + background.blueF() * (1.0F - alpha));
+  mixed.setAlpha(255);
+  return mixed;
+}
+
+AdNavigationMenu::ResolvedColorTokens colorTokensFromStyle(const MenuVisualStyle& style) {
+  AdNavigationMenu::ResolvedColorTokens tokens;
+  tokens.itemBackground = style.menuBackground;
+  tokens.subMenuItemBackground = compositeOnto(style.subMenuBackground, style.menuBackground);
+  return tokens;
 }
 
 int rootBorderWidthForStyle(AdNavigationMenu::Mode mode, AdNavigationMenu::ColorScheme colorScheme,
@@ -1004,6 +1033,8 @@ class AdNavigationMenu::Private {
   SemanticStyles semanticStyles;
   SemanticStyleResolver semanticStyleResolver;
   QPointer<AdNavigationMenuPopupFactory> popupFactory;
+  QMetaObject::Connection popupFactoryDestroyedConnection;
+  quint64 popupFactoryGeneration = 0;
   adqt::icons::IconRef expandIcon;
   QPoint popupOffset;
   QPointer<QStandardItemModel> ownedItemModel;
@@ -1033,6 +1064,8 @@ class AdNavigationMenu::Private {
 
   AdNavigationMenuItemDelegate* delegate = nullptr;
   QPointer<QAbstractItemDelegate> customDelegate;
+  QMetaObject::Connection customDelegateDestroyedConnection;
+  quint64 customDelegateGeneration = 0;
 
   detail::NavigationMenuPopupState popupState;
   std::vector<std::unique_ptr<PopupLevel>>& popupLevels = popupState.levels;
@@ -1150,6 +1183,10 @@ AdNavigationMenu::Private::~Private() {
 }
 
 void AdNavigationMenu::Private::prepareForDestruction() {
+  QObject::disconnect(customDelegateDestroyedConnection);
+  customDelegateDestroyedConnection = {};
+  QObject::disconnect(popupFactoryDestroyedConnection);
+  popupFactoryDestroyedConnection = {};
   hoverOpenTimer.stop();
   hoverCloseTimer.stop();
   pendingHoverIndex = QModelIndex();
@@ -2550,7 +2587,8 @@ void AdNavigationMenu::Private::activateSourceIndex(const QModelIndex& sourceInd
 }
 
 void AdNavigationMenu::Private::applyPendingHoverOpen() {
-  if (!pendingHoverIndex.isValid() || !isSubmenuIndex(pendingHoverIndex)) {
+  if (!pendingHoverIndex.isValid() || pendingHoverIndex != hoveredIndex || !q->isVisible() ||
+      !q->isEnabled() || !isSubmenuIndex(pendingHoverIndex)) {
     return;
   }
   setExpandedInternal(pendingHoverIndex, true, true);
@@ -2602,11 +2640,13 @@ void AdNavigationMenu::Private::cancelHoverClose() { hoverCloseTimer.stop(); }
 
 void AdNavigationMenu::Private::closeDanglingPopups() {
   const QPoint cursorPos = QCursor::pos();
-  if (detail::widgetContainsGlobalPos(q, cursorPos)) {
+  QWidget* target = QApplication::widgetAt(cursorPos);
+  if (detail::pointerTargetEligible(target, q) && detail::widgetContainsGlobalPos(q, cursorPos)) {
     return;
   }
   for (const auto& level : popupLevels) {
     if (level && level->shell && level->shell->isVisible() &&
+        detail::pointerTargetEligible(target, level->shell) &&
         detail::widgetContainsGlobalPos(level->shell, cursorPos)) {
       return;
     }
@@ -2654,6 +2694,8 @@ void AdNavigationMenu::Private::handleHoveredIndex(const QModelIndex& sourceInde
 }
 
 void AdNavigationMenu::Private::handleLeave() {
+  pendingHoverIndex = QModelIndex();
+  hoverOpenTimer.stop();
   hoveredIndex = QModelIndex();
   hideTooltip();
   scheduleHoverClose();
@@ -3100,7 +3142,10 @@ void AdNavigationMenu::Private::syncPopupVisibility() {
           return false;
         }
         const QPoint popupCursor = level->shell->mapFromGlobal(QCursor::pos());
-        return level->shell->rect().contains(popupCursor);
+        return detail::pointerTargetEligible(QApplication::widgetAt(QCursor::pos()),
+                                             level->shell) &&
+               detail::widgetContainsGlobalPos(level->shell,
+                                               level->shell->mapToGlobal(popupCursor));
       });
     };
     if (!popupChainAnchoredByInteraction()) {
@@ -3903,6 +3948,19 @@ AdNavigationMenu::ComponentTokens AdNavigationMenu::componentTokens() const {
   return d_->componentTokens;
 }
 
+AdNavigationMenu::ResolvedColorTokens AdNavigationMenu::resolvedColorTokens() const {
+  return colorTokensFromStyle(resolvedVisualStyle(d_->mode, d_->colorScheme, d_->collapsed));
+}
+
+AdNavigationMenu::ResolvedColorTokens AdNavigationMenu::resolveColorTokens(
+    const QWidget* context, ColorScheme colorScheme) {
+  const adqt::theme::ResolvedTheme resolvedTheme =
+      adqt::theme::ThemeManager::instance().resolve(context);
+  MenuStyleInput input;
+  input.colorScheme = resolvedColorScheme(colorScheme, resolvedTheme.theme.scheme);
+  return colorTokensFromStyle(detail::resolveMenuVisualStyle(input, resolvedTheme));
+}
+
 void AdNavigationMenu::setComponentTokens(const ComponentTokens& tokens) {
   const int previousIndentation = indentation();
   d_->componentTokens = tokens;
@@ -3977,28 +4035,33 @@ void AdNavigationMenu::setItemDelegate(QAbstractItemDelegate* delegate) {
   if (d_->customDelegate == delegate) {
     return;
   }
+  QObject::disconnect(d_->customDelegateDestroyedConnection);
+  d_->customDelegateDestroyedConnection = {};
+  const quint64 generation = ++d_->customDelegateGeneration;
   d_->customDelegate = delegate;
   if (delegate && !delegate->parent()) {
     delegate->setParent(this);
   }
   if (delegate) {
-    QObject::connect(delegate, &QObject::destroyed, this, [this, delegate]() {
-      if (d_->customDelegate != delegate) {
-        return;
-      }
-      d_->customDelegate = nullptr;
-      d_->syncDelegates();
-      d_->syncAllViews();
-      d_->syncPopupVisibility();
-      emit itemDelegateChanged(itemDelegate());
-      updateGeometry();
-    });
+    d_->customDelegateDestroyedConnection =
+        QObject::connect(delegate, &QObject::destroyed, this, [this, generation]() {
+          if (d_->customDelegateGeneration != generation) {
+            return;
+          }
+          d_->customDelegateDestroyedConnection = {};
+          d_->customDelegate = nullptr;
+          d_->syncDelegates();
+          d_->syncAllViews();
+          d_->syncPopupVisibility();
+          updateGeometry();
+          emit itemDelegateChanged(itemDelegate());
+        });
   }
   d_->syncDelegates();
   d_->syncAllViews();
   d_->syncPopupVisibility();
-  emit itemDelegateChanged(itemDelegate());
   updateGeometry();
+  emit itemDelegateChanged(itemDelegate());
 }
 
 AdNavigationMenuPopupFactory* AdNavigationMenu::popupFactory() const { return d_->popupFactory; }
@@ -4007,19 +4070,24 @@ void AdNavigationMenu::setPopupFactory(AdNavigationMenuPopupFactory* factory) {
   if (d_->popupFactory == factory) {
     return;
   }
+  QObject::disconnect(d_->popupFactoryDestroyedConnection);
+  d_->popupFactoryDestroyedConnection = {};
+  const quint64 generation = ++d_->popupFactoryGeneration;
   d_->popupFactory = factory;
   if (factory && !factory->parent()) {
     factory->setParent(this);
   }
   if (factory) {
-    QObject::connect(factory, &QObject::destroyed, this, [this, factory]() {
-      if (d_->popupFactory != factory) {
-        return;
-      }
-      d_->popupFactory = nullptr;
-      d_->syncPopupVisibility();
-      emit popupFactoryChanged(nullptr);
-    });
+    d_->popupFactoryDestroyedConnection =
+        QObject::connect(factory, &QObject::destroyed, this, [this, generation]() {
+          if (d_->popupFactoryGeneration != generation) {
+            return;
+          }
+          d_->popupFactoryDestroyedConnection = {};
+          d_->popupFactory = nullptr;
+          d_->syncPopupVisibility();
+          emit popupFactoryChanged(nullptr);
+        });
   }
   d_->syncPopupVisibility();
   emit popupFactoryChanged(d_->popupFactory);

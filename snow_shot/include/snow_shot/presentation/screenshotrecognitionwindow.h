@@ -4,6 +4,7 @@
 #include "snow_shot/presentation/screenshotselectiongeometry.h"
 #include "snow_shot/presentation/screenshotocrtextlayer.h"
 #include "snow_shot/presentation/screenshotimageconversion.h"
+#include "snow_shot/app/edition.h"
 #include "snow_shot/presentation/screenshotrecognitionimage.h"
 #include <optional>
 
@@ -103,6 +104,8 @@ class ScreenshotRecognitionWindow final : public QWidget {
     [[nodiscard]] bool updateSelectionGeometry(const QRect& geometry,
                                                const QRectF& canvasSelection);
 
+    void setShowOriginalImage(bool show);
+    void setOcrCopyDefaultsEnabled(bool enabled);
     void setOcrPresentation(
         std::shared_ptr<ScreenshotOcrPresentation> presentation,
         ScreenshotOcrTextLayer::RenderingMode mode = ScreenshotOcrTextLayer::RenderingMode::Normal,
@@ -131,7 +134,7 @@ class ScreenshotRecognitionWindow final : public QWidget {
     void setTextEditorStreaming(bool streaming);
     void hideTextEditor();
 
-    void showQrContents(const QStringList& contents);
+    void showQrContents(const QStringList& contents, bool detectLinks = true);
     void clearQrContents();
     void showImageConversion(SnowShotImageConversionFormat format, const QString& source, bool busy,
                              const QString& error);
@@ -145,9 +148,11 @@ class ScreenshotRecognitionWindow final : public QWidget {
     void imageConversionRetryRequested();
 
   protected:
+    void changeEvent(QEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
@@ -176,15 +181,31 @@ class ScreenshotRecognitionWindow final : public QWidget {
     std::unique_ptr<snow_shot::presentation::WindowShortcutManager> m_ownedShortcutManager;
     snow_shot::presentation::WindowShortcutManager* m_shortcutManager = nullptr;
     std::shared_ptr<ScreenshotOcrPresentation> m_ocrPresentation;
+    bool m_ocrCopyDefaultsEnabled = true;
+    QWidget* m_contentContainer = nullptr;
+    bool m_showOriginalImage = false;
     QStackedLayout* m_stack = nullptr;
     ScreenshotOcrTextLayer* m_textLayer = nullptr;
     QWidget* m_textEditorContainer = nullptr;
     QTextEdit* m_textEditor = nullptr;
     adqt::widgets::AdSpin* m_textEditorSpin = nullptr;
+#if SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION
     QTextBrowser* m_qrBrowser = nullptr;
+    bool m_qrDetectLinks = true;
+#else
+    static constexpr QWidget* m_qrBrowser = nullptr;
+#endif
+#if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
     ScreenshotImageConversionView* m_conversionView = nullptr;
+#else
+    static constexpr QWidget* m_conversionView = nullptr;
+#endif
     ScreenshotFormattedTextLayer* m_formattedTextLayer = nullptr;
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     ScreenshotTableEditor* m_tableEditor = nullptr;
+#else
+    static constexpr QWidget* m_tableEditor = nullptr;
+#endif
     QRectF m_canvasSelection;
     qreal m_formattedTextDevicePixelRatio = 1.0;
     PresentationMode m_presentationMode = PresentationMode::TopLevelWindow;

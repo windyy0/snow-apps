@@ -213,13 +213,14 @@ void keyCommandsInsertTextAndReportEditorCommands() {
     require(commitResult.command == snow_canvas_text_editor_input::EventCommand::Commit,
             "control-enter should request commit");
 
-    QKeyEvent cancelEvent(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
-    const snow_canvas_text_editor_input::KeyResult cancelResult =
-        snow_canvas_text_editor_input::handleKeyPress(&cancelEvent, draft, {});
-    require(cancelResult.handled, "escape should be handled");
-    require(!cancelResult.changed, "escape should not mutate draft text");
-    require(cancelResult.command == snow_canvas_text_editor_input::EventCommand::Cancel,
-            "escape should request cancel");
+    QKeyEvent escapeEvent(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    const snow_canvas_text_editor_input::KeyResult escapeResult =
+        snow_canvas_text_editor_input::handleKeyPress(&escapeEvent, draft, {});
+    require(escapeResult.handled, "escape should be handled");
+    require(!escapeResult.changed, "escape should not mutate draft text");
+    require(escapeResult.command == snow_canvas_text_editor_input::EventCommand::Commit,
+            "escape should commit the draft and end text editing");
+    require(draft.text() == QStringLiteral("axb"), "escape should preserve the complete draft");
 }
 
 void deleteRequestsElementRemovalWhileBackspaceEditsCharacters() {
@@ -585,7 +586,7 @@ void textMeasurementBuildsAutoResizeLayoutOverridesFromSnapshots() {
         snow_canvas_text_measurement::measureAutoResizeLayoutOverrides(infos, 2, style, QFont());
 
     require(measurement.success, "snapshot layout measurement should succeed");
-    // A style change re-renders the glyphs, so fixed-size text must be measured
+    // A font change re-renders the glyphs, so fixed-size text must be measured
     // too: the re-measured wrapped height and ink box anchor decorations and
     // dirty regions to the edges the frame actually paints.
     require(measurement.layouts.size() == 2,
@@ -1558,6 +1559,149 @@ void blankCanvasPressDeselectsBeforeBeginningNewText() {
             "the blank press after deselecting should begin a new text draft");
 }
 
+void textFontWheelPreservesMixedSelectionStyles() {
+    SnowCanvasRuntime runtime;
+    const SnowRuntime handle = snow_canvas_runtime::Access::handle(runtime);
+    SnowCanvasViewport inspection;
+    require(inspection.create(handle, snow_canvas_viewport::defaultEngineConfig()),
+            "font wheel inspection viewport should be created");
+    require(snow_viewport_set_surface_size(handle, inspection.get(), 600, 400) == SNOW_OK,
+            "font wheel inspection viewport should include both text elements");
+    SnowCanvasWidget canvas(runtime);
+    canvas.resize(600, 400);
+    canvas.show();
+    QApplication::processEvents();
+    require(canvas.setViewportCamera(0.0, 0.0, 1.0), "font wheel camera should be configured");
+
+    SnowCanvasTextStyle styles[2];
+    styles[0].fontSize = 24.0;
+    styles[0].fontFamily = QStringLiteral("Arial");
+    styles[0].color = QColor(180, 20, 30);
+    styles[0].strokeWidth = 2.0;
+    styles[1] = styles[0];
+    styles[1].fontSize = 36.0;
+    styles[1].fontFamily = QStringLiteral("Times New Roman");
+    styles[1].color = QColor(20, 30, 180);
+    styles[1].strokeWidth = 5.0;
+    styles[1].opacity = 0.6;
+    SnowElementId ids[2]{};
+    for (int i = 0; i < 2; ++i) {
+        SnowTextCommitDraft draft{};
+        draft.auto_resize = static_cast<std::uint8_t>(i == 0);
+        draft.center_x = i == 0 ? -120.0 : 120.0;
+        draft.text_utf8 = "mixed fonts";
+        draft.text_utf8_len = 11;
+        draft.measured_layout = SnowTextLayoutSize{100.0, 50.0, 95.0, 50.0};
+        draft.style = snow_canvas_types::toEngineTextStyle(styles[i]);
+        ScopedChangedViewportList changed;
+        require(snow_viewport_commit_text_draft_payload_ex(handle, inspection.get(), &draft,
+                                                           changed.outParam()) == SNOW_OK,
+                "font wheel fixture should create differently styled text");
+        std::uint8_t hit = 0;
+        require(snow_viewport_hit_text(handle, inspection.get(), draft.center_x, 0.0, &ids[i],
+                                       &hit) == SNOW_OK &&
+                    hit != 0,
+                "font wheel fixture should resolve each text");
+    }
+    require(canvas.setCanvasTool(SnowCanvasTool::Select), "font wheel fixture should select text");
+    sendCanvasMouseEvent(canvas, QEvent::MouseButtonPress, QPointF(20, 20), Qt::LeftButton,
+                         Qt::LeftButton);
+    sendCanvasMouseEvent(canvas, QEvent::MouseMove, QPointF(580, 380), Qt::NoButton,
+                         Qt::LeftButton);
+    sendCanvasMouseEvent(canvas, QEvent::MouseButtonRelease, QPointF(580, 380), Qt::LeftButton,
+                         Qt::NoButton);
+    std::uint32_t count = 0;
+    require(snow_viewport_selected_text_count(handle, inspection.get(), &count) == SNOW_OK &&
+                count == 2,
+            "font wheel should start with both texts selected");
+    const double nextSize = canvas.canvasStyleToolbarState().textStyle.fontSize + 1.0;
+    int committed = 0;
+    QObject::connect(&canvas, &SnowCanvasWidget::styleEditCommitted, &canvas,
+                     [&](const SnowCanvasStyleEdit& edit) {
+                         const auto* patch = std::get_if<SnowCanvasTextEdit>(&edit);
+                         require(patch != nullptr &&
+                                     patch->properties == SnowCanvasTextStyleMixedFontSize,
+                                 "font stepping publishes only the explicitly changed property");
+                         ++committed;
+                     });
+    require(canvas.stepFontSize(1), "font wheel should update the selected text");
+    require(committed == 1, "font step publishes one successful user commit");
+
+    const auto verify = [&](bool stepped) {
+        for (int i = 0; i < 2; ++i) {
+            require(snow_canvas_commands::selectElement(handle, inspection.get(), ids[i]).success,
+                    "font wheel result should be inspectable");
+            SnowStyleToolbarState state{};
+            require(snow_viewport_get_style_toolbar_state(handle, inspection.get(), &state) ==
+                        SNOW_OK,
+                    "font wheel result should expose its style");
+            SnowCanvasTextStyle expected = styles[i];
+            if (stepped) {
+                expected.fontSize = nextSize;
+            }
+            require(snow_canvas_state::textStylesEqual(
+                        state.text_style, snow_canvas_types::toEngineTextStyle(expected)),
+                    "font wheel must change only font size, preserving each selected text style");
+            SnowTextElementInfo info{};
+            require(snow_runtime_get_text_element(handle, ids[i], &info) == SNOW_OK,
+                    "font wheel should preserve each text element");
+            require(info.auto_resize == static_cast<std::uint8_t>(i == 0),
+                    "font wheel should preserve the text sizing mode");
+            if (!stepped || i == 1) {
+                requireNear(info.width, 100.0, "font wheel should preserve fixed text width");
+            }
+            if (!stepped) {
+                requireNear(info.height, 50.0, "undo should restore the exact text geometry");
+            }
+        }
+    };
+    verify(true);
+    require(canvas.undo(), "font wheel change should be undoable");
+    verify(false);
+    require(canvas.redo(), "font wheel change should be redoable");
+    verify(true);
+
+    SnowTextElementInfo info{};
+    require(snow_runtime_get_text_element(handle, ids[1], &info) == SNOW_OK,
+            "draft patch fixture should read the resized text");
+    SnowCanvasDisplayCache cache;
+    SnowCanvasCursorController cursor(canvas);
+    SnowCanvasWidgetTextInteraction interaction(canvas, cursor);
+    require(cache.sync(handle, inspection.get()), "draft patch fixture should refresh its cache");
+    SnowCanvasTextStyle current = styles[1];
+    current.fontSize = nextSize;
+    SnowTextStyle currentStyle = snow_canvas_types::toEngineTextStyle(current);
+    require(interaction.beginForElement(info, cache, QPointF(420, 200), &currentStyle, false),
+            "draft patch fixture should begin editing existing text");
+    require(snow_canvas_state::textStylesEqual(interaction.currentTextStyle(), currentStyle),
+            "draft patch fixture should load the complete current text style");
+    SnowTextStyle staleStyle = snow_canvas_types::toEngineTextStyle(styles[0]);
+    staleStyle.stroke_width = 9.0;
+    require(interaction
+                .applyTextStyle(handle, inspection.get(), cache, staleStyle,
+                                SNOW_TEXT_STYLE_MIXED_STROKE_WIDTH)
+                .success,
+            "draft patch should accept a stroke width edit from stale style data");
+    currentStyle.stroke_width = 9.0;
+    require(snow_canvas_state::textStylesEqual(interaction.currentTextStyle(), currentStyle),
+            "the interaction layer must preserve unrequested draft properties itself");
+    requireNear(interaction.previewItem()->width, info.width,
+                "cosmetic draft edits should preserve text width");
+    requireNear(interaction.previewItem()->height, info.height,
+                "cosmetic draft edits should preserve text height");
+    const auto emptyPatch =
+        interaction.applyTextStyle(handle, inspection.get(), cache, staleStyle, 0);
+    require(emptyPatch.success && !emptyPatch.toolbarStateChanged,
+            "an empty draft patch should be a no-op");
+    require(!interaction
+                 .applyTextStyle(handle, inspection.get(), cache, staleStyle,
+                                 SNOW_TEXT_STYLE_ALL_PROPERTIES | (1u << 31))
+                 .success,
+            "draft patches should reject unknown properties");
+    require(snow_canvas_state::textStylesEqual(interaction.currentTextStyle(), currentStyle),
+            "empty and invalid patches must leave the draft unchanged");
+}
+
 void textToolInitialSelectionFrameRendersAndResizesThroughWidgetEvents() {
     SnowCanvasRuntime runtime;
     require(runtime.isValid(), "widget selection interaction runtime should be valid");
@@ -1600,6 +1744,16 @@ void textToolInitialSelectionFrameRendersAndResizesThroughWidgetEvents() {
     QApplication::processEvents();
     require(isElementSelected(runtimeHandle, inspectionViewport.get(), targetId),
             "the first text-tool click should select the text before any content change");
+
+    SnowCanvasTextStyle toolbarStyle = canvas.canvasStyleToolbarState().textStyle;
+    toolbarStyle.stroke = QColor(30, 90, 150);
+    require(canvas.setCanvasTextStyle(toolbarStyle),
+            "the selected text should accept a non-empty stroke color");
+    toolbarStyle = canvas.canvasStyleToolbarState().textStyle;
+    const SnowCanvasTextStyle staleStyle = toolbarStyle;
+    QObject::connect(
+        &canvas, &SnowCanvasWidget::styleToolbarStateChanged, &canvas,
+        [&canvas, &toolbarStyle]() { toolbarStyle = canvas.canvasStyleToolbarState().textStyle; });
 
     SnowCanvasDisplayCache inspectionCache;
     require(inspectionCache.sync(runtimeHandle, inspectionViewport.get()),
@@ -1656,6 +1810,41 @@ void textToolInitialSelectionFrameRendersAndResizesThroughWidgetEvents() {
                 std::abs(afterResize.center_x - beforeResize.center_x) > 0.0001 ||
                 std::abs(afterResize.center_y - beforeResize.center_y) > 0.0001,
             "dragging the editing-mode resize handle should transform the active text draft");
+    require(std::abs(afterStyle.font_size - beforeStyle.font_size) > 0.0001,
+            "the selection handle should resize the draft font");
+    requireNear(toolbarStyle.fontSize, afterStyle.font_size,
+                "the toolbar should receive the resized draft font size");
+
+    SnowCanvasTextStyle strokeWidthPatch = staleStyle;
+    strokeWidthPatch.strokeWidth += 2.0;
+    require(canvas.setCanvasTextStyle(strokeWidthPatch, SnowCanvasTextStyleMixedStrokeWidth),
+            "the Style Editor should update the selected text stroke width");
+    SnowTextElementInfo afterStrokeWidth{};
+    SnowTextStyle strokeStyle{};
+    activeDraft = 0;
+    require(snow_viewport_get_active_text_draft_presentation(
+                runtimeHandle, inspectionViewport.get(), &afterStrokeWidth, &strokeStyle,
+                &activeDraft) == SNOW_OK &&
+                activeDraft != 0,
+            "the stroke width edit should keep the text draft active");
+    requireNear(afterStrokeWidth.width, afterResize.width,
+                "stroke width should preserve the resized text width");
+    requireNear(afterStrokeWidth.height, afterResize.height,
+                "stroke width should preserve the resized text height");
+    requireNear(strokeStyle.font_size, afterStyle.font_size,
+                "stroke width should preserve the resized font size");
+    requireNear(strokeStyle.stroke_width, strokeWidthPatch.strokeWidth,
+                "the draft should receive the requested stroke width");
+    require(afterResize.content_width > 0.0 && afterResize.content_height > 0.0,
+            "the engine resize presentation must carry its measured content bounds");
+    require(canvas.resetEditingState(), "commit the resized draft through the widget");
+    SnowTextElementInfo committed{};
+    require(snow_runtime_get_text_element(runtimeHandle, targetId, &committed) == SNOW_OK,
+            "inspect committed resized text");
+    requireNear(committed.content_width, afterResize.content_width,
+                "widget commit must preserve the engine's resized content width");
+    requireNear(committed.content_height, afterResize.content_height,
+                "widget commit must preserve the engine's resized content height");
 }
 
 void textEditorDoesNotSynthesizeSelectionControlsWithoutEngineOverlay() {
@@ -3008,6 +3197,82 @@ void serialNumberBackgroundUsesTextHatchTexture() {
             "serial-number and text backgrounds should share one hatch texture");
 }
 
+void textDecorationsFollowAlignedLines() {
+    const QFont baseFont = QApplication::font();
+    for (const auto alignment : {SNOW_TEXT_HORIZONTAL_ALIGN_LEFT, SNOW_TEXT_HORIZONTAL_ALIGN_CENTER,
+                                 SNOW_TEXT_HORIZONTAL_ALIGN_RIGHT}) {
+        for (const double zoom : {0.75, 1.0, 2.5}) {
+            for (const QString& text : {QStringLiteral("ABB231\nADFA233213121231321"),
+                                        QStringLiteral("short words wrap across several lines")}) {
+                SnowCanvasSceneItem item;
+                item.kind = SNOW_SCENE_DISPLAY_ITEM_TEXT;
+                item.font_size = 24.0;
+                item.width = 280.0;
+                item.height = 180.0;
+                item.fill = SnowColorRgba8{255, 180, 180, 255};
+                item.fill_style = SNOW_FILL_STYLE_SOLID;
+                item.corner_radii = {};
+                item.text_horizontal_align = alignment;
+                item.text_vertical_align = SNOW_TEXT_VERTICAL_ALIGN_CENTER;
+                snow_canvas_text::copyTextToSceneItem(item, text);
+                const QRectF localRect(50.0, 50.0, item.width * zoom, item.height * zoom);
+                auto layout = snow_canvas_text_layout::createDocumentLayout(item, baseFont, zoom,
+                                                                            text, false);
+                QImage background(900, 650, QImage::Format_ARGB32_Premultiplied);
+                QImage underline(background.size(), background.format());
+                background.fill(Qt::transparent);
+                underline.fill(Qt::transparent);
+                {
+                    QPainter painter(&background);
+                    snow_canvas_text_render::drawBackground(painter, item, baseFont, localRect,
+                                                            zoom);
+                }
+                {
+                    QPainter painter(&underline);
+                    snow_canvas_text_render::drawHoverUnderlines(painter, item, baseFont, localRect,
+                                                                 zoom, Qt::blue, 1.0);
+                }
+                const auto outset = snow_scene_text_fill_outset(&item);
+                const double scale = layout.resolution.scale;
+                auto& document = layout.textDocument();
+                for (auto block = document.begin(); block.isValid(); block = block.next()) {
+                    const auto blockRect = document.documentLayout()->blockBoundingRect(block);
+                    for (int index = 0; index < block.layout()->lineCount(); ++index) {
+                        const auto line = block.layout()->lineAt(index);
+                        // Cursor positions independently locate the aligned text, including
+                        // the last short line of a wrapped paragraph.
+                        int end = line.textStart() + line.textLength();
+                        while (end > line.textStart() && block.text().at(end - 1).isSpace()) {
+                            --end;
+                        }
+                        const double left =
+                            localRect.left() +
+                            (blockRect.left() + line.cursorToX(line.textStart())) * scale;
+                        const double right =
+                            localRect.left() + (blockRect.left() + line.cursorToX(end)) * scale;
+                        const double top = localRect.top() + layout.topOffset +
+                                           (blockRect.top() + line.y()) * scale;
+                        const int middle = qRound(top + line.height() * scale / 2.0);
+                        const QRect fillPixels = alphaPixelBounds(
+                            background.copy(QRect(0, middle, background.width(), 1)));
+                        require(std::abs(fillPixels.left() - (left - outset.x * zoom)) <= 2.0 &&
+                                    std::abs(fillPixels.right() + 1.0 -
+                                             (right + outset.x * zoom)) <= 2.0,
+                                "each background must follow its aligned text line");
+                        const int bottom = qRound(top + line.height() * scale);
+                        const QRect underlinePixels = alphaPixelBounds(
+                            underline.copy(QRect(0, bottom - 2, underline.width(), 5)));
+                        require(!underlinePixels.isEmpty() &&
+                                    std::abs(underlinePixels.left() - left) <= 2.0 &&
+                                    std::abs(underlinePixels.right() - right) <= 2.0,
+                                "each hover underline must follow its aligned text line");
+                    }
+                }
+            }
+        }
+    }
+}
+
 void multilineTextHoverRendererDrawsEveryLineUnderline() {
     QImage image(QSize(160, 160), QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
@@ -3953,6 +4218,7 @@ int main(int argc, char** argv) {
     blankCanvasPressDeselectsBeforeBeginningNewText();
     selectToolDragRendersSelectionMarquee();
     textToolInitialSelectionFrameRendersAndResizesThroughWidgetEvents();
+    textFontWheelPreservesMixedSelectionStyles();
     textEditorDoesNotSynthesizeSelectionControlsWithoutEngineOverlay();
     overlayRectangleRendererHonorsFillStyle();
     sceneRectangleRendererBuildsFillPathForEveryCornerStyle();
@@ -3964,6 +4230,7 @@ int main(int argc, char** argv) {
     serialNumberTypesRenderExpectedSilhouettesAndSolidSemantics();
     solidSerialNumberChoosesFixedContrastLabelColors();
     textHoverUnderlineRendererDrawsOnlyTheUnderline();
+    textDecorationsFollowAlignedLines();
     multilineTextHoverRendererDrawsEveryLineUnderline();
     hatchTextureCacheReusesSaturatedStrokeWidths();
     textEditorConnectorBuildsSerialBoundConnector();

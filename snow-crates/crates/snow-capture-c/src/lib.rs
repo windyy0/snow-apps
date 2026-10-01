@@ -1,6 +1,8 @@
 #![allow(clippy::missing_safety_doc)]
 
+mod desktop_layout;
 mod frame_geometry;
+pub use desktop_layout::*;
 
 use snow_capture::exclusions::SnowCaptureExclusions;
 use std::cell::RefCell;
@@ -10,7 +12,7 @@ use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use snow_capture::color_effect::ColorCorrection;
+use snow_capture::color_effect::{ColorCorrection, PendingScreenColorTransform};
 use snow_capture::cursor_snapshot::ScreenshotCursorSnapshot;
 use snow_capture::frame::{CaptureEvent, CapturePixelFormat, CapturedFrame, Frame};
 use snow_capture::{
@@ -142,6 +144,10 @@ pub struct SnowCaptureDesktopSessionState {
     retained_resource_bytes: u64,
     backend_kind: *const c_char,
 }
+
+/// Native and shared-runtime allocation sizes are not fully observable.
+/// A session state must report unknown instead of implying no resources remain.
+pub const SNOW_CAPTURE_RESOURCE_BYTES_UNKNOWN: u64 = u64::MAX;
 
 #[repr(C)]
 pub struct SnowCaptureFrameInfo {
@@ -342,7 +348,7 @@ enum WorkerCommand {
     Prepare(mpsc::Sender<Result<(), String>>),
     Capture(
         mpsc::Sender<Result<Frame, String>>,
-        ColorCorrection,
+        Option<PendingScreenColorTransform>,
         bool,
         CancellationToken,
     ),
@@ -638,6 +644,16 @@ fn build_monitor_entries(system: &CaptureSystem) -> Result<Vec<MonitorEntry>, St
         .collect())
 }
 
+#[cfg(target_os = "macos")]
+fn with_capture_autoreleasepool<T>(work: impl FnOnce() -> T + objc2::rc::AutoreleaseSafe) -> T {
+    objc2::rc::autoreleasepool(|_| work())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn with_capture_autoreleasepool<T>(work: impl FnOnce() -> T) -> T {
+    work()
+}
+
 impl MonitorWorker {
     fn start(
         system: CaptureSystem,
@@ -649,12 +665,20 @@ impl MonitorWorker {
         let join = thread::Builder::new()
             .name("snow-capture-monitor".to_owned())
             .spawn(move || {
-                let mut session = system
-                    .open_session(CaptureTarget::Monitor(worker_entry.id), options)
-                    .map_err(|err| err.to_string());
+                snow_core::qos::apply_current_thread();
+                let mut session = with_capture_autoreleasepool(|| {
+                    system
+                        .open_session(CaptureTarget::Monitor(worker_entry.id), options)
+                        .map_err(|err| err.to_string())
+                });
 
                 while let Ok(command) = rx.recv() {
-                    match command {
+                    if matches!(command, WorkerCommand::Stop) {
+                        break;
+                    }
+                    // These threads outlive individual screenshots. Drain Cocoa's
+                    // temporary objects after each request, including error paths.
+                    with_capture_autoreleasepool(|| match command {
                         WorkerCommand::Prepare(reply) => {
                             let result = match session.as_mut() {
                                 Ok(capture_session) => capture_session
@@ -668,8 +692,13 @@ impl MonitorWorker {
                         WorkerCommand::Capture(reply, correction, include_cursor, cancellation) => {
                             let result = match session.as_mut() {
                                 Ok(session) => {
-                                    session.set_windows_color_correction(correction);
-                                    match session.capture_snapshot(include_cursor, cancellation) {
+                                    let captured = match correction {
+                                        Some(snapshot) => session.capture_snapshot_with_color_query(
+                                            include_cursor, cancellation, snapshot,
+                                        ),
+                                        None => session.capture_snapshot(include_cursor, cancellation),
+                                    };
+                                    match captured {
                                         Ok(mut frame)
                                             if session.active_capture_access_count() == 0 =>
                                         {
@@ -707,8 +736,8 @@ impl MonitorWorker {
                             };
                             let _ = reply.send(result);
                         }
-                        WorkerCommand::Stop => break,
-                    }
+                        WorkerCommand::Stop => unreachable!(),
+                    });
                 }
             })
             .map_err(|err| format!("failed to spawn capture monitor worker: {err}"))?;
@@ -737,7 +766,7 @@ impl MonitorWorker {
 
     fn request_capture(
         &self,
-        correction: ColorCorrection,
+        correction: Option<PendingScreenColorTransform>,
         include_cursor: bool,
         cancellation: CancellationToken,
     ) -> Result<mpsc::Receiver<Result<Frame, String>>, String> {
@@ -898,20 +927,21 @@ fn same_monitor_layout(left: &[MonitorEntry], right: &[MonitorEntry]) -> bool {
                     && candidate.expected_width == existing.expected_width
                     && candidate.expected_height == existing.expected_height
                     && candidate.is_primary == existing.is_primary
+                    && candidate.id.desktop_geometry() == existing.id.desktop_geometry()
             })
         })
 }
 
 fn capture_all_frames(
     session: &mut SnowCaptureDesktopSessionImpl,
-    correction: ColorCorrection,
+    correction: Option<PendingScreenColorTransform>,
     include_cursor: bool,
     cancellation: CancellationToken,
 ) -> Result<Vec<SnapshotFrame>, String> {
     let mut receivers = Vec::with_capacity(session.workers.len());
     let mut first_error = None;
     for worker in &session.workers {
-        match worker.request_capture(correction, include_cursor, cancellation.clone()) {
+        match worker.request_capture(correction.clone(), include_cursor, cancellation.clone()) {
             Ok(receiver) => receivers.push((worker.entry.clone(), receiver)),
             Err(error) => {
                 if first_error.is_none() {
@@ -952,7 +982,7 @@ fn capture_all_frames(
 
 fn capture_all_frames_with_layout_retry(
     session: &mut SnowCaptureDesktopSessionImpl,
-    correction: ColorCorrection,
+    correction: Option<PendingScreenColorTransform>,
     include_cursor: bool,
     cancellation: CancellationToken,
 ) -> Result<Vec<SnapshotFrame>, String> {
@@ -963,7 +993,12 @@ fn capture_all_frames_with_layout_retry(
         capture_all_frames(session, correction, include_cursor, cancellation)
     }
     #[cfg(not(target_os = "macos"))]
-    match capture_all_frames(session, correction, include_cursor, cancellation.clone()) {
+    match capture_all_frames(
+        session,
+        correction.clone(),
+        include_cursor,
+        cancellation.clone(),
+    ) {
         Ok(frames) => Ok(frames),
         Err(first_error) => {
             if let Err(refresh_error) = session.system.refresh_display_configuration() {
@@ -1212,6 +1247,7 @@ fn capture_window_snapshot(
     options: CaptureOptions,
     include_cursor: bool,
     cancellation: CancellationToken,
+    correction: Option<PendingScreenColorTransform>,
 ) -> Result<SnapshotWindowFrame, String> {
     let system = CaptureSystem::builder()
         .with_backend_kind(CaptureBackendKind::Auto)
@@ -1220,9 +1256,13 @@ fn capture_window_snapshot(
     let mut session = system
         .open_session(CaptureTarget::Window(native_window_id(hwnd)?), options)
         .map_err(|error| error.to_string())?;
-    let mut frame = session
-        .capture_snapshot(include_cursor, cancellation)
-        .map_err(|error| error.to_string())?;
+    let mut frame = match correction {
+        Some(snapshot) => {
+            session.capture_snapshot_with_color_query(include_cursor, cancellation, snapshot)
+        }
+        None => session.capture_snapshot(include_cursor, cancellation),
+    }
+    .map_err(|error| error.to_string())?;
     if session.active_capture_access_count() != 0 {
         let _ = session.reset_to_prepared();
         return Err("capture access remained active after focused-window capture".to_owned());
@@ -1452,7 +1492,7 @@ pub unsafe extern "C" fn snow_capture_desktop_session_state(
             prepared: u8::from(session.prepared),
             reserved0: [0; 3],
             active_capture_access_count: active_count,
-            retained_resource_bytes: 0,
+            retained_resource_bytes: SNOW_CAPTURE_RESOURCE_BYTES_UNKNOWN,
             backend_kind: backend_kind_ptr(session),
         };
     }
@@ -1554,6 +1594,25 @@ pub unsafe extern "C" fn snow_capture_desktop_session_capture(
         return ptr::null_mut();
     }
 
+    // Start one query before capture preparation and share it with every source.
+    // Its owner joins on every return path; no query thread survives the request.
+    #[cfg(windows)]
+    let color_query = if request.flags & SCREENSHOT_REQUEST_RESTORE_ORIGINAL_COLORS != 0 {
+        match snow_capture::color_effect::ScreenColorQuery::start_current() {
+            Ok(query) => Some(query),
+            Err(error) => {
+                set_last_error(format!("failed to start screen-color query: {error}"));
+                return ptr::null_mut();
+            }
+        }
+    } else {
+        None
+    };
+    #[cfg(windows)]
+    let correction = color_query.as_ref().map(|query| query.snapshot());
+    #[cfg(not(windows))]
+    let correction = None;
+
     if session.workers.is_empty() {
         if let Err(error) = rebuild_workers(session) {
             set_last_error(error);
@@ -1576,25 +1635,22 @@ pub unsafe extern "C" fn snow_capture_desktop_session_capture(
         return ptr::null_mut();
     }
 
-    let correction = if request.flags & SCREENSHOT_REQUEST_RESTORE_ORIGINAL_COLORS != 0 {
-        ColorCorrection::snapshot_current()
-    } else {
-        ColorCorrection::Disabled
-    };
     let include_cursor = request.flags & SCREENSHOT_REQUEST_INCLUDE_CURSOR != 0;
     let focused_window_worker = if request.focused_window != 0 {
         let hwnd = request.focused_window;
         let options = CaptureOptions {
             backend_tuning: platform_tuning(snow_capture::tuning::windows::WindowsCaptureOptions {
-                color_correction: correction,
+                color_correction: ColorCorrection::Disabled,
                 ..session.options.backend_tuning.windows_or_default()
             }),
             ..session.options.clone()
         };
         let canceled = canceled.clone();
+        let correction = correction.clone();
         match thread::Builder::new()
             .name("snow-capture-window-once".to_owned())
             .spawn(move || {
+                snow_core::qos::apply_current_thread();
                 if canceled.as_ref().is_some_and(|state| state.is_canceled()) {
                     return Err("screenshot capture canceled".to_owned());
                 }
@@ -1603,6 +1659,7 @@ pub unsafe extern "C" fn snow_capture_desktop_session_capture(
                     options,
                     include_cursor,
                     canceled.clone().unwrap_or_default(),
+                    correction,
                 );
                 if canceled.as_ref().is_some_and(|state| state.is_canceled()) {
                     return Err("screenshot capture canceled".to_owned());
@@ -2496,6 +2553,33 @@ mod tests {
 
     use super::*;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn capture_worker_drains_autoreleased_objects_after_each_request() {
+        thread::spawn(|| {
+            use objc2::{
+                rc::{Retained, Weak},
+                runtime::NSObject,
+            };
+
+            for _ in 0..3 {
+                let weak = with_capture_autoreleasepool(|| {
+                    let object = NSObject::new();
+                    let weak = Weak::from_retained(&object);
+                    let _borrowed = Retained::autorelease_ptr(object);
+                    assert!(weak.load().is_some());
+                    weak
+                });
+                assert!(
+                    weak.load().is_none(),
+                    "worker request must drain its autorelease pool"
+                );
+            }
+        })
+        .join()
+        .expect("capture worker must finish");
+    }
+
     fn test_entry() -> MonitorEntry {
         MonitorEntry {
             id: MonitorId::from_parts(1, 2, 3, "unit-monitor", true),
@@ -2851,7 +2935,10 @@ mod tests {
         assert_eq!(state.worker_count, 0);
         assert_eq!(state.prepared, 1);
         assert_eq!(state.active_capture_access_count, 0);
-        assert_eq!(state.retained_resource_bytes, 0);
+        assert_eq!(
+            state.retained_resource_bytes,
+            SNOW_CAPTURE_RESOURCE_BYTES_UNKNOWN
+        );
         assert!(!state.backend_kind.is_null());
     }
 
@@ -3300,8 +3387,25 @@ mod tests {
         second.expected_width += 1;
         assert!(!same_monitor_layout(
             &[first.clone(), original_second],
-            &[first, second]
+            &[first.clone(), second]
         ));
+
+        let mut moved = first.clone();
+        moved.id = moved
+            .id
+            .with_desktop_geometry(snow_capture::monitor::MonitorDesktopGeometry {
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0,
+                pixel_width: 6,
+                pixel_height: 8,
+            });
+        assert!(!same_monitor_layout(
+            std::slice::from_ref(&first),
+            &[moved.clone()]
+        ));
+        assert!(same_monitor_layout(&[moved.clone()], &[moved]));
     }
 }
 

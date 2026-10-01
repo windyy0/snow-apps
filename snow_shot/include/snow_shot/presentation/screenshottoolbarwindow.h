@@ -1,6 +1,7 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARWINDOW_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARWINDOW_H
 
+#include "snow_shot/presentation/screenshotselectiondisplayunit.h"
 #include "snow_shot/presentation/screenshotfloatingtoolpalettewindow.h"
 #include "snow_shot/presentation/screenshottoolpalette.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -23,13 +24,17 @@ class ScreenshotToolbarWindow final : public ScreenshotFloatingToolPaletteWindow
     void setActionToolsLayout(const snow_shot::storage::ScreenshotToolbarLayout& layout);
     void setScrollingScreenshotMode(bool enabled);
     void setActiveTool(ScreenshotToolPalette::Tool tool);
+    void setScreenshotRegionType(ScreenshotRegionType type);
+    void setSelectionDisplayUnit(ScreenshotSelectionDisplayUnit unit);
     void setRecaptureBusy(bool busy);
     [[nodiscard]] bool activateDrawingShortcut(const QString& toolId);
     void restoreRememberedDrawingTool();
+    void suppressRememberedDrawingTool();
     void setHistoryState(const SnowCanvasHistoryState& state);
     void setStyleToolbarState(const SnowCanvasStyleToolbarState& state);
     void setWatermarkConfig(const SnowCanvasWatermarkConfig& config);
     void setSpotlightConfig(const SnowCanvasSpotlightConfig& config);
+    void setRecognitionEnabled(bool enabled);
     void setOcrEnabled(bool enabled);
     void setOcrBusy(bool busy);
     void setTableEnabled(bool enabled);
@@ -39,6 +44,7 @@ class ScreenshotToolbarWindow final : public ScreenshotFloatingToolPaletteWindow
     void setImageConversionBusy(bool markdownBusy, bool htmlBusy);
     void setTableEditingState(bool available, bool canUndo, bool canRedo, bool canMerge,
                               bool canSplit, bool canReset);
+    void setShowOriginalImage(bool show);
     void setTextEditingState(bool available, bool editing, bool canUndo = false,
                              bool canRedo = false);
     void setTextTranslationState(bool available, bool translating, bool streaming,

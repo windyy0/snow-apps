@@ -11,7 +11,7 @@
 #include <QBoxLayout>
 #include <QCoreApplication>
 #include <QFont>
-#include <QFontDatabase>
+#include "snow_shot/presentation/fontfamilies.h"
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -105,15 +105,15 @@ popupButtonMetrics(const ScreenshotToolPaletteButtonMetrics& toolbarMetrics) {
     return metrics;
 }
 
-void resetPopupButtonControlScale(adqt::widgets::AdButton* button) {
-    if (button == nullptr) {
+void ensurePopupControlScope(QWidget* content) {
+    if (content == nullptr)
         return;
+    auto* scope = content->findChild<adqt::widgets::AdControlScaleScope*>(
+        QString(), Qt::FindDirectChildrenOnly);
+    if (scope == nullptr) {
+        scope = new adqt::widgets::AdControlScaleScope(content, content);
+        scope->applyCurrentScaleToSubtree(content);
     }
-
-    const adqt::widgets::AdControlScaleContext popupContext =
-        adqt::widgets::AdControlScaleContext::fromDprs(1.0, 1.0);
-    button->prepareControlScale(popupContext);
-    button->commitControlScale(popupContext);
 }
 
 void observePopupLifecycle(QObject* popup, const ScreenshotToolPaletteEditorServices& services) {
@@ -225,15 +225,13 @@ void connectColorPickerChanges(adqt::widgets::AdColorPicker* picker, QObject* re
     }
 }
 
-void resetPickerPopupContent(adqt::widgets::AdColorPicker* picker,
-                             const ScreenshotToolPaletteButtonMetrics& metrics) {
+void ensurePickerPopupScope(adqt::widgets::AdColorPicker* picker,
+                            const ScreenshotToolPaletteButtonMetrics& metrics) {
     if (picker == nullptr) {
         return;
     }
     if (QWidget* content = picker->popupContent()) {
-        for (adqt::widgets::AdButton* button : content->findChildren<adqt::widgets::AdButton*>()) {
-            resetPopupButtonControlScale(button);
-        }
+        ensurePopupControlScope(content);
     }
     if (screenshotToolPaletteMetricsApplyTo(metrics, picker)) {
         activateWidgetLayoutTree(picker);
@@ -321,7 +319,6 @@ void refreshScreenshotToolPaletteColorPickerMetrics(
     auto* trigger = dynamic_cast<ColorPickerTrigger*>(picker->triggerContent());
     if (trigger != nullptr && screenshotToolPaletteMetricsApplyTo(metrics, trigger)) {
         configureScreenshotToolPaletteStyleButton(trigger, nullptr, metrics);
-        trigger->setPhysicalScale(metrics.physicalScale);
     }
     configureColorPickerMetrics(picker, metrics);
 }
@@ -368,7 +365,6 @@ void ScreenshotToolPaletteColorPresets::refreshMetrics(
     for (ColorSwatchButton* button : m_buttons) {
         if (screenshotToolPaletteMetricsApplyTo(metrics, button)) {
             configureScreenshotToolPaletteStyleButton(button, nullptr, metrics);
-            button->setPhysicalScale(metrics.physicalScale);
         }
     }
 }
@@ -540,7 +536,7 @@ void ScreenshotToolPaletteColorEditor::refreshMetrics(
 
 void ScreenshotToolPaletteColorEditor::resetPopupMetrics(
     const ScreenshotToolPaletteButtonMetrics& metrics) {
-    resetPickerPopupContent(m_picker, metrics);
+    ensurePickerPopupScope(m_picker, metrics);
 }
 
 void ScreenshotToolPaletteColorEditor::release() {
@@ -709,7 +705,7 @@ void ScreenshotToolPaletteStrokeEditor::refreshMetrics(
 
 void ScreenshotToolPaletteStrokeEditor::resetPopupMetrics(
     const ScreenshotToolPaletteButtonMetrics& metrics) {
-    resetPickerPopupContent(m_picker, metrics);
+    ensurePickerPopupScope(m_picker, metrics);
 }
 
 void ScreenshotToolPaletteStrokeEditor::release() {
@@ -881,13 +877,12 @@ void ScreenshotToolPaletteFillEditor::refreshMetrics(
             continue;
         }
         configureScreenshotToolPaletteStyleButton(button, nullptr, metrics);
-        button->setPhysicalScale(metrics.physicalScale);
     }
 }
 
 void ScreenshotToolPaletteFillEditor::resetPopupMetrics(
     const ScreenshotToolPaletteButtonMetrics& metrics) {
-    resetPickerPopupContent(m_picker, metrics);
+    ensurePickerPopupScope(m_picker, metrics);
 }
 
 void ScreenshotToolPaletteFillEditor::release() {
@@ -1068,7 +1063,7 @@ void ScreenshotToolPaletteWidthColorEditor::refreshMetrics(
 
 void ScreenshotToolPaletteWidthColorEditor::resetPopupMetrics(
     const ScreenshotToolPaletteButtonMetrics& metrics) {
-    resetPickerPopupContent(m_picker, metrics);
+    ensurePickerPopupScope(m_picker, metrics);
 }
 
 void ScreenshotToolPaletteWidthColorEditor::release() {
@@ -1203,21 +1198,12 @@ void ScreenshotToolPaletteNumericPresetEditor::refreshMetrics(
     refreshRootMetrics(metrics);
     if (screenshotToolPaletteMetricsApplyTo(metrics, m_summary)) {
         configureScreenshotToolPaletteStyleButton(m_summary, nullptr, metrics);
-        if (auto* stroke = dynamic_cast<StrokeWidthPreviewButton*>(m_summary)) {
-            stroke->setPhysicalScale(metrics.physicalScale);
-        }
-        if (auto* numeric = dynamic_cast<NumericValuePreviewButton*>(m_summary)) {
-            numeric->setPhysicalScale(metrics.physicalScale);
-        }
     }
     for (adqt::widgets::AdButton* button : m_presets) {
         if (!screenshotToolPaletteMetricsApplyTo(metrics, button)) {
             continue;
         }
         configureScreenshotToolPaletteStyleButton(button, nullptr, metrics);
-        if (auto* stroke = dynamic_cast<StrokeWidthPreviewButton*>(button)) {
-            stroke->setPhysicalScale(metrics.physicalScale);
-        }
     }
 }
 
@@ -1230,6 +1216,61 @@ void ScreenshotToolPaletteNumericPresetEditor::release() {
     m_strokePreview = false;
     releaseRoot();
 }
+
+namespace {
+void ensureFontFamily(QStandardItemModel* model, const QString& family, bool loaded) {
+    if (model == nullptr || family.isEmpty() || family == QStringLiteral("__mixed__")) {
+        return;
+    }
+    for (int row = 0; row < model->rowCount(); ++row) {
+        if (model->index(row, 0).data(adqt::widgets::AdSelect::DefaultValueRole).toString() ==
+            family) {
+            return;
+        }
+    }
+    auto* item = new QStandardItem(family);
+    item->setData(family, adqt::widgets::AdSelect::DefaultValueRole);
+    if (loaded) {
+        const ScreenshotToolPaletteTranslationText unavailableText =
+            ScreenshotToolPaletteTranslationText("%1 (unavailable)").arg(family);
+        item->setText(unavailableText.translated());
+        setScreenshotToolPaletteItemTranslationSource(item, unavailableText);
+        item->setEnabled(false);
+    } else {
+        item->setData(family, adqt::widgets::AdSelect::DefaultLabelRole);
+        item->setData(QFont(family), Qt::FontRole);
+    }
+    model->appendRow(item);
+}
+
+QStandardItemModel* createFontFamilyModel(QObject* parent, const QString& current, bool loaded) {
+    auto* model = new QStandardItemModel(parent);
+    const auto appendFont = [model](const QString& label, const char* source, const QString& value,
+                                    bool enabled, bool preview) {
+        auto* item = new QStandardItem(label);
+        if (source != nullptr) {
+            setScreenshotToolPaletteItemTranslationSource(item, source);
+        } else {
+            item->setData(label, adqt::widgets::AdSelect::DefaultLabelRole);
+        }
+        item->setData(value, adqt::widgets::AdSelect::DefaultValueRole);
+        item->setEnabled(enabled);
+        if (preview && !value.isEmpty()) {
+            item->setData(QFont(value), Qt::FontRole);
+        }
+        model->appendRow(item);
+    };
+    appendFont(QStringLiteral("Default"), "Default", QString(), true, false);
+    appendFont(QStringLiteral("Mixed"), "Mixed", QStringLiteral("__mixed__"), false, false);
+    if (loaded) {
+        for (const QString& family : screenshotToolPaletteFontFamilies()) {
+            appendFont(family, nullptr, family, true, true);
+        }
+    }
+    ensureFontFamily(model, current, loaded);
+    return model;
+}
+} // namespace
 
 void ScreenshotToolPaletteFontEditor::build(QBoxLayout* layout, QWidget* parent, QObject* receiver,
                                             const ScreenshotToolPaletteFontEditorConfig& config,
@@ -1309,28 +1350,25 @@ void ScreenshotToolPaletteFontEditor::build(QBoxLayout* layout, QWidget* parent,
             return QString::compare(lhs.label, rhs.label, Qt::CaseInsensitive) < 0;
         });
 
-    auto* fontModel = new QStandardItemModel(m_familySelect);
-    const auto appendFont = [fontModel](const QString& label, const char* source,
-                                        const QString& value, bool enabled, bool preview) {
-        auto* item = new QStandardItem(label);
-        if (source != nullptr) {
-            setScreenshotToolPaletteItemTranslationSource(item, source);
-        } else {
-            item->setData(label, adqt::widgets::AdSelect::DefaultLabelRole);
-        }
-        item->setData(value, adqt::widgets::AdSelect::DefaultValueRole);
-        item->setEnabled(enabled);
-        if (preview && !value.isEmpty()) {
-            item->setData(QFont(value), Qt::FontRole);
-        }
-        fontModel->appendRow(item);
-    };
-    appendFont(QStringLiteral("Default"), "Default", QString(), true, false);
-    appendFont(QStringLiteral("Mixed"), "Mixed", QStringLiteral("__mixed__"), false, false);
-    for (const QString& family : screenshotToolPaletteFontFamilies()) {
-        appendFont(family, nullptr, family, true, true);
-    }
-    m_familySelect->setModel(fontModel);
+    m_fontFamiliesLoaded = std::make_shared<bool>(false);
+    m_familySelect->setModel(createFontFamilyModel(m_familySelect, initialFamily, false));
+    QObject::connect(m_familySelect, &adqt::widgets::AdSelect::popupOpening, m_familySelect,
+                     [select = m_familySelect, loaded = m_fontFamiliesLoaded]() {
+                         if (*loaded) {
+                             return;
+                         }
+                         *loaded = true;
+                         const QSignalBlocker blocker(select);
+                         const QVariant current =
+                             select->currentData(adqt::widgets::AdSelect::DefaultValueRole);
+                         // Populate before attaching: each live insertion resets and sorts the
+                         // selector's proxy model, turning first-open loading into repeated
+                         // full-list rebuilds.
+                         auto* previousModel = select->model();
+                         select->setModel(createFontFamilyModel(select, current.toString(), true));
+                         select->setCurrentValue(current);
+                         previousModel->deleteLater();
+                     });
     m_familySelect->setCurrentData(initialFamily, adqt::widgets::AdSelect::DefaultValueRole);
     layout->addWidget(m_familySelect);
     QObject::connect(m_familySelect, &adqt::widgets::AdSelect::selected, receiver,
@@ -1364,23 +1402,12 @@ void ScreenshotToolPaletteFontEditor::update(double size, const QString& family,
 
     const QSignalBlocker blocker(m_familySelect);
     auto* model = qobject_cast<QStandardItemModel*>(m_familySelect->model());
-    if (!familyMixed && model != nullptr && !family.isEmpty()) {
-        bool found = false;
-        for (int row = 0; row < model->rowCount(); ++row) {
-            if (model->index(row, 0).data(adqt::widgets::AdSelect::DefaultValueRole).toString() ==
-                family) {
-                found = true;
-                break;
-            }
+    if (model != nullptr && m_fontFamiliesLoaded != nullptr) {
+        if (!*m_fontFamiliesLoaded) {
+            model->removeRows(2, model->rowCount() - 2);
         }
-        if (!found) {
-            const ScreenshotToolPaletteTranslationText unavailableText =
-                ScreenshotToolPaletteTranslationText("%1 (unavailable)").arg(family);
-            auto* item = new QStandardItem(unavailableText.translated());
-            setScreenshotToolPaletteItemTranslationSource(item, unavailableText);
-            item->setData(family, adqt::widgets::AdSelect::DefaultValueRole);
-            item->setEnabled(false);
-            model->appendRow(item);
+        if (!familyMixed) {
+            ensureFontFamily(model, family, *m_fontFamiliesLoaded);
         }
     }
     m_familySelect->setCurrentData(familyMixed ? QVariant(QStringLiteral("__mixed__"))
@@ -1427,7 +1454,6 @@ void ScreenshotToolPaletteFontEditor::refreshMetrics(
     };
     if (applies(m_sizeSummary)) {
         configureScreenshotToolPaletteStyleButton(m_sizeSummary, nullptr, metrics);
-        m_sizeSummary->setPhysicalScale(metrics.physicalScale);
     }
     for (adqt::widgets::AdButton* button : m_sizePresets) {
         if (applies(button)) {
@@ -1447,6 +1473,7 @@ void ScreenshotToolPaletteFontEditor::release() {
     m_cycleSize.reset();
     m_setSize.reset();
     m_setFamily.reset();
+    m_fontFamiliesLoaded.reset();
     releaseRoot();
 }
 
@@ -1585,7 +1612,7 @@ void ScreenshotToolPaletteIconOptionEditor::refreshMetrics(
         configureScreenshotToolPaletteIconValuePreviewTrigger(m_trigger, metrics);
     }
     for (adqt::widgets::AdButton* button : m_buttons) {
-        resetPopupButtonControlScale(button);
+        ensurePopupControlScope(button->parentWidget());
     }
 }
 
@@ -1593,7 +1620,7 @@ void ScreenshotToolPaletteIconOptionEditor::resetPopupMetrics(
     const ScreenshotToolPaletteButtonMetrics& metrics) {
     static_cast<void>(metrics);
     for (adqt::widgets::AdButton* button : m_buttons) {
-        resetPopupButtonControlScale(button);
+        ensurePopupControlScope(button->parentWidget());
     }
 }
 
@@ -1623,24 +1650,7 @@ screenshotToolPaletteSizePresetEditorConfig(const QString& summaryTooltip,
 }
 
 const QStringList& screenshotToolPaletteFontFamilies() {
-    // The palette evicts and rebuilds its font editors after every capture
-    // reset and tool-family switch, so the system enumeration and normalization
-    // run once per process instead of per editor build.
-    static const QStringList cachedFamilies = [] {
-        QStringList families;
-        const QStringList systemFamilies = QFontDatabase::families();
-        families.reserve(systemFamilies.size());
-        for (const QString& family : systemFamilies) {
-            const QString trimmed = family.trimmed();
-            if (!trimmed.isEmpty()) {
-                families.append(trimmed);
-            }
-        }
-        families.removeDuplicates();
-        families.sort(Qt::CaseInsensitive);
-        return families;
-    }();
-    return cachedFamilies;
+    return applicationFontFamilies();
 }
 
 } // namespace snow_shot::presentation

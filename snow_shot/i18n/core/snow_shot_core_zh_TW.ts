@@ -4,12 +4,24 @@
     <context>
         <name>AboutPageWidget</name>
         <message>
+            <source>%1 logo</source>
+            <translation>%1 標誌</translation>
+        </message>
+        <message>
             <source>%1 · %2</source>
             <translation>%1 · %2</translation>
         </message>
         <message>
+            <source>%1 · Make expression clearer</source>
+            <translation>%1 · 讓表達更清晰</translation>
+        </message>
+        <message>
             <source>, excellent work.</source>
             <translation>，出色工作。</translation>
+        </message>
+        <message>
+            <source>About %1</source>
+            <translation>關於 %1</translation>
         </message>
         <message>
             <source>About Snow Shot</source>
@@ -36,6 +48,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Changelog</source>
             <translation>更新日誌</translation>
+        </message>
+        <message>
+            <source>Check for a newer version of %1.</source>
+            <translation>檢查 %1 是否有新版本。</translation>
         </message>
         <message>
             <source>Check for a newer version of Snow Shot.</source>
@@ -80,6 +96,18 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Discover more features and ways to use it</source>
             <translation>探索更多功能與使用方式</translation>
+        </message>
+        <message>
+            <source>Discussion and support · Group No. %1</source>
+            <translation>交流與答疑 · 群號 %1</translation>
+        </message>
+        <message>
+            <source>Download from GitHub</source>
+            <translation>從 GitHub 下載</translation>
+        </message>
+        <message>
+            <source>Download from Gitee</source>
+            <translation>從 Gitee 下載</translation>
         </message>
         <message>
             <source>Download update</source>
@@ -144,6 +172,14 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Preview</source>
             <translation>預覽版</translation>
+        </message>
+        <message>
+            <source>QQ Group 2</source>
+            <translation>QQ 群組 2</translation>
+        </message>
+        <message>
+            <source>QQ Group 3</source>
+            <translation>QQ 群組 3</translation>
         </message>
         <message>
             <source>Ready to install %1</source>
@@ -219,6 +255,37 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>ApplicationRestart</name>
+        <message>
+            <source>Another restart operation is in progress.</source>
+            <translation>另一個重新啟動作業正在進行中。</translation>
+        </message>
+        <message>
+            <source>Could not create the restart handoff.</source>
+            <translation>無法建立重新啟動交接。</translation>
+        </message>
+        <message>
+            <source>Could not start the replacement application.</source>
+            <translation>無法啟動替代應用程式。</translation>
+        </message>
+        <message>
+            <source>Finish capturing, recording, exporting, or updating before restarting.</source>
+            <translation>請完成擷取、錄製、匯出或更新後再重新啟動。</translation>
+        </message>
+        <message>
+            <source>The replacement application did not acknowledge the restart.</source>
+            <translation>替代應用程式未確認重新啟動。</translation>
+        </message>
+        <message>
+            <source>The replacement application did not become ready.</source>
+            <translation>替代應用程式尚未準備就緒。</translation>
+        </message>
+        <message>
+            <source>Your settings could not be saved. Please retry before restarting.</source>
+            <translation>無法儲存您的設定。請在重新啟動前重試。</translation>
+        </message>
+    </context>
+    <context>
         <name>DiagnosticsService</name>
         <message>
             <source>A log file could not be read.</source>
@@ -290,6 +357,17 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>EditionMetadata</name>
+        <message>
+            <source>Snow Shot</source>
+            <translation>Snow Shot</translation>
+        </message>
+        <message>
+            <source>Snow Shot Mini</source>
+            <translation>Snow Shot Mini</translation>
+        </message>
+    </context>
+    <context>
         <name>LanguageCatalog</name>
         <message>
             <source>Language name</source>
@@ -315,6 +393,13 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>McpDocumentService</name>
+        <message>
+            <source>Document request failed (%1).</source>
+            <translation>文件請求失敗（%1）。</translation>
+        </message>
+    </context>
+    <context>
         <name>QObject</name>
         <message>
             <source>%1 cannot be registered as a global shortcut, try another key</source>
@@ -326,7 +411,7 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
         <message>
             <source>%1 cannot be used as a pinned window shortcut, try another key</source>
-            <translation>%1 無法用作釘選視窗快速鍵，請嘗試其他快速鍵</translation>
+            <translation>%1 無法用作固定到螢幕視窗快速鍵，請嘗試其他快速鍵</translation>
         </message>
         <message>
             <source>%1 cannot be used as a recording shortcut, try another key</source>
@@ -342,7 +427,7 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
         <message>
             <source>%1 is already assigned to another pinned window action, try another key</source>
-            <translation>%1 已指派給其他釘選視窗操作，請嘗試其他快速鍵</translation>
+            <translation>%1 已指派給其他固定到螢幕視窗操作，請嘗試其他快速鍵</translation>
         </message>
         <message>
             <source>%1 is already assigned to another recording action, try another key</source>
@@ -370,7 +455,7 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
         <message>
             <source>Invalid pinned window shortcut</source>
-            <translation>無效的釘選視窗快速鍵</translation>
+            <translation>無效的固定到螢幕視窗快速鍵</translation>
         </message>
         <message>
             <source>Invalid recording shortcut</source>
@@ -394,7 +479,7 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
         <message>
             <source>This key cannot be used as a pinned window shortcut, try another key</source>
-            <translation>此快速鍵無法用作釘選視窗快速鍵，請嘗試其他快速鍵</translation>
+            <translation>此快速鍵無法用作固定到螢幕視窗快速鍵，請嘗試其他快速鍵</translation>
         </message>
         <message>
             <source>This key cannot be used as a recording shortcut, try another key</source>
@@ -410,7 +495,7 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
         <message>
             <source>This key is already assigned to another pinned window action, try another key</source>
-            <translation>此快速鍵已指派給其他釘選視窗操作，請嘗試其他快速鍵</translation>
+            <translation>此快速鍵已指派給其他固定到螢幕視窗操作，請嘗試其他快速鍵</translation>
         </message>
         <message>
             <source>This key is already assigned to another recording action, try another key</source>
@@ -470,6 +555,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>影像轉換逾時，請嘗試較小的區域。</translation>
         </message>
         <message>
+            <source>Invalid LaTeX recognition response</source>
+            <translation>無效的 LaTeX 辨識回應</translation>
+        </message>
+        <message>
             <source>Invalid model stream response</source>
             <translation>模型串流回應無效</translation>
         </message>
@@ -484,6 +573,22 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Invalid translation stream response</source>
             <translation>無效的翻譯串流回應</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition failed</source>
+            <translation>LaTeX 辨識失敗</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition request timed out</source>
+            <translation>LaTeX 辨識請求逾時</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition response is too large</source>
+            <translation>LaTeX 辨識回應過大</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition returned no formula</source>
+            <translation>LaTeX 辨識未傳回公式</translation>
         </message>
         <message>
             <source>No translation services are available</source>
@@ -522,8 +627,28 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>模型未傳回內容</translation>
         </message>
         <message>
+            <source>The text is too large to translate.</source>
+            <translation>文字過長，無法翻譯。</translation>
+        </message>
+        <message>
+            <source>The translation response is too large.</source>
+            <translation>翻譯回應過大。</translation>
+        </message>
+        <message>
+            <source>This service does not support the selected language combination.</source>
+            <translation>此服務不支援所選語言組合。</translation>
+        </message>
+        <message>
             <source>Translation failed</source>
             <translation>翻譯失敗</translation>
+        </message>
+        <message>
+            <source>Translation request timed out.</source>
+            <translation>翻譯請求逾時。</translation>
+        </message>
+        <message>
+            <source>Translation service request failed (HTTP %1, code %2).</source>
+            <translation>翻譯服務請求失敗（HTTP %1，代碼 %2）。</translation>
         </message>
         <message>
             <source>Translation service response is too large</source>
@@ -575,32 +700,52 @@ so every moment on screen can be expressed clearly and shared easily.</source>
     <context>
         <name>snow_shot::app::ApplicationController</name>
         <message>
+            <source>%1 %2 is available. Open About for update options.</source>
+            <translation>%1 %2 已發布。請開啟「關於」查看更新選項。</translation>
+        </message>
+        <message>
+            <source>%1 will close and restart to install the update. Continue?</source>
+            <translation>%1 將關閉並重新啟動以安裝更新。是否繼續？</translation>
+        </message>
+        <message>
+            <source>An update is ready. Open About to restart and update %1.</source>
+            <translation>更新已就緒。請開啟「關於」重新啟動並更新 %1。</translation>
+        </message>
+        <message>
             <source>An update is ready. Open About to restart and update Snow Shot.</source>
             <translation>更新已準備就緒。請開啟「關於」頁面，重新啟動並更新 Snow Shot。</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Could not pin selected files</source>
+            <translation>無法將所選檔案固定到螢幕</translation>
         </message>
         <message>
             <source>Feature unavailable</source>
             <translation>功能暫時無法使用</translation>
         </message>
         <message>
-            <source>Finish capturing, recording, or exporting before updating.</source>
-            <translation>請先完成擷取、錄影或匯出，再進行更新。</translation>
+            <source>Finish capturing, recording, exporting, recognizing text, or updating before changing storage.</source>
+            <translation>請先完成擷取、錄製、匯出、文字辨識或更新，再變更儲存目錄。</translation>
         </message>
         <message>
-            <source>Pin to screen is not available on macOS yet.</source>
-            <translation>固定到螢幕功能尚未支援 macOS。</translation>
+            <source>Finish capturing, recording, or exporting before updating.</source>
+            <translation>請先完成擷取、錄影或匯出，再進行更新。</translation>
         </message>
         <message>
             <source>Restart and update</source>
             <translation>重新啟動並更新</translation>
         </message>
         <message>
-            <source>Screen recording is not available on macOS yet.</source>
-            <translation>螢幕錄影功能尚未支援 macOS。</translation>
+            <source>Restart failed</source>
+            <translation>重新啟動失敗</translation>
         </message>
         <message>
-            <source>Screenshot is not available on macOS yet.</source>
-            <translation>截圖功能尚未支援 macOS。</translation>
+            <source>Snow Shot %1 is available. Open About for update options.</source>
+            <translation>Snow Shot %1 已推出。開啟「關於」查看更新選項。</translation>
         </message>
         <message>
             <source>Snow Shot will close and restart to install the update. Continue?</source>

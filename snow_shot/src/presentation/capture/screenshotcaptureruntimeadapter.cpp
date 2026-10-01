@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/screenshotcaptureruntimeadapter.h"
+#include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
 
 #include "snow_shot/presentation/screenshotcapturecoordinator.h"
 #include "snow_shot/presentation/screenshotcolorpickercontroller.h"
@@ -37,6 +38,11 @@ void ScreenshotCaptureRuntimeAdapter::ensureCaptureCoordinator() {
                          if (m_captureEventSink != nullptr) {
                              m_captureEventSink->handleLayoutRefreshed(requestId, ok);
                          }
+                     });
+    QObject::connect(m_captureCoordinator.get(), &ScreenshotCaptureCoordinator::layoutReady,
+                     m_captureCoordinator.get(), [this](const ScreenshotCaptureLayout& layout) {
+                         if (m_captureEventSink)
+                             m_captureEventSink->handleLayoutReady(layout);
                      });
     QObject::connect(m_captureCoordinator.get(), &ScreenshotCaptureCoordinator::captureFinished,
                      m_captureCoordinator.get(), [this](const ScreenshotCaptureResult& result) {
@@ -177,6 +183,10 @@ void ScreenshotCaptureRuntimeAdapter::hideOverlayWindows(
     m_context.overlayCoordinator.hideOverlayWindows(displaySession);
 }
 
+void ScreenshotCaptureRuntimeAdapter::releaseSelectionPreviewCache() {
+    ScreenshotSelectionShadowRenderer::resetCacheForCurrentThread();
+}
+
 void ScreenshotCaptureRuntimeAdapter::prewarmToolbarSurface(
     const ScreenshotDisplaySession& displaySession) {
     m_context.overlayCoordinator.prewarmToolbarSurface(displaySession);
@@ -192,4 +202,17 @@ bool ScreenshotCaptureRuntimeAdapter::resetCanvasRuntime() {
 
 void ScreenshotCaptureRuntimeAdapter::resetColorPicker() {
     m_context.colorPickerController.reset();
+}
+
+void ScreenshotCaptureRuntimeAdapter::createColorPicker(const QPoint& initialCursorGlobalPosition) {
+    m_context.overlayCoordinator.createColorPicker(initialCursorGlobalPosition);
+}
+
+void ScreenshotCaptureRuntimeAdapter::prepareColorPickerSurface(
+    const ScreenshotDisplaySession& displaySession) {
+    m_context.overlayCoordinator.prepareColorPickerSurface(displaySession);
+}
+
+void ScreenshotCaptureRuntimeAdapter::releaseColorPicker() {
+    m_context.overlayCoordinator.releaseColorPicker();
 }

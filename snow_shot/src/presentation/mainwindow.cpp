@@ -1,3 +1,5 @@
+#include "snow_shot/app/edition.h"
+#include "snow_shot/presentation/windowcloseshortcut.h"
 #include "snow_shot/presentation/mainwindow.h"
 
 #include "snow_shot/platform/windows/windowchrome.h"
@@ -32,7 +34,7 @@
 
 namespace {
 constexpr int MAIN_WINDOW_WIDTH = 900;
-constexpr int MAIN_WINDOW_HEIGHT = 556;
+constexpr int MAIN_WINDOW_HEIGHT = 640;
 constexpr int MAIN_WINDOW_MIN_WIDTH = 512;
 constexpr int MAIN_WINDOW_MIN_HEIGHT = 316;
 constexpr int TITLE_BAR_BOTTOM_SHADOW_HEIGHT = 6;
@@ -74,8 +76,10 @@ MainWindow::MainWindow(const snow_shot::presentation::settings::SettingsRegistry
     setAttribute(Qt::WA_LayoutOnEntireRect);
 #endif
     setObjectName(QStringLiteral("snowShotMainWindow"));
-    setAccessibleName(QStringLiteral("SnowShot"));
-    setWindowTitle(QStringLiteral("SnowShot"));
+    setAccessibleName(snow_shot::app::edition::isMini ? snow_shot::app::edition::productName()
+                                                      : QStringLiteral("SnowShot"));
+    setWindowTitle(snow_shot::app::edition::isMini ? snow_shot::app::edition::productName()
+                                                   : QStringLiteral("SnowShot"));
     resize(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT);
     setMinimumSize(MAIN_WINDOW_MIN_WIDTH, MAIN_WINDOW_MIN_HEIGHT);
     setMouseTracking(true);
@@ -87,6 +91,8 @@ MainWindow::MainWindow(const snow_shot::presentation::settings::SettingsRegistry
     QFont interfaceFont = font();
     interfaceFont.setHintingPreference(QFont::PreferNoHinting);
     setFont(interfaceFont);
+
+    snow_shot::presentation::installWindowCloseShortcut(this, [this] { close(); });
 
     menuBar()->hide();
     statusBar()->hide();
@@ -265,6 +271,8 @@ void MainWindow::buildUi() {
             &MainWindow::globalMouseDragRequested);
     connect(m_contentCard, &ContentCardWidget::screenshotHistoryEditRequested, this,
             &MainWindow::screenshotHistoryEditRequested);
+    connect(m_contentCard, &ContentCardWidget::screenshotHistoryPinRequested, this,
+            &MainWindow::screenshotHistoryPinRequested);
     m_contentCard->setCurrentRoute(m_sidebar->currentRoute());
     m_contentHeader->setSections(m_contentCard->currentSections());
     m_contentHeader->setCurrentSection(m_contentCard->currentLocation().sectionId);
@@ -291,6 +299,12 @@ void MainWindow::showFunctionSettings() {
     if (m_contentCard != nullptr) {
         m_contentCard->showFunctionSettings();
     }
+    showAndActivate();
+}
+
+void MainWindow::showSettingsLocation(const QString& pageId, const QString& sectionId) {
+    if (m_contentCard)
+        m_contentCard->navigateTo({pageId, sectionId, {}});
     showAndActivate();
 }
 
@@ -329,6 +343,13 @@ void MainWindow::showScreenshotHistory() {
     }
 }
 
+void MainWindow::showPinToScreenManagement() {
+    showAndActivate();
+    if (m_contentCard != nullptr) {
+        m_contentCard->navigateTo({QStringLiteral("pin-to-screen-management"), {}, {}});
+    }
+}
+
 void MainWindow::showAndActivate() {
     if (isMinimized()) {
         showNormal();
@@ -341,6 +362,7 @@ void MainWindow::showAndActivate() {
     snow_shot::platform::windows::bringWindowToForeground(this);
 #elif defined(Q_OS_MACOS)
     snow_shot::platform::macos::activateWindow(this);
+    setupNativeTitleBar();
 #endif
 }
 

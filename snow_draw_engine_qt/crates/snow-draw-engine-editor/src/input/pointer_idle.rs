@@ -103,13 +103,16 @@ impl Editor {
             .map(|position| Point::new(position.x - canvas_point.x, position.y - canvas_point.y))
             .unwrap_or(Point::new(0.0, 0.0));
         self.state.interaction = match target {
-            ArrowHitTarget::Move => InteractionState::PendingArrowMove(PendingArrowMoveState {
-                pointer_id: event.pointer_id,
-                arrow_id,
-                original_arrow,
-                start_canvas_position: canvas_point,
-                start_view_position: event.position,
-            }),
+            ArrowHitTarget::Move | ArrowHitTarget::Label => {
+                InteractionState::PendingArrowMove(PendingArrowMoveState {
+                    pointer_id: event.pointer_id,
+                    arrow_id,
+                    original_arrow,
+                    label: target == ArrowHitTarget::Label,
+                    start_canvas_position: canvas_point,
+                    start_view_position: event.position,
+                })
+            }
             ArrowHitTarget::Endpoint(edge) => InteractionState::EditingArrow(EditArrowState {
                 pointer_id: event.pointer_id,
                 arrow_id,
@@ -252,7 +255,12 @@ impl Editor {
         let Some(arrow) = self.arrow_snapshot(document, id) else {
             return InteractionOutput::default();
         };
-        self.begin_arrow_interaction(event, id, arrow, ArrowHitTarget::Move, canvas_point)
+        let target = if self.arrow_label_hit(document, id, canvas_point) {
+            ArrowHitTarget::Label
+        } else {
+            ArrowHitTarget::Move
+        };
+        self.begin_arrow_interaction(event, id, arrow, target, canvas_point)
     }
 
     fn handle_empty_canvas_pointer_down(
@@ -431,6 +439,9 @@ impl Editor {
             }
             | PrimaryPointerIntent::BeginSelectedArrowInteraction {
                 target: ArrowHitTarget::Move,
+            }
+            | PrimaryPointerIntent::BeginSelectedArrowInteraction {
+                target: ArrowHitTarget::Label,
             } => {}
             PrimaryPointerIntent::BeginArrowElementInteraction { id }
             | PrimaryPointerIntent::BeginElementSelectionMove { id }
@@ -467,6 +478,14 @@ impl Editor {
 
         let policy = self.tool_policy();
         let canvas_point = view_to_canvas(event.position, &self.camera(), self.surface_size());
+        if let Some(target) = self.resolve_free_draw_endpoint(document, canvas_point) {
+            self.begin_free_draw_continuation(document, event, target);
+            return Ok(InteractionOutput {
+                consumed: true,
+                capture: self.capture_command_for_start(event.pointer_id),
+                cursor: CursorCommand::Set(CursorStyle::Crosshair),
+            });
+        }
         let intent =
             self.resolve_primary_pointer_intent(document, policy, canvas_point, event.modifiers);
         if let Some(output) = self.try_begin_duplicate_drag(document, event, intent, canvas_point) {
@@ -526,6 +545,21 @@ impl Editor {
         let (cursor, hovered_element) =
             self.hover_feedback_for_primary_pointer_intent(document, policy, intent);
         self.set_hovered_element(hovered_element);
+        if self.state.active_tool == ActiveTool::FreeDraw {
+            self.state.ui.free_draw_hover_position = Some(event.position);
+            self.bump_overlay_state_revision();
+            if self
+                .resolve_free_draw_endpoint(document, canvas_point)
+                .is_some()
+            {
+                self.state.ui.hovered_element = None;
+                return Ok(InteractionOutput {
+                    consumed: false,
+                    capture: PointerCaptureCommand::NoChange,
+                    cursor: CursorCommand::Set(CursorStyle::Crosshair),
+                });
+            }
+        }
         Ok(InteractionOutput {
             consumed: false,
             capture: PointerCaptureCommand::NoChange,

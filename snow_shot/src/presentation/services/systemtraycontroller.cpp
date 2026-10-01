@@ -1,4 +1,6 @@
+#include "snow_shot/app/edition.h"
 #include "snow_shot/presentation/systemtraycontroller.h"
+#include "snowimageqtcodec.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/presentation/shortcutdisplaytext.h"
 #include "snow_shot/presentation/pinnedwindowgroupmanager.h"
@@ -7,6 +9,10 @@
 #include "snow_shot/presentation/settings/settingscatalog.h"
 
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
+
+#ifdef Q_OS_MACOS
+#include "snow_shot/platform/macos/systemtraymenu.h"
+#endif
 
 #include "antd_icons.h"
 #include "widgets/context_menu.h"
@@ -21,12 +27,12 @@
 #include <QIcon>
 #include <QImageReader>
 #include <QPixmap>
+#include <QPainter>
 #include <QSet>
 #include <QSystemTrayIcon>
 #include <QVariant>
 
 #include <algorithm>
-#include <limits>
 
 namespace snow_shot::presentation {
 namespace {
@@ -60,6 +66,29 @@ QString normalizedIconSelection(const QString& selection) {
 
 QString bundledIconResource(const QString& selection) {
     return bundledIconResources().value(normalizedIconSelection(selection));
+}
+
+QIcon withShortcutsDisabledBadge(const QIcon& base) {
+    QIcon result;
+    // Supply native tray sizes and their high-DPI counterparts to keep the badge crisp.
+    for (const int size : {16, 20, 22, 24, 32, 40, 44, 48, 64, 128, 256}) {
+        QPixmap pixmap(size, size);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        base.paint(&painter, QRect(0, 0, size, size));
+        painter.scale(size / 16.0, size / 16.0);
+        // A white edge separates the centered red badge from both light and dark artwork.
+        const QRectF badge(4.25, 4.25, 7.5, 7.5);
+        painter.setPen(QPen(Qt::white, 0.75));
+        painter.setBrush(QColor(QStringLiteral("#e53935")));
+        painter.drawEllipse(badge);
+        painter.setPen(QPen(Qt::white, 1.15, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(QPointF(6.45, 9.55), QPointF(9.55, 6.45));
+        painter.end();
+        result.addPixmap(pixmap);
+    }
+    return result;
 }
 
 QString normalizedClickAction(const QString& action, const char* defaultAction) {
@@ -102,38 +131,27 @@ class TrayImageCache final {
             return {};
         }
 
+        if (suffix == QStringLiteral("ico")) {
+            ++decodeCount_;
+            QImage image = image_codec::decodeIconFile(path, 256);
+            const QSize sourceSize = image.size();
+            if (image.width() > 256 || image.height() > 256) {
+                image =
+                    image.scaled(QSize(256, 256), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            }
+            QIcon icon;
+            if (!image.isNull()) {
+                icon = QIcon(QPixmap::fromImage(image));
+            }
+            remember(path, size, modified, icon, sourceSize, image.size());
+            return icon;
+        }
+
         QImageReader reader(path);
         reader.setAutoTransform(true);
         if (!reader.canRead()) {
             remember(path, size, modified, {}, {}, {});
             return {};
-        }
-
-        int selectedFrame = -1;
-        if (suffix == QStringLiteral("ico")) {
-            QImageReader probe(path);
-            probe.setAutoTransform(true);
-            const int frameCount = probe.imageCount();
-            qint64 bestScore = std::numeric_limits<qint64>::max();
-            for (int frame = 0; frame < frameCount; ++frame) {
-                if (!probe.jumpToImage(frame)) {
-                    continue;
-                }
-                const QSize candidate = probe.size();
-                if (!candidate.isValid() || candidate.width() <= 0 || candidate.height() <= 0) {
-                    continue;
-                }
-                const qint64 score = qAbs(static_cast<qint64>(candidate.width()) - 256) +
-                                     qAbs(static_cast<qint64>(candidate.height()) - 256);
-                if (score < bestScore) {
-                    bestScore = score;
-                    selectedFrame = frame;
-                }
-            }
-            if (selectedFrame >= 0 && !reader.jumpToImage(selectedFrame)) {
-                remember(path, size, modified, {}, {}, {});
-                return {};
-            }
         }
 
         const QSize sourceSize = reader.size();
@@ -229,20 +247,35 @@ class SystemTrayController::Impl {
         menu->setObjectName(QStringLiteral("systemTrayMenu"));
         menu->setMinimumWidth(300);
         trayIcon->setObjectName(QStringLiteral("snowShotSystemTrayIcon"));
-        trayIcon->setToolTip(QStringLiteral("SnowShot"));
+        trayIcon->setToolTip(app::edition::isMini ? app::edition::productName()
+                                                  : QStringLiteral("SnowShot"));
         updateIcon();
 
         buildMenu();
         retranslateUi();
         setMenuOptions({});
 
+        // Cocoa opens an attached menu on left-click too. Handle Context explicitly there.
+#ifndef Q_OS_MACOS
         trayIcon->setContextMenu(menu.get());
+#endif
         QObject::connect(trayIcon, &QSystemTrayIcon::activated, &q,
                          [this](QSystemTrayIcon::ActivationReason reason) {
+#ifdef Q_OS_MACOS
+                             // AppKit/Qt emits another activation when our attached menu starts
+                             // tracking. It is presentation, not another user click.
+                             if (trayIcon->contextMenu()) {
+                                 return;
+                             }
+#endif
                              if (reason == QSystemTrayIcon::Trigger) {
                                  dispatchClickAction(leftClickAction);
                              } else if (reason == QSystemTrayIcon::MiddleClick) {
                                  dispatchClickAction(middleClickAction);
+#ifdef Q_OS_MACOS
+                             } else if (reason == QSystemTrayIcon::Context) {
+                                 platform::macos::showSystemTrayMenu(trayIcon, menu.get());
+#endif
                              }
                          });
         QObject::connect(trayIcon, &QSystemTrayIcon::messageClicked, &q, [this]() {
@@ -330,6 +363,10 @@ class SystemTrayController::Impl {
                     QObject::connect(action, &QAction::triggered, &q,
                                      &SystemTrayController::showMainWindowRequested);
                     break;
+                case settings::SettingsTrayMenuOptionKind::RestartApp:
+                    QObject::connect(action, &QAction::triggered, &q,
+                                     &SystemTrayController::restartRequested);
+                    break;
                 case settings::SettingsTrayMenuOptionKind::Exit:
                     menu->setActionDanger(action);
                     QObject::connect(action, &QAction::triggered, &q,
@@ -374,11 +411,13 @@ class SystemTrayController::Impl {
         const auto currentGroups = groupManager->groupsSortedForDisplay();
         bool hasDeletableEmptyGroups = false;
         for (const auto& group : currentGroups) {
-            const int windowCount = groupManager->windowCount(group.id);
+            const auto counts = groupManager->windowCounts(group.id);
             hasDeletableEmptyGroups =
-                hasDeletableEmptyGroups || (!group.builtIn && windowCount == 0);
-            QAction* action = groupMenu->addItem(QStringLiteral("%1\t%2").arg(
-                groupManager->displayName(group.id), QString::number(windowCount)));
+                hasDeletableEmptyGroups || (!group.builtIn && counts.nonIgnored == 0);
+            QAction* action = groupMenu->addItem(QStringLiteral("%1\t%2/%3")
+                                                     .arg(groupManager->displayName(group.id),
+                                                          QString::number(counts.nonIgnored),
+                                                          QString::number(counts.total)));
             action->setObjectName(QStringLiteral("systemTrayGroupAction-%1").arg(group.id));
             action->setData(group.id);
             action->setCheckable(true);
@@ -399,7 +438,7 @@ class SystemTrayController::Impl {
         deleteEmpty->setObjectName(QStringLiteral("systemTrayDeleteEmptyGroupsAction"));
         deleteEmpty->setEnabled(hasDeletableEmptyGroups);
         QObject::connect(deleteEmpty, &QAction::triggered, &q,
-                         [this]() { groupManager->deleteEmptyGroups(); });
+                         [this]() { groupManager->openDeleteEmptyGroupsConfirmation(nullptr); });
 
         const QString deleteSpecifiedText =
             QCoreApplication::translate("SystemTrayController", "Delete Specified Group");
@@ -418,14 +457,17 @@ class SystemTrayController::Impl {
                                      custom_outlined_icons::Delete());
         }
         for (const auto& group : currentGroups) {
+            const auto counts = groupManager->windowCounts(group.id);
             QAction* action = deleteSpecifiedGroupMenu->addItem(
-                QStringLiteral("%1\t%2").arg(groupManager->displayName(group.id),
-                                             QString::number(groupManager->windowCount(group.id))));
+                QStringLiteral("%1\t%2/%3")
+                    .arg(groupManager->displayName(group.id), QString::number(counts.nonIgnored),
+                         QString::number(counts.total)));
             action->setObjectName(
                 QStringLiteral("systemTrayDeleteSpecifiedGroupAction-%1").arg(group.id));
             action->setData(group.id);
-            QObject::connect(action, &QAction::triggered, &q,
-                             [this, id = group.id]() { groupManager->deleteSpecifiedGroup(id); });
+            QObject::connect(action, &QAction::triggered, &q, [this, id = group.id]() {
+                groupManager->openDeleteSpecifiedGroupConfirmation(id, nullptr);
+            });
         }
     }
 
@@ -441,6 +483,8 @@ class SystemTrayController::Impl {
     }
 
     void retranslateUi() {
+        if (app::edition::isMini)
+            trayIcon->setToolTip(app::edition::productName());
         for (const settings::SettingsTrayMenuGroupDefinition& group : groups) {
             for (const settings::SettingsTrayMenuOptionDefinition& option : group.options) {
                 if (QAction* action = actions.value(option.id)) {
@@ -472,9 +516,12 @@ class SystemTrayController::Impl {
                  groups.at(groupIndex).options) {
                 QAction* action = actions.value(option.id);
                 const bool visible =
-                    action != nullptr && requested.contains(option.id) &&
-                    (option.shortcutAction != GlobalShortcutAction::TranslateSelectedText ||
-                     snow_shot::storage::ExtendedFeaturesSettings().translationPageEnabled());
+                    action != nullptr && requested.contains(option.id)
+#if SNOW_SHOT_ENABLE_EXTENDED_FEATURES
+                    && (option.shortcutAction != GlobalShortcutAction::TranslateSelectedText ||
+                        snow_shot::storage::ExtendedFeaturesSettings().translationPageEnabled())
+#endif
+                    ;
                 if (action != nullptr) {
                     action->setVisible(visible);
                 }
@@ -509,11 +556,9 @@ class SystemTrayController::Impl {
     void updateIcon() {
         QIcon icon = iconCache.load(customIconPath);
         QString resolvedSource = customIconPath;
-        [[maybe_unused]] bool bundled = false;
         if (icon.isNull()) {
             resolvedSource = bundledIconResource(iconSelection);
             icon = QIcon(resolvedSource);
-            bundled = !icon.isNull();
         }
         if (icon.isNull()) {
             resolvedSource = QStringLiteral("application-window-icon");
@@ -523,8 +568,12 @@ class SystemTrayController::Impl {
             resolvedSource = QCoreApplication::applicationFilePath();
             icon = QIcon(QCoreApplication::applicationFilePath());
         }
+        if (globalShortcutsDisabled) {
+            icon = withShortcutsDisabledBadge(icon);
+        }
 #ifdef Q_OS_MACOS
-        icon.setIsMask(bundled);
+        // Template rendering discards RGB colors, including the selected bundled artwork.
+        icon.setIsMask(false);
 #endif
         trayIcon->setIcon(icon);
         trayIcon->setProperty("resolvedIconSource", resolvedSource);
@@ -561,6 +610,7 @@ class SystemTrayController::Impl {
     int screenshotDelaySeconds = 3;
     BalloonKind lastBalloonKind = BalloonKind::None;
     bool enabled = true;
+    bool globalShortcutsDisabled = false;
 };
 
 SystemTrayController::SystemTrayController(QObject* parent)
@@ -719,6 +769,11 @@ QStringList SystemTrayController::menuOptions() const {
 }
 
 void SystemTrayController::setQuickActionChecked(GlobalShortcutAction action, bool checked) {
+    if (action == GlobalShortcutAction::ToggleGlobalHotkeys &&
+        m_impl->globalShortcutsDisabled != checked) {
+        m_impl->globalShortcutsDisabled = checked;
+        m_impl->updateIcon();
+    }
     // Pure view update: owners announce changes; the checkmark only mirrors
     // them, so this must not dispatch anything.
     if (QAction* trayAction = m_impl->checkableQuickActions.value(action)) {

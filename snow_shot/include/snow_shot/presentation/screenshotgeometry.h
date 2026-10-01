@@ -2,6 +2,7 @@
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTGEOMETRY_H
 
 #include "snow_shot/presentation/screenshottypes.h"
+#include "snow_shot/presentation/screenshotselectiondisplayunit.h"
 
 #include <QPoint>
 #include <QPointF>
@@ -29,6 +30,11 @@ struct ScreenshotSelectionRenderSpec {
 [[nodiscard]] ScreenshotSelectionRenderSpec
 screenshotSelectionRenderSpec(const ScreenshotDisplaySession& displays, const QRect& selection);
 
+// Ceiled pixel size used by screenshotSelectionRenderSpec.
+[[nodiscard]] QSize screenshotSelectionRenderedPixelSize(const QSize& selection, qreal scale);
+// Shadow width export stores in a DPR-1 result: the scaled width clamped before compose.
+[[nodiscard]] int screenshotSelectionRenderedShadowPixels(int shadowWidth, qreal scale);
+
 struct ScreenshotHalfOpenRect {
     double left = 0.0;
     double top = 0.0;
@@ -55,9 +61,10 @@ struct ScreenshotHalfOpenRect {
 };
 
 struct ScreenshotPinnedImageGeometry {
+    // Platform window units: logical pixels on macOS, physical pixels on Windows.
     QRect nativeGeometry;
     QRectF canvasSourceRect;
-    QSize initialPhysicalSize;
+    QSize initialWindowSize;
 };
 
 struct ScreenshotPinnedImagePlacement {
@@ -68,7 +75,7 @@ struct ScreenshotPinnedImagePlacement {
 
 struct ScreenshotPinnedImageFit {
     QRect nativeGeometry;
-    QSize fullResolutionSize;
+    QSize initialWindowSize;
     double scalePercent = 0.0;
     bool valid = false;
 };
@@ -169,6 +176,7 @@ class ScreenshotGeometryMapper final {
     [[nodiscard]] static ScreenshotDisplayPlacementGeometry
     displayPlacementGeometry(const CapturedDisplayModel* display,
                              const QRect& fallbackLogicalBounds = QRect());
+    [[nodiscard]] static CapturedDisplayModel preCaptureDisplayModel(QScreen& screen);
     [[nodiscard]] static QRect physicalRectForScreen(const QScreen& screen);
     [[nodiscard]] static QRectF logicalRectFForPhysicalRect(const QRect& rect,
                                                             const QScreen* screen);
@@ -177,12 +185,12 @@ class ScreenshotGeometryMapper final {
                                                         const QRect& ownerLogicalBounds,
                                                         const QRect& ownerPhysicalBounds);
     [[nodiscard]] static ScreenshotPinnedImageFit
-    fitImageToAvailableGeometry(const QSize& fullResolutionSize,
+    fitImageToAvailableGeometry(const QSize& initialWindowSize,
                                 const QRect& availableLogicalGeometry,
                                 const QRect& screenLogicalGeometry,
                                 const QRect& screenNativeGeometry, int logicalMargin = 16);
     [[nodiscard]] static ScreenshotPinnedImageFit centerImageAtFullResolution(
-        const QSize& fullResolutionSize, const QRect& availableLogicalGeometry,
+        const QSize& initialWindowSize, const QRect& availableLogicalGeometry,
         const QRect& screenLogicalGeometry, const QRect& screenNativeGeometry);
     [[nodiscard]] static QPoint clampContentPositionToRect(const QPoint& desiredPosition,
                                                            const QRect& contentRect,
@@ -190,6 +198,9 @@ class ScreenshotGeometryMapper final {
     [[nodiscard]] static QPoint cursorPanelPosition(const QPoint& cursorPosition,
                                                     const QSize& panelSize, const QRect& bounds,
                                                     int gap);
+    [[nodiscard]] static QPoint selectionToolbarContentPosition(const QRectF& selectionLogical,
+                                                                const QSize& toolbarSize,
+                                                                const QRect& bounds, int gap);
     [[nodiscard]] static ScreenshotAnchoredToolbarPlacement
     anchoredToolbarPlacement(const QPoint& bottomRightAnchor, const QPoint& topRightAnchor,
                              const ScreenshotToolbarPlacementGeometry& bottomPlacement,
@@ -212,5 +223,28 @@ class ScreenshotGeometryMapper final {
     QPoint m_canvasOrigin;
     QRectF m_canvasBounds;
 };
+
+// Display-only conversion. Selection and sampling geometry remain in their native units.
+struct ScreenshotSelectionDisplayConversion {
+    qreal scale = 1.0;
+    bool canvasUsesPoints = false;
+    ScreenshotSelectionDisplayValues selection;
+};
+
+[[nodiscard]] ScreenshotSelectionDisplayConversion
+screenshotSelectionDisplayConversion(const ScreenshotGeometryMapper& geometry,
+                                     const ScreenshotDisplaySession& displays,
+                                     const QRect& selection, ScreenshotSelectionDisplayUnit unit,
+                                     const CapturedDisplayModel* fallbackDisplay = nullptr);
+
+[[nodiscard]] QPointF screenshotMagnifierDisplayPosition(
+    const ScreenshotGeometryMapper& geometry, const CapturedDisplayModel& sampleDisplay,
+    const QPoint& physicalPoint, const ScreenshotSelectionDisplayConversion& conversion);
+
+[[nodiscard]] std::optional<QPointF>
+screenshotMagnifierRelativeDisplayPosition(const ScreenshotGeometryMapper& geometry,
+                                           const CapturedDisplayModel& sampleDisplay,
+                                           const QPoint& physicalPoint, const QRect& selection,
+                                           const ScreenshotSelectionDisplayConversion& conversion);
 
 #endif // SNOW_SHOT_PRESENTATION_SCREENSHOTGEOMETRY_H

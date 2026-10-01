@@ -28,7 +28,18 @@
         </message>
     </context>
     <context>
+        <name>ScreenshotCaptureCoordinator</name>
+        <message>
+            <source>Could not snapshot the cursor</source>
+            <translation>無法擷取滑鼠游標</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotController</name>
+        <message>
+            <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</source>
+            <translation>請在「系統設定 &gt; 隱私權與安全性 &gt; 自動化」中允許 Snow Shot 存取 Finder，然後再試一次。</translation>
+        </message>
         <message>
             <source>Automatic screenshot saving failed: %1</source>
             <translation>自動儲存截圖失敗：%1</translation>
@@ -36,6 +47,14 @@
         <message>
             <source>Cancel</source>
             <translation>取消</translation>
+        </message>
+        <message>
+            <source>Could not insert the draw template</source>
+            <translation>無法插入繪圖範本</translation>
+        </message>
+        <message>
+            <source>Could not read the selected files from Finder. Please try again.</source>
+            <translation>無法讀取 Finder 中所選的檔案，請再試一次。</translation>
         </message>
         <message>
             <source>Could not recapture the screen</source>
@@ -50,8 +69,20 @@
             <translation>結束截圖？</translation>
         </message>
         <message>
+            <source>Finder is unavailable. Open Finder and try again.</source>
+            <translation>Finder 無法使用，請開啟 Finder 後再試一次。</translation>
+        </message>
+        <message>
+            <source>Finder took too long to return the selected files. Please try again.</source>
+            <translation>讀取 Finder 中所選檔案的要求逾時，請再試一次。</translation>
+        </message>
+        <message>
             <source>No recognized result is available to copy</source>
             <translation>沒有可複製的辨識結果</translation>
+        </message>
+        <message>
+            <source>Save recognition text</source>
+            <translation>儲存辨識文字</translation>
         </message>
         <message>
             <source>Save screenshot</source>
@@ -71,23 +102,31 @@
         </message>
         <message>
             <source>The clipboard content could not be pinned</source>
-            <translation>無法釘選剪貼簿內容</translation>
+            <translation>無法將剪貼簿內容固定到螢幕</translation>
         </message>
         <message>
             <source>The clipboard content could not be pinned: %1</source>
-            <translation>無法釘選剪貼簿內容：%1</translation>
+            <translation>無法將剪貼簿內容固定到螢幕：%1</translation>
         </message>
         <message>
             <source>The clipboard does not contain content that can be pinned</source>
-            <translation>剪貼簿中沒有可釘選的內容</translation>
+            <translation>剪貼簿中沒有可固定到螢幕的內容</translation>
         </message>
         <message>
             <source>The clipboard pin could not be presented</source>
-            <translation>無法顯示已釘選的剪貼簿內容</translation>
+            <translation>無法顯示已固定到螢幕的剪貼簿內容</translation>
         </message>
         <message>
             <source>The clipboard pin queue is full</source>
-            <translation>剪貼簿內容釘選佇列已滿</translation>
+            <translation>將剪貼簿內容固定到螢幕的佇列已滿</translation>
+        </message>
+        <message>
+            <source>The pinned window could not be restored</source>
+            <translation>無法還原固定到螢幕視窗</translation>
+        </message>
+        <message>
+            <source>The recognition text could not be saved: %1</source>
+            <translation>無法儲存辨識文字：%1</translation>
         </message>
         <message>
             <source>The screenshot clipboard operation could not be started</source>
@@ -96,6 +135,10 @@
         <message>
             <source>The screenshot could not be copied: %1</source>
             <translation>無法複製截圖：%1</translation>
+        </message>
+        <message>
+            <source>The screenshot could not be pinned</source>
+            <translation>無法將截圖固定到螢幕</translation>
         </message>
         <message>
             <source>The screenshot could not be prepared for saving</source>
@@ -115,11 +158,15 @@
         </message>
         <message>
             <source>The scrolling screenshot could not be pinned</source>
-            <translation>無法釘選滾動截圖</translation>
+            <translation>無法將滾動截圖固定到螢幕</translation>
         </message>
         <message>
             <source>The scrolling screenshot could not be prepared</source>
             <translation>無法準備滾動截圖</translation>
+        </message>
+        <message>
+            <source>This screenshot cannot be pinned</source>
+            <translation>此截圖無法固定到螢幕</translation>
         </message>
         <message>
             <source>Your current screenshot will be discarded.</source>
@@ -127,10 +174,75 @@
         </message>
     </context>
     <context>
+        <name>ScreenshotMcpServer</name>
+        <message>
+            <source>MCP request failed (%1).</source>
+            <translation>MCP 請求失敗（%1）。</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotOverlayWindow</name>
         <message>
             <source>Loading screenshot history</source>
             <translation>正在載入截圖歷史</translation>
+        </message>
+        <message>
+            <source>Result Preview in Progress</source>
+            <translation>正在預覽結果</translation>
+        </message>
+    </context>
+    <context>
+        <name>ScreenshotQrController</name>
+        <message>
+            <source>Copy Text</source>
+            <translation>複製文字</translation>
+        </message>
+        <message>
+            <source>Open URL</source>
+            <translation>開啟連結</translation>
+        </message>
+        <message>
+            <source>QR Code</source>
+            <translation>二維碼</translation>
+        </message>
+        <message>
+            <source>QR Code %1</source>
+            <translation>二維碼 %1</translation>
+        </message>
+        <message>
+            <source>QR code recognition failed</source>
+            <translation>二維碼辨識失敗</translation>
+        </message>
+        <message>
+            <source>QR code text</source>
+            <translation>二維碼文字</translation>
+        </message>
+        <message>
+            <source>Unable to open the recognized link</source>
+            <translation>無法開啟辨識出的連結</translation>
+        </message>
+    </context>
+    <context>
+        <name>ScreenshotRegionTypeControl</name>
+        <message>
+            <source>%1 to switch region type</source>
+            <translation>按 %1 切換區域類型</translation>
+        </message>
+        <message>
+            <source>Curve region</source>
+            <translation>曲線區域</translation>
+        </message>
+        <message>
+            <source>Freehand region</source>
+            <translation>自由繪製區域</translation>
+        </message>
+        <message>
+            <source>Polyline region</source>
+            <translation>折線區域</translation>
+        </message>
+        <message>
+            <source>Rectangle region</source>
+            <translation>矩形區域</translation>
         </message>
     </context>
     <context>
@@ -250,12 +362,12 @@
     <context>
         <name>ScreenshotSelectionToolbarWidget</name>
         <message>
-            <source>%1 × %2 px</source>
-            <translation>%1 × %2 像素</translation>
-        </message>
-        <message>
             <source>Corner radius</source>
             <translation>圓角半徑</translation>
+        </message>
+        <message>
+            <source>Corner radius is unavailable for custom regions</source>
+            <translation>自訂區域不支援圓角半徑</translation>
         </message>
         <message>
             <source>Height</source>
@@ -266,16 +378,12 @@
             <translation>鎖定選取範圍長寬比</translation>
         </message>
         <message>
-            <source>Output image dimensions</source>
-            <translation>輸出影像尺寸</translation>
+            <source>Logical pixels</source>
+            <translation>邏輯像素</translation>
         </message>
         <message>
             <source>Pixels</source>
             <translation>像素</translation>
-        </message>
-        <message>
-            <source>Points</source>
-            <translation>點</translation>
         </message>
         <message>
             <source>Shadow width</source>
@@ -294,12 +402,12 @@
             <translation> Y 座標</translation>
         </message>
         <message>
-            <source>pt</source>
-            <translation>點</translation>
+            <source>dp</source>
+            <translation>dp</translation>
         </message>
         <message>
             <source>px</source>
-            <translation>像素</translation>
+            <translation>px</translation>
         </message>
     </context>
     <context>
@@ -358,6 +466,32 @@
         </message>
     </context>
     <context>
+        <name>snow_shot::app::mcp::ScreenshotMcpServer</name>
+        <message>
+            <source>Another Snow Shot instance owns the MCP endpoint.</source>
+            <translation>另一個 Snow Shot 執行個體正在使用 MCP 端點。</translation>
+        </message>
+        <message>
+            <source>Could not open the local MCP endpoint.</source>
+            <translation>無法開啟本機 MCP 端點。</translation>
+        </message>
+        <message>
+            <source>Could not secure the MCP runtime directory.</source>
+            <translation>無法設定 MCP 執行目錄的安全權限。</translation>
+        </message>
+        <message>
+            <source>Could not write the private MCP descriptor.</source>
+            <translation>無法寫入私有 MCP 描述檔。</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::app::mcp::ScreenshotMcpSession</name>
+        <message>
+            <source>MCP request failed (%1).</source>
+            <translation>MCP 請求失敗（%1）。</translation>
+        </message>
+    </context>
+    <context>
         <name>snow_shot::presentation::DirectCaptureController</name>
         <message>
             <source>Capture failed: %1</source>
@@ -374,10 +508,6 @@
         <message>
             <source>The clipboard publication could not be queued</source>
             <translation>無法將剪貼簿寫入操作加入佇列</translation>
-        </message>
-        <message>
-            <source>The image could not be prepared for the clipboard</source>
-            <translation>無法準備要複製到剪貼簿的影像</translation>
         </message>
     </context>
 </TS>

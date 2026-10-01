@@ -16,6 +16,7 @@ std::optional<FeatureFamily> featureFamilyFor(presentation::GlobalShortcutAction
         return FeatureFamily::Screenshot;
     case Action::ScreenshotFixed:
     case Action::PinClipboardContent:
+    case Action::RestoreLastClosedWindows:
     case Action::PinSelectedFiles:
         return FeatureFamily::PinToScreen;
     case Action::ScreenRecord:
@@ -23,6 +24,9 @@ std::optional<FeatureFamily> featureFamilyFor(presentation::GlobalShortcutAction
         return FeatureFamily::ScreenRecording;
     case Action::OpenScreenRecordingFolder:
     case Action::OpenCaptureHistory:
+    case Action::GlobalCanvas:
+    case Action::SwitchWindowGroup:
+    case Action::OpenPinToScreenManagement:
     case Action::OpenSettings:
     case Action::TranslateSelectedText:
     case Action::ToggleGlobalHotkeys:
@@ -51,11 +55,7 @@ FeatureFamily featureFamilyFor(presentation::settings::SettingsGlobalMouseAction
 
 bool isFeatureAvailable(FeatureFamily feature) {
     (void)feature;
-#ifdef Q_OS_MACOS
-    return feature == FeatureFamily::Screenshot;
-#else
     return true;
-#endif
 }
 
 FeatureGate::FeatureGate(UnavailableHandler unavailableHandler)

@@ -7,15 +7,17 @@
 #include <QTemporaryDir>
 
 #ifdef Q_OS_MACOS
-#include <Carbon/Carbon.h>
+#include "../src/platform/macos/globalshortcutbackend_p.h"
 #elif defined(Q_OS_WIN)
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "../src/platform/windows/globalshortcutbackend_p.h"
 #endif
 
 #include <array>
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <utility>
@@ -37,10 +39,14 @@ constexpr std::array ALL_ACTIONS{
     GlobalShortcutAction::ScreenRecordCopy,
     GlobalShortcutAction::OpenScreenRecordingFolder,
     GlobalShortcutAction::OpenCaptureHistory,
+    GlobalShortcutAction::OpenPinToScreenManagement,
+    GlobalShortcutAction::GlobalCanvas,
+    GlobalShortcutAction::SwitchWindowGroup,
     GlobalShortcutAction::OpenSettings,
     GlobalShortcutAction::PinClipboardContent,
     GlobalShortcutAction::TranslateSelectedText,
     GlobalShortcutAction::PinSelectedFiles,
+    GlobalShortcutAction::RestoreLastClosedWindows,
     GlobalShortcutAction::ToggleGlobalHotkeys,
     GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow,
 };
@@ -56,6 +62,10 @@ class FakeBackend final : public GlobalShortcutBackend {
   public:
     void setActivationHandler(ActivationHandler value) override {
         handler = std::move(value);
+    }
+
+    void setAvailabilityChangedHandler(AvailabilityChangedHandler value) override {
+        availabilityHandler = std::move(value);
     }
 
     GlobalShortcutValidationResult
@@ -84,6 +94,7 @@ class FakeBackend final : public GlobalShortcutBackend {
     }
 
     ActivationHandler handler;
+    AvailabilityChangedHandler availabilityHandler;
     QHash<int, shortcuts::ShortcutBinding> registrations;
     QHash<QString, GlobalShortcutBackendResult> failures;
     int registerCalls = 0;
@@ -94,6 +105,228 @@ void clearAll(GlobalShortcutManager& manager) {
     for (const GlobalShortcutAction action : ALL_ACTIONS) {
         require(manager.setShortcuts(action, {}), "clear global shortcut fixture");
     }
+}
+
+void switchGroupShortcutPersistsAndReportsBinding() {
+    constexpr auto action = GlobalShortcutAction::SwitchWindowGroup;
+    const shortcuts::ShortcutBindingList keys{QStringLiteral("Ctrl+Alt+F8"),
+                                              QStringLiteral("Shift+F9")};
+    {
+        auto backend = std::make_unique<FakeBackend>();
+        auto* input = backend.get();
+        GlobalShortcutManager manager(std::move(backend), nullptr, [] { return false; });
+        manager.initialize();
+        require(manager.state(action).shortcuts.isEmpty(), "switcher starts unset");
+        require(manager.setShortcuts(action, keys), "set both switcher bindings");
+        int received = 0;
+        int actions = 0;
+        QObject::connect(&manager, &GlobalShortcutManager::bindingActivated, &manager,
+                         [&](GlobalShortcutAction a, int id) {
+                             if (a == action)
+                                 received = id;
+                         });
+        QObject::connect(&manager, &GlobalShortcutManager::activated, &manager,
+                         [&](GlobalShortcutAction a) {
+                             if (a == action)
+                                 ++actions;
+                         });
+        for (auto it = input->registrations.cbegin(); it != input->registrations.cend(); ++it) {
+            if (!keys.contains(it.value()))
+                continue;
+            input->handler(it.key());
+            require(received == it.key(), "exact native binding is delivered");
+        }
+        require(actions == 2, "legacy activation remains once per press");
+    }
+    GlobalShortcutManager restored(std::make_unique<FakeBackend>(), nullptr, [] { return false; });
+    restored.initialize();
+    require(restored.state(action).shortcuts == keys, "switcher bindings survive reload");
+    require(restored.setShortcuts(action, {}), "clear switcher fixture");
+}
+#ifdef Q_OS_WIN
+UINT observedModifiers = 0;
+BOOL WINAPI fakeRegisterGroupHotkey(HWND, int, UINT modifiers, UINT) {
+    observedModifiers = modifiers;
+    return TRUE;
+}
+BOOL WINAPI fakeUnregisterGroupHotkey(HWND, int) {
+    return TRUE;
+}
+void nativeGroupKeyStateUsesEveryShortcutKey() {
+    QSet<int> down;
+    bool available = true;
+    WindowsHotKeyInputApi api;
+    api.registerHotKey = fakeRegisterGroupHotkey;
+    api.unregisterHotKey = fakeUnregisterGroupHotkey;
+    api.keyState = [&](int key) { return static_cast<SHORT>(down.contains(key) ? 0x8000 : 0); };
+    api.available = [&] { return available; };
+    auto backend = createWindowsGlobalShortcutBackend(api);
+    require(backend->registerShortcut(123, {QStringLiteral("Ctrl+Alt+Shift+Meta+F8")}).registered,
+            "register injectable shortcut");
+    require((observedModifiers & MOD_NOREPEAT) != 0, "held keys do not repeat");
+    for (int key : {VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN, VK_F8}) {
+        down = {key};
+        require(backend->inputState(123)->anyShortcutKeyDown,
+                "each required key alone keeps session alive");
+    }
+    std::array releaseOrder{VK_SHIFT, VK_CONTROL, VK_MENU, VK_F8};
+    std::sort(releaseOrder.begin(), releaseOrder.end());
+    do {
+        down = {VK_SHIFT, VK_CONTROL, VK_MENU, VK_F8};
+        for (int key : releaseOrder) {
+            down.remove(key);
+            require(backend->inputState(123)->anyShortcutKeyDown == !down.isEmpty(),
+                    "every release ordering waits for the final shortcut key");
+        }
+    } while (std::next_permutation(releaseOrder.begin(), releaseOrder.end()));
+    down = {VK_F9};
+    require(!backend->inputState(123)->anyShortcutKeyDown, "unrelated key does not delay release");
+    require(backend->registerShortcut(124, {QStringLiteral("F8")}).registered,
+            "modifierless shortcut registers");
+    down = {VK_CONTROL};
+    require(!backend->inputState(124)->anyShortcutKeyDown,
+            "unrelated modifiers do not hold a modifierless shortcut open");
+    down = {VK_F8};
+    require(backend->inputState(124)->anyShortcutKeyDown, "modifierless key is tracked");
+    down = {VK_ESCAPE};
+    require(backend->inputState(0)->escapeDown, "Escape observed without registration");
+    available = false;
+    require(!backend->inputState(123), "unobservable state is not release");
+    available = true;
+    backend->unregisterShortcut(123);
+    require(!backend->inputState(123), "removed registration is unavailable");
+}
+#endif
+
+void pinnedManagementShortcutCanBeAssignedAndRestored() {
+    constexpr auto action = GlobalShortcutAction::OpenPinToScreenManagement;
+    const shortcuts::ShortcutBinding binding{QStringLiteral("Ctrl+F8")};
+    {
+        auto backend = std::make_unique<FakeBackend>();
+        auto* input = backend.get();
+        GlobalShortcutManager manager(std::move(backend), nullptr, [] { return false; });
+        manager.initialize();
+        require(manager.state(action).status == GlobalShortcutStatus::Unset &&
+                    manager.state(action).shortcuts.isEmpty(),
+                "pinned management must have no default global hotkey");
+        clearAll(manager);
+        require(manager.setShortcuts(action, {binding}) &&
+                    manager.state(action).status == GlobalShortcutStatus::Registered &&
+                    input->registrations.size() == 1,
+                "pinned management must register an assigned global hotkey");
+        bool activated = false;
+        QObject::connect(&manager, &GlobalShortcutManager::activated, &manager,
+                         [&](GlobalShortcutAction received) { activated = received == action; });
+        input->handler(input->registrations.constBegin().key());
+        require(activated, "pinned management hotkey must dispatch its action");
+    }
+    auto backend = std::make_unique<FakeBackend>();
+    GlobalShortcutManager restored(std::move(backend), nullptr, [] { return false; });
+    restored.initialize();
+    require(restored.state(action).status == GlobalShortcutStatus::Registered &&
+                restored.state(action).shortcuts == shortcuts::ShortcutBindingList{binding},
+            "pinned management hotkey must survive manager recreation");
+    require(restored.setShortcuts(action, {}), "clear pinned management hotkey fixture");
+}
+
+void globalCanvasShortcutCanBeAssignedAndRestored() {
+    constexpr auto action = GlobalShortcutAction::GlobalCanvas;
+    const shortcuts::ShortcutBinding binding{QStringLiteral("Ctrl+F8")};
+    {
+        auto backend = std::make_unique<FakeBackend>();
+        auto* input = backend.get();
+        GlobalShortcutManager manager(std::move(backend), nullptr, [] { return false; });
+        manager.initialize();
+        require(manager.state(action).status == GlobalShortcutStatus::Unset &&
+                    manager.state(action).shortcuts.isEmpty(),
+                "global canvas must have no default global hotkey");
+        clearAll(manager);
+        require(manager.setShortcuts(action, {binding}) &&
+                    manager.state(action).status == GlobalShortcutStatus::Registered &&
+                    input->registrations.size() == 1,
+                "global canvas must register an assigned global hotkey");
+        bool activated = false;
+        QObject::connect(&manager, &GlobalShortcutManager::activated, &manager,
+                         [&](GlobalShortcutAction received) { activated = received == action; });
+        input->handler(input->registrations.constBegin().key());
+        require(activated, "global canvas hotkey must dispatch its action");
+    }
+    auto backend = std::make_unique<FakeBackend>();
+    GlobalShortcutManager restored(std::move(backend), nullptr, [] { return false; });
+    restored.initialize();
+    require(restored.state(action).status == GlobalShortcutStatus::Registered &&
+                restored.state(action).shortcuts == shortcuts::ShortcutBindingList{binding},
+            "global canvas hotkey must survive manager recreation");
+    require(restored.setShortcuts(action, {}), "clear global canvas hotkey fixture");
+}
+
+void globalCanvasFullscreenGateTracksSession() {
+    auto backend = std::make_unique<FakeBackend>();
+    auto* input = backend.get();
+    GlobalShortcutManager manager(std::move(backend), nullptr, [] { return true; });
+    manager.initialize();
+    clearAll(manager);
+    require(manager.setShortcuts(GlobalShortcutAction::GlobalCanvas, {QStringLiteral("Ctrl+F8")}),
+            "assign canvas");
+    auto& store = snow_shot::storage::ApplicationStorage::instance().configuration();
+    const QString key = QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window");
+    const auto previous = store.value(key);
+    require(store.setValue(key, true), "enable fullscreen suppression");
+    int activations = 0;
+    QObject::connect(&manager, &GlobalShortcutManager::activated, &manager,
+                     [&](GlobalShortcutAction) { ++activations; });
+    const int id = input->registrations.constBegin().key();
+    input->handler(id);
+    require(activations == 0, "creation respects fullscreen suppression");
+    manager.setGlobalCanvasActive(true);
+    input->handler(id);
+    require(activations == 1, "active canvas can toggle over fullscreen windows");
+    manager.setGlobalHotkeysEnabled(false);
+    input->handler(id);
+    require(activations == 1, "explicit disablement still applies");
+    manager.setGlobalHotkeysEnabled(true);
+    manager.setGlobalCanvasActive(false);
+    input->handler(id);
+    require(activations == 1, "closed canvas restores suppression");
+    require(store.setValue(key, previous), "restore suppression");
+}
+
+void backendAvailabilityInvalidatesOwnershipAndRecovers() {
+    auto backend = std::make_unique<FakeBackend>();
+    auto* input = backend.get();
+    GlobalShortcutManager manager(std::move(backend), nullptr, [] { return false; });
+    manager.initialize();
+    clearAll(manager);
+    const QString binding = QStringLiteral("Ctrl+F12");
+    require(manager.setShortcuts(GlobalShortcutAction::Screenshot, {{binding}}),
+            "configure availability fixture");
+    const int oldId = input->registrations.constBegin().key();
+    int activations = 0;
+    QObject::connect(&manager, &GlobalShortcutManager::activated, &manager,
+                     [&](GlobalShortcutAction) { ++activations; });
+    require(static_cast<bool>(input->availabilityHandler),
+            "manager must subscribe to backend availability changes");
+    input->failures.insert(binding, {false, GlobalShortcutFailureReason::AlreadyInUse, 123});
+    input->availabilityHandler({oldId});
+    input->handler(oldId);
+    require(input->registrations.isEmpty() && activations == 0 &&
+                manager.state(GlobalShortcutAction::Screenshot).status ==
+                    GlobalShortcutStatus::Failed,
+            "invalidated IDs must lose ownership and reject already-queued activation events");
+    const int releases = input->unregisterCalls;
+    input->failures.clear();
+    input->availabilityHandler({});
+    require(input->registrations.size() == 1 && input->registrations.constBegin().key() != oldId &&
+                manager.state(GlobalShortcutAction::Screenshot).status ==
+                    GlobalShortcutStatus::Registered,
+            "availability recovery with no active IDs must retry failed bindings");
+    const int newId = input->registrations.constBegin().key();
+    input->availabilityHandler({oldId});
+    input->handler(oldId);
+    input->handler(newId);
+    require(input->unregisterCalls == releases && activations == 1 &&
+                input->registrations.contains(newId),
+            "stale invalidations must not remove or activate a replacement registration");
 }
 
 void validationCoversSupportedAndRejectedKeys() {
@@ -449,6 +682,258 @@ void gateControlShortcutsSurviveBothHotkeyGates() {
             "restore the fullscreen suppression preference");
 }
 
+#ifdef Q_OS_MACOS
+struct SymbolicHotKeyFixture {
+    SInt32 keyCode = kVK_ANSI_1;
+    SInt32 modifiers = controlKey;
+    bool enabled = false;
+};
+
+QList<SymbolicHotKeyFixture> symbolicHotKeys;
+OSStatus symbolicLookupStatus = noErr;
+OSStatus nativeRegistrationStatus = noErr;
+int nativeRegistrationCalls = 0;
+int nativeUnregistrationCalls = 0;
+UInt32 lastNativeKey = 0;
+UInt32 lastNativeModifiers = 0;
+OptionBits lastNativeOptions = 0;
+
+OSStatus copySymbolicHotKeyFixture(CFArrayRef* output) {
+    auto array = CFArrayCreateMutable(nullptr, 0, &kCFTypeArrayCallBacks);
+    for (const auto& entry : symbolicHotKeys) {
+        auto dictionary = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks,
+                                                    &kCFTypeDictionaryValueCallBacks);
+        const auto code = CFNumberCreate(nullptr, kCFNumberSInt32Type, &entry.keyCode);
+        const auto modifiers = CFNumberCreate(nullptr, kCFNumberSInt32Type, &entry.modifiers);
+        CFDictionarySetValue(dictionary, kHISymbolicHotKeyCode, code);
+        CFDictionarySetValue(dictionary, kHISymbolicHotKeyModifiers, modifiers);
+        CFDictionarySetValue(dictionary, kHISymbolicHotKeyEnabled,
+                             entry.enabled ? kCFBooleanTrue : kCFBooleanFalse);
+        CFArrayAppendValue(array, dictionary);
+        CFRelease(code);
+        CFRelease(modifiers);
+        CFRelease(dictionary);
+    }
+    *output = array;
+    return symbolicLookupStatus;
+}
+
+OSStatus registerHotKeyFixture(UInt32 code, UInt32 modifiers, EventHotKeyID, EventTargetRef,
+                               OptionBits options, EventHotKeyRef* output) {
+    ++nativeRegistrationCalls;
+    lastNativeKey = code;
+    lastNativeModifiers = modifiers;
+    lastNativeOptions = options;
+    if (nativeRegistrationStatus != noErr) {
+        return nativeRegistrationStatus;
+    }
+    for (const auto& entry : symbolicHotKeys) {
+        if (static_cast<UInt32>(entry.keyCode) == code &&
+            static_cast<UInt32>(entry.modifiers) == modifiers && options == kEventHotKeyExclusive) {
+            return eventHotKeyExistsErr;
+        }
+    }
+    *output = reinterpret_cast<EventHotKeyRef>(&nativeRegistrationCalls);
+    return noErr;
+}
+
+OSStatus unregisterHotKeyFixture(EventHotKeyRef) {
+    ++nativeUnregistrationCalls;
+    return noErr;
+}
+
+void disabledMacOSSystemReservationsRemainUsable() {
+    auto backend = createMacOSGlobalShortcutBackend(
+        {copySymbolicHotKeyFixture, registerHotKeyFixture, unregisterHotKeyFixture});
+    // Qt PortableText Meta represents physical Control on macOS.
+    const shortcuts::ShortcutBinding controlOne{QStringLiteral("Meta+1")};
+    symbolicHotKeys = {{kVK_ANSI_1, controlKey, false}};
+    require(backend->registerShortcut(1, controlOne).registered && lastNativeKey == kVK_ANSI_1 &&
+                lastNativeModifiers == controlKey && lastNativeOptions == kEventHotKeyNoOptions,
+            "disabled Control+1 system reservation must allow normal Carbon registration");
+    backend->unregisterShortcut(1);
+    require(nativeUnregistrationCalls == 1, "normal Carbon registration must be released");
+
+    symbolicHotKeys.append({kVK_ANSI_1, controlKey, true});
+    const int callsBeforeConflict = nativeRegistrationCalls;
+    const auto conflict = backend->registerShortcut(2, controlOne);
+    require(!conflict.registered &&
+                conflict.failureReason == GlobalShortcutFailureReason::AlreadyInUse &&
+                conflict.nativeErrorCode == eventHotKeyExistsErr &&
+                nativeRegistrationCalls == callsBeforeConflict,
+            "an enabled system owner must win even if a disabled entry also matches");
+
+    symbolicHotKeys = {{kVK_ANSI_2, controlKey | shiftKey, false}};
+    require(backend->registerShortcut(3, {QStringLiteral("Meta+Shift+2")}).registered &&
+                lastNativeKey == kVK_ANSI_2 && lastNativeModifiers == (controlKey | shiftKey) &&
+                lastNativeOptions == kEventHotKeyNoOptions,
+            "disabled system reservations must work for other keys and modifier combinations");
+    backend->unregisterShortcut(3);
+
+    symbolicHotKeys = {{kVK_ANSI_1, controlKey, true}};
+    require(backend->registerShortcut(4, {QStringLiteral("Ctrl+1")}).registered &&
+                lastNativeModifiers == cmdKey && lastNativeOptions == kEventHotKeyExclusive,
+            "Command+1 must remain distinct from the system's Control+1 reservation");
+    backend->unregisterShortcut(4);
+
+    symbolicHotKeys.clear();
+    require(backend->registerShortcut(5, controlOne).registered &&
+                lastNativeOptions == kEventHotKeyExclusive,
+            "unreserved shortcuts must retain exclusive registration");
+    backend->unregisterShortcut(5);
+    nativeRegistrationStatus = eventHotKeyExistsErr;
+    const auto nativeConflict = backend->registerShortcut(6, controlOne);
+    require(!nativeConflict.registered &&
+                nativeConflict.failureReason == GlobalShortcutFailureReason::AlreadyInUse &&
+                nativeConflict.nativeErrorCode == eventHotKeyExistsErr,
+            "real native registration conflicts must remain visible");
+    nativeRegistrationStatus = noErr;
+    symbolicLookupStatus = paramErr;
+    const int callsBeforeLookupFailure = nativeRegistrationCalls;
+    const auto lookupFailure = backend->registerShortcut(7, controlOne);
+    require(!lookupFailure.registered &&
+                lookupFailure.failureReason == GlobalShortcutFailureReason::SystemError &&
+                lookupFailure.nativeErrorCode == paramErr &&
+                nativeRegistrationCalls == callsBeforeLookupFailure,
+            "failed system lookup must preserve the error without attempting registration");
+    symbolicLookupStatus = noErr;
+}
+
+void macGroupInputTracksPhysicalKeys() {
+    symbolicHotKeys.clear();
+    QSet<CGKeyCode> down;
+    bool available = true;
+    MacOSHotKeyApi api{copySymbolicHotKeyFixture, registerHotKeyFixture, unregisterHotKeyFixture};
+    api.keyDown = [&](CGKeyCode key) { return down.contains(key); };
+    api.inputAvailable = [&] { return available; };
+    auto backend = createMacOSGlobalShortcutBackend(api);
+    require(backend->registerShortcut(123, {QStringLiteral("Ctrl+Alt+Shift+Meta+F8")}).registered,
+            "register injected macOS chord");
+    for (const CGKeyCode key :
+         {CGKeyCode(kVK_Command), CGKeyCode(kVK_RightCommand), CGKeyCode(kVK_Control),
+          CGKeyCode(kVK_RightControl), CGKeyCode(kVK_Option), CGKeyCode(kVK_RightOption),
+          CGKeyCode(kVK_Shift), CGKeyCode(kVK_RightShift), CGKeyCode(kVK_F8)}) {
+        down = {key};
+        require(backend->inputState(123)->anyShortcutKeyDown,
+                "each macOS chord key delays release");
+    }
+    down = {CGKeyCode(kVK_F9)};
+    require(!backend->inputState(123)->anyShortcutKeyDown,
+            "unrelated macOS key does not delay release");
+    down = {CGKeyCode(kVK_Escape)};
+    require(backend->inputState(0)->escapeDown, "macOS Escape is observable without a binding");
+    available = false;
+    require(!backend->inputState(123), "unobservable macOS input is not a release");
+}
+
+void macOSSystemReservationChangesReconcileLiveBindings() {
+    symbolicHotKeys = {{kVK_ANSI_1, controlKey, false}};
+    auto backend = createMacOSGlobalShortcutBackend(
+        {copySymbolicHotKeyFixture, registerHotKeyFixture, unregisterHotKeyFixture});
+    auto* input = backend.get();
+    GlobalShortcutManager manager(std::move(backend), nullptr, [] { return false; });
+    manager.initialize();
+    clearAll(manager);
+    require(manager.setShortcuts(GlobalShortcutAction::Screenshot,
+                                 {{QStringLiteral("Meta+1")}, {QStringLiteral("Ctrl+1")}}),
+            "configure a system-reserved binding and an independent binding");
+    require(manager.state(GlobalShortcutAction::Screenshot).status ==
+                GlobalShortcutStatus::Registered,
+            "disabled system reservation must initially be usable");
+    int stateChanges = 0;
+    QObject::connect(&manager, &GlobalShortcutManager::stateChanged, &manager,
+                     [&](GlobalShortcutAction action, const GlobalShortcutRegistrationState&) {
+                         if (action == GlobalShortcutAction::Screenshot) {
+                             ++stateChanges;
+                         }
+                     });
+    const int registrationsBefore = nativeRegistrationCalls;
+    const int unregistrationsBefore = nativeUnregistrationCalls;
+    symbolicHotKeys.first().enabled = true;
+    input->refreshAvailability();
+    const auto conflict = manager.state(GlobalShortcutAction::Screenshot);
+    require(
+        conflict.status == GlobalShortcutStatus::PartiallyRegistered &&
+            conflict.bindings.first().failureReason == GlobalShortcutFailureReason::AlreadyInUse &&
+            conflict.bindings.first().nativeErrorCode == eventHotKeyExistsErr &&
+            conflict.bindings.last().registered && stateChanges == 1 &&
+            nativeRegistrationCalls == registrationsBefore &&
+            nativeUnregistrationCalls == unregistrationsBefore + 1,
+        "enabling a system shortcut must invalidate only its live binding and publish conflict");
+    input->refreshAvailability();
+    require(stateChanges == 1 && nativeRegistrationCalls == registrationsBefore &&
+                nativeUnregistrationCalls == unregistrationsBefore + 1,
+            "unchanged reservations must not churn registrations or state notifications");
+    symbolicHotKeys.first().enabled = false;
+    input->refreshAvailability();
+    require(manager.state(GlobalShortcutAction::Screenshot).status ==
+                    GlobalShortcutStatus::Registered &&
+                stateChanges == 2 && nativeRegistrationCalls == registrationsBefore + 1 &&
+                lastNativeOptions == kEventHotKeyNoOptions,
+            "disabling the system shortcut must automatically recover the failed binding");
+    symbolicHotKeys.clear();
+    input->refreshAvailability();
+    require(manager.state(GlobalShortcutAction::Screenshot).status ==
+                    GlobalShortcutStatus::Registered &&
+                stateChanges == 2 && nativeRegistrationCalls == registrationsBefore + 2 &&
+                nativeUnregistrationCalls == unregistrationsBefore + 2 &&
+                lastNativeOptions == kEventHotKeyExclusive,
+            "removing a reservation must restore exclusive ownership without changing UI state");
+    symbolicHotKeys = {{kVK_ANSI_1, controlKey, false}};
+    input->refreshAvailability();
+    require(lastNativeOptions == kEventHotKeyNoOptions &&
+                nativeRegistrationCalls == registrationsBefore + 3,
+            "new disabled reservations must downgrade only the matching registration");
+    const auto suspension = manager.suspendRegistrations();
+    const int suspendedCalls = nativeRegistrationCalls;
+    symbolicHotKeys.first().enabled = true;
+    input->refreshAvailability();
+    symbolicHotKeys.first().enabled = false;
+    input->refreshAvailability();
+    require(nativeRegistrationCalls == suspendedCalls,
+            "system changes must not register shortcuts while capture has suspended them");
+    manager.resumeRegistrations(suspension);
+    require(manager.state(GlobalShortcutAction::Screenshot).status ==
+                GlobalShortcutStatus::Registered,
+            "resume must use current system reservations");
+    symbolicLookupStatus = paramErr;
+    input->refreshAvailability();
+    const auto failedLookup = manager.state(GlobalShortcutAction::Screenshot);
+    require(failedLookup.status == GlobalShortcutStatus::Failed &&
+                failedLookup.bindings.first().failureReason ==
+                    GlobalShortcutFailureReason::SystemError &&
+                failedLookup.bindings.first().nativeErrorCode == paramErr,
+            "reservation lookup errors must not leave stale success states");
+    symbolicLookupStatus = noErr;
+    input->refreshAvailability();
+    require(manager.state(GlobalShortcutAction::Screenshot).status ==
+                GlobalShortcutStatus::Registered,
+            "successful lookup after an error must recover live bindings");
+    // Equivalent ordering and duplicate entries must not trigger a reconcile.
+    const int callsBeforeEquivalent = nativeRegistrationCalls;
+    const int releasesBeforeEquivalent = nativeUnregistrationCalls;
+    symbolicHotKeys.append(symbolicHotKeys.first());
+    input->refreshAvailability();
+    require(nativeRegistrationCalls == callsBeforeEquivalent &&
+                nativeUnregistrationCalls == releasesBeforeEquivalent,
+            "equivalent reservation snapshots must not churn native registrations");
+
+    // Registration itself may observe an enabled owner between polling ticks.
+    require(manager.setShortcuts(GlobalShortcutAction::Screenshot, {}), "remove live bindings");
+    symbolicHotKeys = {{kVK_ANSI_1, controlKey, true}};
+    require(manager.setShortcuts(GlobalShortcutAction::Screenshot, {{QStringLiteral("Meta+1")}}) &&
+                manager.state(GlobalShortcutAction::Screenshot).status ==
+                    GlobalShortcutStatus::Failed,
+            "an explicit edit must read current reservations before the next timer tick");
+    symbolicHotKeys.first().enabled = false;
+    input->refreshAvailability();
+    require(
+        manager.state(GlobalShortcutAction::Screenshot).status == GlobalShortcutStatus::Registered,
+        "a failed edit between ticks must recover even when settings revert to the last snapshot");
+    symbolicHotKeys.clear();
+}
+#endif
+
 void nativeRegistrationProbe() {
 #ifdef Q_OS_MACOS
     GlobalShortcutManager manager;
@@ -510,6 +995,19 @@ int main(int argc, char** argv) {
                 .success,
             "initialize shortcut test storage");
     validationCoversSupportedAndRejectedKeys();
+    switchGroupShortcutPersistsAndReportsBinding();
+#ifdef Q_OS_WIN
+    nativeGroupKeyStateUsesEveryShortcutKey();
+#endif
+    pinnedManagementShortcutCanBeAssignedAndRestored();
+    globalCanvasShortcutCanBeAssignedAndRestored();
+    globalCanvasFullscreenGateTracksSession();
+    backendAvailabilityInvalidatesOwnershipAndRecovers();
+#ifdef Q_OS_MACOS
+    disabledMacOSSystemReservationsRemainUsable();
+    macOSSystemReservationChangesReconcileLiveBindings();
+    macGroupInputTracksPhysicalKeys();
+#endif
     fullscreenClassificationUsesTheFocusedLayerZeroWindow();
     deterministicOwnershipPartialFailureAndSuspension();
     toggleShortcutSurvivesGlobalHotkeyDisablement();

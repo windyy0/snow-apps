@@ -1,6 +1,9 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTSELECTIONTOOLBARWIDGET_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTSELECTIONTOOLBARWIDGET_H
 
+#include "snow_shot/presentation/screenshotselectiondisplayunit.h"
+
+#include <optional>
 #include <QList>
 #include <QMargins>
 #include <QPoint>
@@ -30,9 +33,14 @@ class ScreenshotSelectionToolbarWidget final : public QWidget {
     void resetForNewCapture();
     void prepareForDisplay();
     void prewarm();
-    void setSelectionState(const QRect& selection, bool aspectRatioLocked, int cornerRadius,
-                           int shadowWidth, DisplayMode displayMode = DisplayMode::Full,
-                           QSize outputPixels = {});
+    void setSelectionResizable(bool enabled);
+    void setPointerInteractionEnabled(bool enabled);
+    void setCornerRadiusApplicable(bool enabled);
+    void
+    setSelectionState(const QRect& selection, bool aspectRatioLocked, int cornerRadius,
+                      int shadowWidth, DisplayMode displayMode = DisplayMode::Full,
+                      bool canvasUsesPoints = false,
+                      std::optional<ScreenshotSelectionDisplayValues> displayValues = std::nullopt);
     QSize contentSizeHint() const;
     bool containsInteractiveGlobalPoint(const QPoint& globalPosition) const;
     void moveContentTo(const QPoint& position);
@@ -61,7 +69,6 @@ class ScreenshotSelectionToolbarWidget final : public QWidget {
     QWidget* addSeparator();
     void setToolbarHovered(bool hovered);
     void scheduleToolbarHoverSync();
-    void refreshHoverVisuals();
     bool fieldForObject(QObject* object, Field* outField) const;
     void handleFieldWheel(Field field, int deltaY);
     bool isPointInInteractiveContent(const QPoint& localPosition) const;
@@ -73,6 +80,7 @@ class ScreenshotSelectionToolbarWidget final : public QWidget {
     void updateIconPixmaps();
     void updateDisplayMode();
     void updateMouseEventTransparency();
+    bool pointerInteractionEnabled() const;
     void updateWindowSize();
     QPoint contentOffset() const;
 
@@ -80,10 +88,15 @@ class ScreenshotSelectionToolbarWidget final : public QWidget {
     QWidget* m_panel = nullptr;
     QLabel* m_xLabel = nullptr;
     QLabel* m_yLabel = nullptr;
+    bool m_selectionResizable = true;
+    bool m_pointerInteractionEnabled = true;
+    bool m_cornerRadiusApplicable = true;
     QLabel* m_widthLabel = nullptr;
     QLabel* m_sizeUnitLabel = nullptr;
-    QLabel* m_outputLabel = nullptr;
-    QSize m_outputPixels;
+    QLabel* m_positionUnitLabel = nullptr;
+    ScreenshotSelectionDisplayValues m_displayValues;
+    QList<QLabel*> m_canvasUnitLabels;
+    bool m_canvasUsesPoints = false;
     QLabel* m_heightLabel = nullptr;
     QLabel* m_radiusLabel = nullptr;
     QLabel* m_shadowLabel = nullptr;

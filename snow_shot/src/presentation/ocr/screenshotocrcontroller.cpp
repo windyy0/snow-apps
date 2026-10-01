@@ -1,4 +1,11 @@
 #include "snow_shot/presentation/screenshotocrcontroller.h"
+#include "snow_shot/presentation/screenshotclipboardcontent.h"
+#include <QTextDocument>
+#include <QCryptographicHash>
+#include <QDataStream>
+#include <QIODevice>
+
+#include "snow_shot/presentation/editionfeatures.h"
 
 #include "snow_shot/presentation/screenshotcapturestate.h"
 #include "snow_shot/presentation/screenshotdisplaysession.h"
@@ -68,6 +75,8 @@ ScreenshotToolPalette::Tool paletteTool(ScreenshotActiveTool tool) {
         return ScreenshotToolPalette::Tool::Table;
     case ScreenshotActiveTool::Qr:
         return ScreenshotToolPalette::Tool::Qr;
+    case ScreenshotActiveTool::Latex:
+        return ScreenshotToolPalette::Tool::Latex;
     case ScreenshotActiveTool::Markdown:
         return ScreenshotToolPalette::Tool::Markdown;
     case ScreenshotActiveTool::Html:
@@ -100,9 +109,11 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
           m_context.displaySession, m_context.geometry, m_context.selection,
           [this]() { return m_context.overlayCoordinator.toolbar(); })) {
     m_session = std::make_unique<ScreenshotRecognitionSessionController>(
-        &m_context.recognition, &m_context.qrRecognition, m_context.tableRecognition,
+        &m_context.recognition, m_context.qrRecognition, m_context.tableRecognition,
         ScreenshotRecognitionSessionActions{
             [this]() -> ScreenshotRecognitionWindow* {
+                if (m_context.captureState.presentationSuppressed)
+                    return nullptr;
                 return ensureRecognitionWindow() ? m_recognitionWindow.data() : nullptr;
             },
             [this](std::shared_ptr<ScreenshotOcrPresentation> presentation) {
@@ -128,6 +139,9 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
                         : mode == static_cast<int>(
                                       ScreenshotRecognitionSessionController::Mode::Table)
                             ? ScreenshotActiveTool::Table
+                        : mode == static_cast<int>(
+                                      ScreenshotRecognitionSessionController::Mode::Latex)
+                            ? ScreenshotActiveTool::Latex
                         : mode == static_cast<int>(
                                       ScreenshotRecognitionSessionController::Mode::Markdown)
                             ? ScreenshotActiveTool::Markdown
@@ -162,6 +176,11 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
                     toolbar->setOcrBusy(textBusy);
                     toolbar->setTableBusy(tableBusy);
                     toolbar->setQrBusy(qrBusy);
+                    if (toolbar->palette())
+                        toolbar->palette()->setLatexState(
+                            true,
+                            m_session && m_session->busy(
+                                             ScreenshotRecognitionSessionController::Mode::Latex));
                 }
             },
             [this]() { m_messages->destroy(QString::fromLatin1(kRecognitionMessageKey)); },
@@ -182,10 +201,14 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
                 }
             },
             [this](const QString& message) {
+                if (m_context.captureState.presentationSuppressed)
+                    return;
                 m_messages->loading(QString::fromLatin1(kModelDownloadMessageKey), message, {},
                                     m_recognitionWindow.data());
             },
             [this](const QString& message) {
+                if (m_context.captureState.presentationSuppressed)
+                    return;
                 m_messages->loading(QString::fromLatin1(kRecognitionMessageKey), message, {},
                                     m_recognitionWindow.data());
             },
@@ -218,6 +241,17 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
                         busy && format == SnowShotImageConversionFormat::Html);
                 }
             },
+            [this](bool show) {
+                if (auto* toolbar = m_context.overlayCoordinator.toolbar()) {
+                    toolbar->setShowOriginalImage(show);
+                }
+                m_context.displaySession.forEachOverlay(
+                    [show](qsizetype, ScreenshotOverlayWindow* overlay) {
+                        if (overlay != nullptr) {
+                            overlay->setScreenshotOcrVisible(!show);
+                        }
+                    });
+            },
         },
         this);
     connect(m_session.get(), &ScreenshotRecognitionSessionController::textEditingChanged, this,
@@ -226,6 +260,10 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
             &ScreenshotOcrController::textResultChanged);
     connect(m_session.get(), &ScreenshotRecognitionSessionController::textDraftChanged, this,
             &ScreenshotOcrController::textDraftChanged);
+    connect(m_session.get(), &ScreenshotRecognitionSessionController::workflowStateChanged, this,
+            &ScreenshotOcrController::workflowStateChanged);
+    connect(m_session.get(), &ScreenshotRecognitionSessionController::recognitionResultsChanged,
+            this, &ScreenshotOcrController::workflowStateChanged);
 }
 
 ScreenshotOcrController::~ScreenshotOcrController() {
@@ -254,6 +292,11 @@ bool ScreenshotOcrController::tableModeActive() const {
     return m_session->tableModeActive();
 }
 
+bool ScreenshotOcrController::latexModeActive() const {
+    return m_session->active() &&
+           m_session->mode() == ScreenshotRecognitionSessionController::Mode::Latex;
+}
+
 bool ScreenshotOcrController::qrModeActive() const {
     return m_session->qrModeActive();
 }
@@ -270,6 +313,10 @@ void ScreenshotOcrController::activateQr() {
     activateMode(Mode::Qr);
 }
 
+void ScreenshotOcrController::activateLatex() {
+    activateMode(Mode::Latex);
+}
+
 void ScreenshotOcrController::activateImageConversion(SnowShotImageConversionFormat format) {
     activateMode(format == SnowShotImageConversionFormat::Markdown ? Mode::Markdown : Mode::Html);
 }
@@ -278,17 +325,43 @@ void ScreenshotOcrController::openImageConversionSettings() {
     m_session->openImageConversionSettings();
 }
 
+namespace {
+QImage clipRecognitionSelection(QImage image, const ScreenshotSelectionModel& selection) {
+    if (image.isNull() || selection.rectangular())
+        return image;
+    auto style = selection.resultStyle();
+    const qreal scale = qreal(image.width()) / selection.pixelSelection().width();
+    style.regionScale = scale;
+    style.cornerRadius = qRound(style.cornerRadius * scale);
+    style.shadowWidth = 0;
+    return ScreenshotResultCompositor::compose(image, style);
+}
+} // namespace
+
 QString ScreenshotOcrController::currentCacheKey() const {
     const QRect selection = m_context.selection.pixelSelection();
-    return QStringLiteral("%1:%2,%3,%4,%5")
+    QByteArray geometry;
+    QDataStream stream(&geometry, QIODevice::WriteOnly);
+    stream << m_context.selection.selectionRegion();
+    return QStringLiteral("%1:%2,%3,%4,%5:%6")
         .arg(m_context.captureState.sessionId)
         .arg(selection.x())
         .arg(selection.y())
         .arg(selection.width())
-        .arg(selection.height());
+        .arg(selection.height())
+        .arg(QString::fromLatin1(
+            QCryptographicHash::hash(geometry, QCryptographicHash::Sha256).toHex()));
 }
 
 void ScreenshotOcrController::activateMode(Mode mode) {
+    const int sessionMode = mode == Mode::Text       ? 0
+                            : mode == Mode::Table    ? 1
+                            : mode == Mode::Qr       ? 2
+                            : mode == Mode::Markdown ? 3
+                            : mode == Mode::Html     ? 4
+                                                     : 5;
+    if (!snow_shot::presentation::editionRecognitionModeAvailable(sessionMode))
+        return;
     const QRect selection = m_context.selection.pixelSelection();
     if (selection.width() < 1 || selection.height() < 1) {
         if (ScreenshotToolbarWindow* toolbar = m_context.overlayCoordinator.toolbar()) {
@@ -320,6 +393,10 @@ void ScreenshotOcrController::activateMode(Mode mode) {
                 canvas->setCanvasContentVisible(false);
                 overlay->setScreenshotSelection(m_context.selection.normalizedSelection(), false,
                                                 m_context.selection.cornerRadius());
+                if (!m_context.selection.rectangular())
+                    overlay->setScreenshotSelectionRegion(m_context.selection.selectionRegion(),
+                                                          m_context.selection.selectionRegion(), {},
+                                                          false, {});
                 overlay->setScreenshotSelectionBorderVisible(false);
             });
         m_active = true;
@@ -329,17 +406,21 @@ void ScreenshotOcrController::activateMode(Mode mode) {
 
     m_mode = mode;
     clearOcrBackgroundFromOverlays();
-    if (!ensureRecognitionWindow()) {
+    if (!m_context.captureState.presentationSuppressed && !ensureRecognitionWindow()) {
         restorePreviousToolAfterFailure();
         return;
     }
-    m_recognitionWindow->clearOcrPresentation();
-    m_recognitionWindow->clearTableSession();
-    m_recognitionWindow->clearQrContents();
+    if (m_recognitionWindow) {
+        m_recognitionWindow->clearOcrPresentation();
+        m_recognitionWindow->clearTableSession();
+        m_recognitionWindow->clearQrContents();
+    }
     if (mode == Mode::Text) {
         m_context.interaction.setOcrTool();
     } else if (mode == Mode::Table) {
         m_context.interaction.setTableTool();
+    } else if (mode == Mode::Latex) {
+        m_context.interaction.setCanvasTool(ScreenshotActiveTool::Latex);
     } else if (mode == Mode::Markdown || mode == Mode::Html) {
         m_context.interaction.setCanvasTool(mode == Mode::Markdown ? ScreenshotActiveTool::Markdown
                                                                    : ScreenshotActiveTool::Html);
@@ -351,8 +432,9 @@ void ScreenshotOcrController::activateMode(Mode mode) {
                                                 : mode == Mode::Table ? ScreenshotActiveTool::Table
                                                 : mode == Mode::Markdown
                                                     ? ScreenshotActiveTool::Markdown
-                                                : mode == Mode::Html ? ScreenshotActiveTool::Html
-                                                                     : ScreenshotActiveTool::Qr;
+                                                : mode == Mode::Latex ? ScreenshotActiveTool::Latex
+                                                : mode == Mode::Html  ? ScreenshotActiveTool::Html
+                                                                      : ScreenshotActiveTool::Qr;
         toolbar->setActiveTool(paletteTool(activeTool));
     }
 
@@ -362,6 +444,7 @@ void ScreenshotOcrController::activateMode(Mode mode) {
     QImage source = m_surfaceKey == key
                         ? m_surfaceImage
                         : composeScreenshotSourceSelection(m_context.displaySession, selection);
+    source = clipRecognitionSelection(std::move(source), m_context.selection);
     if (mode == Mode::Table) {
         snow_shot::diagnostics::logEvent(QStringLiteral("snow_shot.capture"),
                                          QStringLiteral("table.source_prepared"),
@@ -374,7 +457,10 @@ void ScreenshotOcrController::activateMode(Mode mode) {
         restorePreviousToolAfterFailure();
         return;
     }
-    m_session->setTarget(ScreenshotRecognitionTarget{key, std::move(source), QRectF(selection)});
+    m_session->setTarget(ScreenshotRecognitionTarget{
+        key, std::move(source), QRectF(selection),
+        key == m_importedTargetKey ? m_importedFormattedDocument : nullptr,
+        key == m_importedTargetKey ? m_importedPlainText : QString()});
     m_session->activate(static_cast<ScreenshotRecognitionSessionController::Mode>(mode));
 }
 
@@ -432,6 +518,10 @@ void ScreenshotOcrController::redoTextEdit() {
     m_session->redoTextEdit();
 }
 
+void ScreenshotOcrController::setShowOriginalImage(bool show) {
+    m_session->setShowOriginalImage(show);
+}
+
 void ScreenshotOcrController::beginTextEditing() {
     m_session->beginTextEditing();
 }
@@ -474,6 +564,40 @@ bool ScreenshotOcrController::hasTextResult() const {
 
 QString ScreenshotOcrController::sourceTextDraft() const {
     return m_session->sourceTextDraft();
+}
+
+std::optional<ScreenshotRecognitionFileSnapshot>
+ScreenshotOcrController::fileExportSnapshot() const {
+    return m_session->fileExportSnapshot();
+}
+
+void ScreenshotOcrController::seedImportedResults(
+    ScreenshotRecognitionResults results,
+    const ScreenshotClipboardOriginalContent& originalContent) {
+    const auto selection = m_context.selection.pixelSelection();
+    if (selection.isEmpty())
+        return;
+    const auto key = currentCacheKey();
+    auto image = composeScreenshotSourceSelection(m_context.displaySession, selection);
+    image = clipRecognitionSelection(std::move(image), m_context.selection);
+    if (image.isNull())
+        return;
+    m_importedTargetKey = key;
+    m_importedPlainText = originalContent.text;
+    m_importedFormattedDocument.reset();
+    if (!originalContent.html.isEmpty() || !originalContent.text.isEmpty()) {
+        m_importedFormattedDocument = std::make_shared<QTextDocument>();
+        if (!originalContent.html.isEmpty())
+            m_importedFormattedDocument->setHtml(originalContent.html);
+        else
+            m_importedFormattedDocument->setPlainText(originalContent.text);
+        if (m_importedPlainText.isEmpty())
+            m_importedPlainText = m_importedFormattedDocument->toPlainText();
+    }
+    m_session->setTarget({key, std::move(image), QRectF(selection), m_importedFormattedDocument,
+                          m_importedPlainText});
+    results.key = key;
+    m_session->seedRecognitionResults(results);
 }
 
 ScreenshotRecognitionResults ScreenshotOcrController::cachedRecognitionResults() const {
@@ -535,6 +659,10 @@ void ScreenshotOcrController::deactivateImpl(bool preserveRecognitionWindow) {
                 state.overlay->setScreenshotSelection(m_context.selection.normalizedSelection(),
                                                       state.selectionHandlesVisible,
                                                       m_context.selection.cornerRadius());
+                if (!m_context.selection.rectangular())
+                    state.overlay->setScreenshotSelectionRegion(
+                        m_context.selection.selectionRegion(),
+                        m_context.selection.selectionRegion(), {}, false, {});
             } else {
                 state.overlay->clearScreenshotSelection();
             }
@@ -548,6 +676,9 @@ void ScreenshotOcrController::deactivateImpl(bool preserveRecognitionWindow) {
 }
 
 void ScreenshotOcrController::invalidateSession() {
+    m_importedTargetKey.clear();
+    m_importedFormattedDocument.reset();
+    m_importedPlainText.clear();
     m_session->invalidate();
     deactivate();
     m_presentation.reset();
@@ -592,10 +723,11 @@ void ScreenshotOcrController::applyOcrBackgroundToOverlays(
                 ? filteredImageCanvasRect.normalized()
                 : (presentation != nullptr ? QRectF(presentation->selection) : QRectF());
     }
-    m_context.displaySession.forEachOverlay([&presentation, &filteredImage,
+    m_context.displaySession.forEachOverlay([this, &presentation, &filteredImage,
                                              &filteredImageCanvasRect](
                                                 qsizetype, ScreenshotOverlayWindow* overlay) {
         if (overlay != nullptr) {
+            overlay->setScreenshotOcrVisible(!m_session->showOriginalImage());
             overlay->setScreenshotOcrBackground(presentation);
             if (!filteredImage.isNull()) {
                 const QRectF canvasRect =
@@ -620,6 +752,8 @@ void ScreenshotOcrController::clearOcrBackgroundFromOverlays() {
 }
 
 bool ScreenshotOcrController::ensureRecognitionWindow() {
+    if (m_context.captureState.presentationSuppressed)
+        return false;
     const QRect selection = m_context.selection.pixelSelection();
     const QString key = currentCacheKey();
     const QPointF center = QRectF(selection).center();
@@ -667,7 +801,8 @@ bool ScreenshotOcrController::ensureRecognitionWindow() {
     }
 
     destroyRecognitionWindow();
-    QImage source = composeScreenshotSourceSelection(m_context.displaySession, selection);
+    QImage source = clipRecognitionSelection(
+        composeScreenshotSourceSelection(m_context.displaySession, selection), m_context.selection);
     if (source.isNull()) {
         showStatus(tr("Unable to read the selected screenshot"), true);
         return false;
@@ -744,6 +879,8 @@ void ScreenshotOcrController::destroyRecognitionWindow() {
 }
 
 void ScreenshotOcrController::showStatus(const QString& message, bool error) const {
+    if (m_context.captureState.presentationSuppressed)
+        return;
     if (message.isEmpty()) {
         return;
     }
@@ -754,4 +891,17 @@ void ScreenshotOcrController::showStatus(const QString& message, bool error) con
         m_messages->warning(QString::fromLatin1(kStatusMessageKey), message, {},
                             m_recognitionWindow.data());
     }
+}
+
+QJsonObject ScreenshotOcrController::workflowState() const {
+    return m_session->workflowState();
+}
+QJsonObject ScreenshotOcrController::workflowResult() const {
+    return m_session->workflowResult();
+}
+bool ScreenshotOcrController::editWorkflow(const QJsonObject& params) {
+    return m_session->editWorkflow(params);
+}
+void ScreenshotOcrController::cancelWorkflow() {
+    m_session->cancelWorkflow();
 }

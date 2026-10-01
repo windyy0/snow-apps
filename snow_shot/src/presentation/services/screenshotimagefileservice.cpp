@@ -13,6 +13,8 @@
 #include <QStandardPaths>
 #include <QUrl>
 
+#include <utility>
+
 namespace {
 QString filterForFormat(ScreenshotImageFileFormat format) {
     switch (format) {
@@ -261,55 +263,6 @@ ScreenshotImageFileService::formatForDialogSelection(const QString& path,
     return ScreenshotImageFileFormat::Png;
 }
 
-snow::image::Format ScreenshotImageFileService::snowImageFormat(ScreenshotImageFileFormat format) {
-    switch (format) {
-    case ScreenshotImageFileFormat::Pdf:
-        return snow::image::Format::unknown;
-    case ScreenshotImageFileFormat::Png:
-        return snow::image::Format::png;
-    case ScreenshotImageFileFormat::Jpeg:
-        return snow::image::Format::jpeg;
-    case ScreenshotImageFileFormat::Bmp:
-        return snow::image::Format::bmp;
-    case ScreenshotImageFileFormat::Webp:
-        return snow::image::Format::webp;
-    case ScreenshotImageFileFormat::Jxl:
-        return snow::image::Format::jxl;
-    case ScreenshotImageFileFormat::Avif:
-        return snow::image::Format::avif;
-    }
-    return snow::image::Format::unknown;
-}
-
-snow::image::EncodeOptions
-ScreenshotImageFileService::encodeOptions(ScreenshotImageFileFormat format, int quality) {
-    snow::image::EncodeOptions options;
-    options.format = snowImageFormat(format);
-    options.preserve_metadata = false;
-    options.quality = qBound(1, quality, 100);
-    switch (format) {
-    case ScreenshotImageFileFormat::Png:
-        options.compression_level = 0;
-        break;
-    case ScreenshotImageFileFormat::Pdf:
-    case ScreenshotImageFileFormat::Jpeg:
-    case ScreenshotImageFileFormat::Bmp:
-        break;
-    case ScreenshotImageFileFormat::Webp:
-        options.lossless = options.quality == 100;
-        options.lossless_effort = 0;
-        if (!options.lossless)
-            options.effort = 4;
-        break;
-    case ScreenshotImageFileFormat::Jxl:
-    case ScreenshotImageFileFormat::Avif:
-        options.lossless = options.quality == 100;
-        options.effort = 1;
-        break;
-    }
-    return options;
-}
-
 ScreenshotImageFileSaveResult
 ScreenshotImageFileService::writeEncodedFile(const QString& encodedFile, const QString& path,
                                              ScreenshotImageFileFormat format,
@@ -383,15 +336,15 @@ ScreenshotImageFileService::writePdf(const screenshot_pdf::Payload& payload, con
     });
 }
 
-ScreenshotImageFileSaveResult ScreenshotImageFileService::write(const QImage& image,
-                                                                const QString& path,
-                                                                ScreenshotImageFileFormat format,
-                                                                ScreenshotPdfOptions pdf,
-                                                                std::function<bool()> cancelled) {
+ScreenshotImageFileSaveResult
+ScreenshotImageFileService::write(const QImage& image, const QString& path,
+                                  ScreenshotImageFileFormat format, ScreenshotPdfOptions pdf,
+                                  std::function<bool()> cancelled,
+                                  ScreenshotImageEncodingOptions encoding) {
     if (format == ScreenshotImageFileFormat::Pdf || cancelled) {
         auto source = snow_shot::image_codec::srgbRowSource(image);
         source.cancellationRequested = std::move(cancelled);
-        return write(source, path, format, std::move(pdf));
+        return write(source, path, format, std::move(pdf), encoding);
     }
     if (image.isNull()) {
         return {{}, QStringLiteral("The screenshot image is empty")};
@@ -401,15 +354,54 @@ ScreenshotImageFileSaveResult ScreenshotImageFileService::write(const QImage& im
         return {{}, QStringLiteral("No output file was selected")};
     }
 
-    return writeAtomically(outputPath, [image, format](QIODevice* device, QString* error) {
-        return snow_shot::image_codec::encodeToDevice(image, device, snowImageFormat(format),
-                                                      encodeOptions(format), error);
-    });
+    return writeAtomically(
+        outputPath, [image, format, encoding](QIODevice* device, QString* error) {
+            return snow_shot::image_codec::encodeToDevice(image, device, snowImageFormat(format),
+                                                          encodeOptions(format, encoding), error);
+        });
+}
+
+ScreenshotImageFileSaveResult
+ScreenshotImageFileService::write(const snow_shot::storage::PreparedPngImage& png,
+                                  const QString& path, std::function<bool()> cancelled) {
+    const QString outputPath = normalizedPath(path, ScreenshotImageFileFormat::Png);
+    if (!png.isValid())
+        return {{}, QStringLiteral("The screenshot image is empty")};
+    if (outputPath.isEmpty())
+        return {{},
+                QCoreApplication::translate("ScreenshotImageFileService",
+                                            "No output file was selected")};
+    const QString cancelledMessage =
+        QCoreApplication::translate("ScreenshotImageFileService", "The save was cancelled");
+    if (cancelled && cancelled())
+        return {{}, cancelledMessage};
+    if (!QDir().mkpath(QFileInfo(outputPath).absolutePath()))
+        return {{},
+                QCoreApplication::translate("ScreenshotImageFileService",
+                                            "The output directory could not be created")};
+    return writeAtomically(
+        outputPath, [&png, &cancelled, &cancelledMessage](QIODevice* device, QString* error) {
+            if (cancelled && cancelled()) {
+                *error = cancelledMessage;
+                return false;
+            }
+            const QByteArray& bytes = png.bytes();
+            if (device->write(bytes) != bytes.size()) {
+                *error = device->errorString();
+                return false;
+            }
+            if (cancelled && cancelled()) {
+                *error = cancelledMessage;
+                return false;
+            }
+            return true;
+        });
 }
 
 ScreenshotImageFileSaveResult
 ScreenshotImageFileService::write(const ScreenshotImageRowSource& source, const QString& path,
-                                  ScreenshotImageFileFormat format, ScreenshotPdfOptions pdf) {
+                                  ScreenshotImageFileFormat format, ScreenshotPdfOptions pdf,
+                                  ScreenshotImageEncodingOptions encoding) {
     if (!source.isValid()) {
         return {{}, QStringLiteral("The screenshot image source is empty")};
     }
@@ -419,15 +411,17 @@ ScreenshotImageFileService::write(const ScreenshotImageRowSource& source, const 
     }
     if (format == ScreenshotImageFileFormat::Pdf) {
         QString error;
+        pdf.quality = qBound(0, encoding.quality, 100);
         auto payload = screenshot_pdf::prepare(source, pdf.quality, &error);
         return payload
                    ? writePdf(*payload, outputPath, std::move(pdf), source.cancellationRequested)
                    : ScreenshotImageFileSaveResult{{}, error};
     }
-    return writeAtomically(outputPath, [&source, format](QIODevice* device, QString* error) {
-        return snow_shot::image_codec::encodeToDevice(source, device, snowImageFormat(format),
-                                                      encodeOptions(format), error);
-    });
+    return writeAtomically(
+        outputPath, [&source, format, encoding](QIODevice* device, QString* error) {
+            return snow_shot::image_codec::encodeToDevice(source, device, snowImageFormat(format),
+                                                          encodeOptions(format, encoding), error);
+        });
 }
 
 ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
@@ -438,12 +432,13 @@ ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
 
 ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
     const QImage& image, const QStringList& candidateDirectories, ScreenshotImageFileFormat format,
-    const QString& filenameFormat, const QDateTime& timestamp, ScreenshotPdfOptions pdf) {
+    const QString& filenameFormat, const QDateTime& timestamp, ScreenshotPdfOptions pdf,
+    ScreenshotImageEncodingOptions encoding) {
     if (image.isNull()) {
         return {{}, QStringLiteral("The screenshot image is empty")};
     }
 
-    pdf.quality = 100;
+    pdf.quality = qBound(0, encoding.quality, 100);
     const QString baseName = suggestedBaseName(filenameFormat, timestamp);
     if (baseName.isEmpty() || baseName.contains(QLatin1Char('/')) ||
         baseName.contains(QLatin1Char('\\'))) {
@@ -464,7 +459,7 @@ ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
         }
 
         const QString path = collisionSafePath(directory, baseName, extension(format));
-        const ScreenshotImageFileSaveResult result = write(image, path, format, pdf);
+        const ScreenshotImageFileSaveResult result = write(image, path, format, pdf, {}, encoding);
         if (result.succeeded()) {
             return result;
         }
@@ -476,12 +471,12 @@ ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
 ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
     const ScreenshotImageRowSource& source, const QStringList& candidateDirectories,
     ScreenshotImageFileFormat format, const QString& filenameFormat, const QDateTime& timestamp,
-    ScreenshotPdfOptions pdf) {
+    ScreenshotPdfOptions pdf, ScreenshotImageEncodingOptions encoding) {
     if (!source.isValid()) {
         return {{}, QStringLiteral("The screenshot image source is empty")};
     }
 
-    pdf.quality = 100;
+    pdf.quality = qBound(0, encoding.quality, 100);
     const QString baseName = suggestedBaseName(filenameFormat, timestamp);
     if (baseName.isEmpty() || baseName.contains(QLatin1Char('/')) ||
         baseName.contains(QLatin1Char('\\'))) {
@@ -502,7 +497,7 @@ ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
         }
 
         const QString path = collisionSafePath(directory, baseName, extension(format));
-        const ScreenshotImageFileSaveResult result = write(source, path, format, pdf);
+        const ScreenshotImageFileSaveResult result = write(source, path, format, pdf, encoding);
         if (result.succeeded()) {
             return result;
         }
@@ -541,15 +536,7 @@ ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
         }
 
         const QString path = collisionSafePath(directory, baseName, QStringLiteral("png"));
-        const ScreenshotImageFileSaveResult result =
-            writeAtomically(path, [&png](QIODevice* device, QString* error) {
-                const QByteArray& bytes = png.bytes();
-                if (device->write(bytes) != bytes.size()) {
-                    *error = device->errorString();
-                    return false;
-                }
-                return true;
-            });
+        const ScreenshotImageFileSaveResult result = write(png, path);
         if (result.succeeded()) {
             return result;
         }

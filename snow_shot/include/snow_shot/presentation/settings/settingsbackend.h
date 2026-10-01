@@ -6,10 +6,17 @@
 #include "snow_shot/presentation/settings/settingscatalog.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/settingsadapters.h"
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
+#include "snow_shot/customaimodelconfiguration.h"
+#include "snow_shot/texttranslationconfiguration.h"
+#endif
+
+#include "snow_shot/platform/macos/loginitemservice.h"
 
 #include <QObject>
 #include <QVariant>
 #include <QVector>
+#include <future>
 
 namespace snow_shot::presentation {
 class GlobalShortcutManager;
@@ -99,10 +106,25 @@ class SettingsBackend : public QObject {
     applyToolbarLayout(storage::ScreenshotToolbarLayoutKind kind,
                        const storage::ScreenshotToolbarLayout& layout) = 0;
 
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
     [[nodiscard]] virtual CustomAiModels customAiModels() const {
         return {};
     }
     virtual bool applyCustomAiModels(const CustomAiModels&) {
+        return false;
+    }
+    [[nodiscard]] virtual TextTranslationConfigurations textTranslationConfigurations() const {
+        return {};
+    }
+    virtual bool applyTextTranslationConfigurations(const TextTranslationConfigurations&) {
+        return false;
+    }
+#endif
+    virtual bool
+    importConfigurationSnapshot(const QMap<QString, QJsonValue>&, int,
+                                std::shared_future<storage::StorageResult>* completion = nullptr) {
+        if (completion)
+            *completion = {};
         return false;
     }
 
@@ -154,7 +176,11 @@ class SettingsBackend : public QObject {
     [[nodiscard]] virtual bool triggerAction(SettingsActionBinding binding,
                                              const QString& filePath = {}) = 0;
     [[nodiscard]] virtual storage::StorageStatus storageStatus() const = 0;
+    virtual void refreshPlatformSettings() {}
     virtual void refreshStorageStatus() {}
+    virtual storage::StorageResult changeStorageDirectory(const QString&, bool) {
+        return storage::StorageResult::failure(QStringLiteral("unsupported"));
+    }
     // Show-event path; backends may throttle repeated refreshes.  Defaults to
     // the unthrottled refresh so simple backends only need that override.
     virtual void refreshStorageStatusIfStale() {
@@ -171,6 +197,8 @@ class SettingsBackend : public QObject {
     }
 
   signals:
+    void directoryChangeProgress(const snow_shot::storage::StorageDirectoryProgress& progress);
+    void directoryChangeFinished(const snow_shot::storage::StorageDirectoryChangeResult& result);
     void operationMessage(const QString& message, bool warning);
     void synchronized();
     void globalMousePermissionChanged();
@@ -186,7 +214,8 @@ class BuiltInSettingsBackend final : public SettingsBackend {
     explicit BuiltInSettingsBackend(
         ::snow_shot::presentation::GlobalShortcutManager& shortcutManager,
         QObject* parent = nullptr, GlobalMouseManager* mouseManager = nullptr,
-        AppPermissionService* permissions = nullptr);
+        AppPermissionService* permissions = nullptr,
+        platform::macos::LoginItemService* loginItems = nullptr);
     AppPermissionService* appPermissions() const override {
         return m_permissions;
     }
@@ -255,10 +284,20 @@ class BuiltInSettingsBackend final : public SettingsBackend {
     [[nodiscard]] SettingsActionState actionState(SettingsActionBinding binding) const override;
     [[nodiscard]] bool triggerAction(SettingsActionBinding binding,
                                      const QString& filePath = {}) override;
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
     [[nodiscard]] CustomAiModels customAiModels() const override;
     bool applyCustomAiModels(const CustomAiModels& models) override;
+    [[nodiscard]] TextTranslationConfigurations textTranslationConfigurations() const override;
+    bool applyTextTranslationConfigurations(const TextTranslationConfigurations& values) override;
+#endif
+
+    bool importConfigurationSnapshot(
+        const QMap<QString, QJsonValue>& values, int schemaVersion,
+        std::shared_future<storage::StorageResult>* completion = nullptr) override;
     [[nodiscard]] storage::StorageStatus storageStatus() const override;
+    void refreshPlatformSettings() override;
     void refreshStorageStatus() override;
+    storage::StorageResult changeStorageDirectory(const QString& directory, bool migrate) override;
     void refreshStorageStatusIfStale() override;
     [[nodiscard]] bool resetSection(SettingsSectionReset reset) override;
 
@@ -266,6 +305,7 @@ class BuiltInSettingsBackend final : public SettingsBackend {
     ::snow_shot::presentation::GlobalShortcutManager& m_shortcutManager;
     AppPermissionService* m_permissions = nullptr;
     GlobalMouseManager* m_mouseManager = nullptr;
+    platform::macos::LoginItemService* m_loginItems = nullptr;
     bool m_copyLogBusy = false;
     bool m_configurationBusy = false;
 };

@@ -4,12 +4,24 @@
     <context>
         <name>AboutPageWidget</name>
         <message>
+            <source>%1 logo</source>
+            <translation>%1 标志</translation>
+        </message>
+        <message>
             <source>%1 · %2</source>
             <translation>%1 · %2</translation>
         </message>
         <message>
+            <source>%1 · Make expression clearer</source>
+            <translation>%1 · 让表达更清晰</translation>
+        </message>
+        <message>
             <source>, excellent work.</source>
             <translation>，出色工作。</translation>
+        </message>
+        <message>
+            <source>About %1</source>
+            <translation>关于 %1</translation>
         </message>
         <message>
             <source>About Snow Shot</source>
@@ -36,6 +48,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Changelog</source>
             <translation>更新日志</translation>
+        </message>
+        <message>
+            <source>Check for a newer version of %1.</source>
+            <translation>检查 %1 是否有新版本。</translation>
         </message>
         <message>
             <source>Check for a newer version of Snow Shot.</source>
@@ -80,6 +96,18 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Discover more features and ways to use it</source>
             <translation>发现更多功能与使用方式</translation>
+        </message>
+        <message>
+            <source>Discussion and support · Group No. %1</source>
+            <translation>交流与答疑 · 群号 %1</translation>
+        </message>
+        <message>
+            <source>Download from GitHub</source>
+            <translation>从 GitHub 下载</translation>
+        </message>
+        <message>
+            <source>Download from Gitee</source>
+            <translation>从 Gitee 下载</translation>
         </message>
         <message>
             <source>Download update</source>
@@ -144,6 +172,14 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Preview</source>
             <translation>预览版</translation>
+        </message>
+        <message>
+            <source>QQ Group 2</source>
+            <translation>QQ 交流群 2</translation>
+        </message>
+        <message>
+            <source>QQ Group 3</source>
+            <translation>QQ 交流群 3</translation>
         </message>
         <message>
             <source>Ready to install %1</source>
@@ -219,6 +255,37 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>ApplicationRestart</name>
+        <message>
+            <source>Another restart operation is in progress.</source>
+            <translation>另一个重启操作正在进行中。</translation>
+        </message>
+        <message>
+            <source>Could not create the restart handoff.</source>
+            <translation>无法创建重启交接。</translation>
+        </message>
+        <message>
+            <source>Could not start the replacement application.</source>
+            <translation>无法启动替代应用程序。</translation>
+        </message>
+        <message>
+            <source>Finish capturing, recording, exporting, or updating before restarting.</source>
+            <translation>请完成截图、录制、导出或更新后再重启。</translation>
+        </message>
+        <message>
+            <source>The replacement application did not acknowledge the restart.</source>
+            <translation>替代应用程序未确认重启。</translation>
+        </message>
+        <message>
+            <source>The replacement application did not become ready.</source>
+            <translation>替代应用程序未准备就绪。</translation>
+        </message>
+        <message>
+            <source>Your settings could not be saved. Please retry before restarting.</source>
+            <translation>无法保存设置。请在重启前重试。</translation>
+        </message>
+    </context>
+    <context>
         <name>DiagnosticsService</name>
         <message>
             <source>A log file could not be read.</source>
@@ -290,6 +357,17 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>EditionMetadata</name>
+        <message>
+            <source>Snow Shot</source>
+            <translation>Snow Shot</translation>
+        </message>
+        <message>
+            <source>Snow Shot Mini</source>
+            <translation>Snow Shot Mini</translation>
+        </message>
+    </context>
+    <context>
         <name>LanguageCatalog</name>
         <message>
             <source>Language name</source>
@@ -312,6 +390,13 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Grant the required permission to continue</source>
             <translation>请授予所需权限以继续</translation>
+        </message>
+    </context>
+    <context>
+        <name>McpDocumentService</name>
+        <message>
+            <source>Document request failed (%1).</source>
+            <translation>文档请求失败（%1）。</translation>
         </message>
     </context>
     <context>
@@ -470,6 +555,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>图像转换超时，请尝试较小的区域。</translation>
         </message>
         <message>
+            <source>Invalid LaTeX recognition response</source>
+            <translation>无效的 LaTeX 识别响应</translation>
+        </message>
+        <message>
             <source>Invalid model stream response</source>
             <translation>模型流式响应无效</translation>
         </message>
@@ -484,6 +573,22 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Invalid translation stream response</source>
             <translation>无效的翻译流响应</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition failed</source>
+            <translation>LaTeX 识别失败</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition request timed out</source>
+            <translation>LaTeX 识别请求超时</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition response is too large</source>
+            <translation>LaTeX 识别响应过大</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition returned no formula</source>
+            <translation>LaTeX 识别未返回公式</translation>
         </message>
         <message>
             <source>No translation services are available</source>
@@ -522,8 +627,28 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>模型未返回内容</translation>
         </message>
         <message>
+            <source>The text is too large to translate.</source>
+            <translation>文本过长，无法翻译。</translation>
+        </message>
+        <message>
+            <source>The translation response is too large.</source>
+            <translation>翻译响应过大。</translation>
+        </message>
+        <message>
+            <source>This service does not support the selected language combination.</source>
+            <translation>此服务不支持所选语言组合。</translation>
+        </message>
+        <message>
             <source>Translation failed</source>
             <translation>翻译失败</translation>
+        </message>
+        <message>
+            <source>Translation request timed out.</source>
+            <translation>翻译请求超时。</translation>
+        </message>
+        <message>
+            <source>Translation service request failed (HTTP %1, code %2).</source>
+            <translation>翻译服务请求失败（HTTP %1，代码 %2）。</translation>
         </message>
         <message>
             <source>Translation service response is too large</source>
@@ -575,32 +700,52 @@ so every moment on screen can be expressed clearly and shared easily.</source>
     <context>
         <name>snow_shot::app::ApplicationController</name>
         <message>
+            <source>%1 %2 is available. Open About for update options.</source>
+            <translation>%1 %2 已发布。请打开“关于”查看更新选项。</translation>
+        </message>
+        <message>
+            <source>%1 will close and restart to install the update. Continue?</source>
+            <translation>%1 将关闭并重新启动以安装更新。是否继续？</translation>
+        </message>
+        <message>
+            <source>An update is ready. Open About to restart and update %1.</source>
+            <translation>更新已就绪。请打开“关于”重新启动并更新 %1。</translation>
+        </message>
+        <message>
             <source>An update is ready. Open About to restart and update Snow Shot.</source>
             <translation>更新已准备就绪。请打开“关于”页面，重启并更新 Snow Shot。</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Could not pin selected files</source>
+            <translation>无法将选中的文件固定到屏幕</translation>
         </message>
         <message>
             <source>Feature unavailable</source>
             <translation>功能暂不可用</translation>
         </message>
         <message>
-            <source>Finish capturing, recording, or exporting before updating.</source>
-            <translation>请先完成截图、录屏或导出，再进行更新。</translation>
+            <source>Finish capturing, recording, exporting, recognizing text, or updating before changing storage.</source>
+            <translation>请先完成截图、录制、导出、文字识别或更新，再更改存储目录。</translation>
         </message>
         <message>
-            <source>Pin to screen is not available on macOS yet.</source>
-            <translation>固定到屏幕功能暂不支持 macOS。</translation>
+            <source>Finish capturing, recording, or exporting before updating.</source>
+            <translation>请先完成截图、录屏或导出，再进行更新。</translation>
         </message>
         <message>
             <source>Restart and update</source>
             <translation>重启并更新</translation>
         </message>
         <message>
-            <source>Screen recording is not available on macOS yet.</source>
-            <translation>屏幕录制功能暂不支持 macOS。</translation>
+            <source>Restart failed</source>
+            <translation>重启失败</translation>
         </message>
         <message>
-            <source>Screenshot is not available on macOS yet.</source>
-            <translation>截图功能暂不支持 macOS。</translation>
+            <source>Snow Shot %1 is available. Open About for update options.</source>
+            <translation>Snow Shot %1 已推出。打开“关于”查看更新选项。</translation>
         </message>
         <message>
             <source>Snow Shot will close and restart to install the update. Continue?</source>

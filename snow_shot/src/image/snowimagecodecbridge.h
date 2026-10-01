@@ -20,7 +20,7 @@
 #define SNOW_SHOT_IMAGE_CODEC_CALL
 #endif
 
-#define SNOW_SHOT_IMAGE_CODEC_ABI_VERSION 2U
+#define SNOW_SHOT_IMAGE_CODEC_ABI_VERSION 3U
 
 #ifdef __cplusplus
 extern "C" {
@@ -68,6 +68,31 @@ enum SnowShotImageCodecPixelRoundTrip {
     SNOW_SHOT_IMAGE_CODEC_PIXEL_ROUND_TRIP_CODEC_ARTIFACT = 1,
 };
 
+enum SnowShotImageCodecColorPrimaries {
+    SNOW_SHOT_IMAGE_CODEC_PRIMARIES_UNKNOWN = 0,
+    SNOW_SHOT_IMAGE_CODEC_PRIMARIES_SRGB = 1,
+    SNOW_SHOT_IMAGE_CODEC_PRIMARIES_DISPLAY_P3 = 2,
+    SNOW_SHOT_IMAGE_CODEC_PRIMARIES_ADOBE_RGB = 3,
+    SNOW_SHOT_IMAGE_CODEC_PRIMARIES_REC2020 = 4,
+    SNOW_SHOT_IMAGE_CODEC_PRIMARIES_CUSTOM = 5,
+};
+
+enum SnowShotImageCodecTransferFunction {
+    SNOW_SHOT_IMAGE_CODEC_TRANSFER_UNKNOWN = 0,
+    SNOW_SHOT_IMAGE_CODEC_TRANSFER_LINEAR = 1,
+    SNOW_SHOT_IMAGE_CODEC_TRANSFER_SRGB = 2,
+    SNOW_SHOT_IMAGE_CODEC_TRANSFER_GAMMA = 3,
+    SNOW_SHOT_IMAGE_CODEC_TRANSFER_PQ = 4,
+    SNOW_SHOT_IMAGE_CODEC_TRANSFER_HLG = 5,
+};
+
+typedef struct SnowShotImageCodecColorEncoding {
+    uint8_t* icc_profile;
+    uint64_t icc_profile_size;
+    uint32_t primaries;
+    uint32_t transfer;
+} SnowShotImageCodecColorEncoding;
+
 typedef struct SnowShotImageCodecEncodeOptions {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -92,6 +117,9 @@ typedef struct SnowShotImageCodecBuffer {
     uint32_t width;
     uint32_t height;
     uint64_t row_stride;
+    // Decoders preserve the selected frame's color declaration without converting pixels.
+    // The profile and pixels are both owned by this buffer and released together.
+    SnowShotImageCodecColorEncoding color;
 } SnowShotImageCodecBuffer;
 
 typedef struct SnowShotImageCodecImageInfo {
@@ -148,9 +176,29 @@ typedef struct SnowShotImageCodecEncodeResult {
     uint8_t reserved[6];
 } SnowShotImageCodecEncodeResult;
 
+typedef struct SnowShotImageCodecEncoderOptionRange {
+    int32_t minimum;
+    int32_t maximum;
+    int32_t default_value;
+} SnowShotImageCodecEncoderOptionRange;
+
+typedef struct SnowShotImageCodecEncoderInfo {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t format;
+    uint32_t features;
+    SnowShotImageCodecEncoderOptionRange quality;
+    SnowShotImageCodecEncoderOptionRange effort;
+    SnowShotImageCodecEncoderOptionRange lossless_effort;
+    SnowShotImageCodecEncoderOptionRange compression_level;
+} SnowShotImageCodecEncoderInfo;
+
 SNOW_SHOT_IMAGE_CODEC_API uint32_t SNOW_SHOT_IMAGE_CODEC_CALL
 snow_shot_image_codec_abi_version(void);
+SNOW_SHOT_IMAGE_CODEC_API int32_t SNOW_SHOT_IMAGE_CODEC_CALL
+snow_shot_image_codec_encoder_info(uint32_t format, SnowShotImageCodecEncoderInfo* output);
 
+// Both encoding entry points consume straight-alpha, sRGB RGBA8 pixels.
 // Output buffers must be zero-initialized and released before being reused.
 SNOW_SHOT_IMAGE_CODEC_API int32_t SNOW_SHOT_IMAGE_CODEC_CALL snow_shot_image_codec_encode_rgba8(
     const uint8_t* pixels, uint64_t pixels_size, uint32_t width, uint32_t height,
@@ -167,6 +215,12 @@ snow_shot_image_codec_encode_rgba8_stream(const SnowShotImageCodecRgba8Source* s
 SNOW_SHOT_IMAGE_CODEC_API int32_t SNOW_SHOT_IMAGE_CODEC_CALL snow_shot_image_codec_decode_rgba8(
     const uint8_t* encoded, uint64_t encoded_size, uint32_t expected_format,
     SnowShotImageCodecBuffer* output, char* error, uint64_t error_capacity);
+
+// Decode only the ICO frame nearest the requested extent (first entry wins ties).
+SNOW_SHOT_IMAGE_CODEC_API int32_t SNOW_SHOT_IMAGE_CODEC_CALL
+snow_shot_image_codec_decode_icon_rgba8(const uint8_t* encoded, uint64_t encoded_size,
+                                        uint32_t preferred_extent, SnowShotImageCodecBuffer* output,
+                                        char* error, uint64_t error_capacity);
 
 SNOW_SHOT_IMAGE_CODEC_API int32_t SNOW_SHOT_IMAGE_CODEC_CALL snow_shot_image_codec_decode_bgra8(
     const uint8_t* encoded, uint64_t encoded_size, uint32_t expected_format,

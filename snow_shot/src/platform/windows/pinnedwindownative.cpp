@@ -199,6 +199,13 @@ bool screenshot_pinned_window_native::applyClientGeometry(WId windowId, const QR
                      geometry.height(), flags) == FALSE) {
         return false;
     }
+    if (currentClientGeometry(windowId) == geometry)
+        return true;
+    // Qt can round a fractional-DPI QWidget size back to a logical pixel in
+    // WM_WINDOWPOSCHANGING. The controller already owns this physical target.
+    if (SetWindowPos(hwnd, nullptr, geometry.left(), geometry.top(), geometry.width(),
+                     geometry.height(), flags | SWP_NOSENDCHANGING) == FALSE)
+        return false;
     return currentClientGeometry(windowId) == geometry;
 #else
     Q_UNUSED(windowId);
@@ -221,8 +228,8 @@ QRect screenshot_pinned_window_native::currentClientGeometry(WId windowId) {
         return {};
     }
     return QRect(clientTopLeft.x, clientTopLeft.y,
-                 std::max(1, static_cast<int>(clientRect.right - clientRect.left)),
-                 std::max(1, static_cast<int>(clientRect.bottom - clientRect.top)));
+                 static_cast<int>(clientRect.right - clientRect.left),
+                 static_cast<int>(clientRect.bottom - clientRect.top));
 #else
     Q_UNUSED(windowId);
     return {};
@@ -248,20 +255,19 @@ QRect screenshot_pinned_window_native::currentWindowGeometry(WId windowId) {
 #endif
 }
 
-std::optional<bool> screenshot_pinned_window_native::pointerInsideWindow(WId windowId) {
+bool screenshot_pinned_window_native::trackNonClientLeave(WId windowId) {
 #if defined(Q_OS_WIN) || defined(_WIN32)
-    POINT pointer{};
-    if (GetCursorPos(&pointer) == FALSE) {
-        return std::nullopt;
-    }
-    const QRect nativeGeometry = currentWindowGeometry(windowId);
-    if (!nativeGeometry.isValid() || nativeGeometry.isEmpty()) {
-        return std::nullopt;
-    }
-    return nativeGeometry.contains(QPoint(pointer.x, pointer.y));
+    const HWND hwnd = toNativeHwnd(windowId);
+    if (hwnd == nullptr || !IsWindow(hwnd))
+        return false;
+    TRACKMOUSEEVENT tracking{};
+    tracking.cbSize = sizeof(tracking);
+    tracking.dwFlags = TME_LEAVE | TME_NONCLIENT;
+    tracking.hwndTrack = hwnd;
+    return TrackMouseEvent(&tracking) != FALSE;
 #else
     Q_UNUSED(windowId);
-    return std::nullopt;
+    return false;
 #endif
 }
 

@@ -94,16 +94,29 @@ fn draw_path_item_bounds(
     frame_view: FrameView,
     item: &snow_draw_engine_display::ArrowDisplayItem,
 ) -> Option<DirtyRegion> {
-    let bounds = item.geometry.canvas_bounds;
-    if bounds.iter().any(|value| !value.is_finite()) || item.stroke_width < 0.0 {
+    draw_path_geometry_bounds(
+        frame_view,
+        item.geometry.canvas_bounds,
+        item.stroke_width,
+        &item.arrowhead_primitives,
+    )
+}
+
+fn draw_path_geometry_bounds(
+    frame_view: FrameView,
+    bounds: [f64; 4],
+    stroke_width: f64,
+    arrowhead_primitives: &[snow_draw_engine_display::ArrowheadDisplayPrimitive],
+) -> Option<DirtyRegion> {
+    if bounds.iter().any(|value| !value.is_finite()) || stroke_width < 0.0 {
         return None;
     }
-    let outset = item.stroke_width * 0.5;
+    let outset = stroke_width * 0.5;
     let mut min_x = bounds[0] - outset;
     let mut min_y = bounds[1] - outset;
     let mut max_x = bounds[2] + outset;
     let mut max_y = bounds[3] + outset;
-    for primitive in &item.arrowhead_primitives {
+    for primitive in arrowhead_primitives {
         for point in &primitive.points {
             min_x = min_x.min(point[0] - outset);
             min_y = min_y.min(point[1] - outset);
@@ -172,18 +185,22 @@ pub(crate) fn overlay_display_item_bounds(
             item.rotation,
             item.stroke_width,
         ),
-        OverlayDisplayItem::FocusConnection(item) => draw_arrow_bounds(
-            frame_view,
-            display_arrow_to_document_arrow(
-                &item.points,
-                item.arrow_type,
-                item.start_arrowhead,
-                item.end_arrowhead,
-                item.stroke,
+        OverlayDisplayItem::FocusConnection(item) => {
+            // Hover strokes are screen-sized, but arrowheads retain the document's
+            // geometry. Bound the published primitives used by the renderer;
+            // rebuilding an arrow from the thin hover stroke shrinks its heads.
+            let geometry = snow_draw_engine_core::PathGeometry::from_commands(
+                0,
+                item.path_commands.clone(),
+                false,
+            );
+            draw_path_geometry_bounds(
+                frame_view,
+                geometry.canvas_bounds,
                 item.stroke_width,
-                item.stroke_style,
-            ),
-        ),
+                &item.arrowhead_primitives,
+            )
+        }
         OverlayDisplayItem::PenFilterContour(item) => draw_arrow_bounds(
             frame_view,
             display_arrow_to_document_arrow(
@@ -482,6 +499,7 @@ fn display_arrow_to_document_arrow(
     .unwrap_or_else(|| ArrowData {
         linear_kind: LinearElementKind::Arrow,
         text_element_id: None,
+        text_path_fraction: None,
         x: 0.0,
         y: 0.0,
         width: 0.0,
@@ -493,6 +511,8 @@ fn display_arrow_to_document_arrow(
         start_arrowhead,
         end_arrowhead,
         arrow_type,
+        arrow_shaft_type: Default::default(),
+        arrow_ratio: 1.0,
         fixed_segments: None,
         start_is_special: None,
         end_is_special: None,
@@ -532,6 +552,80 @@ mod tests {
                 zoom: 1.0,
             },
             clear_color: ColorRgba8::default(),
+        }
+    }
+
+    #[test]
+    fn hovered_arrow_bounds_cover_original_arrowheads_at_every_zoom() {
+        use crate::item_conversions::hover_arrow_item;
+
+        for head in [
+            Arrowhead::Dot,
+            Arrowhead::Circle,
+            Arrowhead::CircleOutline,
+            Arrowhead::Arrow,
+            Arrowhead::Bar,
+            Arrowhead::Triangle,
+            Arrowhead::TriangleOutline,
+            Arrowhead::Diamond,
+            Arrowhead::DiamondOutline,
+            Arrowhead::CrowfootOne,
+            Arrowhead::CrowfootMany,
+            Arrowhead::CrowfootOneOrMany,
+            Arrowhead::Square,
+            Arrowhead::InvertedTriangle,
+            Arrowhead::IndentedTriangle,
+        ] {
+            for arrow_type in [ArrowType::Straight, ArrowType::Curve, ArrowType::Elbow] {
+                for zoom in [0.5, 1.0, 2.0, 4.0] {
+                    let arrow = ArrowData::from_global_points(
+                        &[Point::new(-100.0, 60.0), Point::new(100.0, -60.0)],
+                        ColorRgba8::default(),
+                        8.0,
+                        StrokeStyle::Solid,
+                        arrow_type,
+                        Some(head),
+                        Some(head),
+                    )
+                    .unwrap();
+                    let hover = hover_arrow_item(&arrow, zoom);
+                    let mut view = frame_view();
+                    view.camera.zoom = zoom;
+                    let bounds = overlay_display_item_bounds(
+                        &OverlayDisplayItem::FocusConnection(hover.clone()),
+                        view,
+                    )
+                    .unwrap();
+                    let half_stroke = hover.stroke_width * 0.5;
+                    for primitive in &hover.arrowhead_primitives {
+                        let mut points = primitive.points.clone();
+                        if primitive.diameter > 0.0 {
+                            let radius = primitive.diameter * 0.5;
+                            points
+                                .push([primitive.center[0] - radius, primitive.center[1] - radius]);
+                            points
+                                .push([primitive.center[0] + radius, primitive.center[1] + radius]);
+                        }
+                        for point in points {
+                            let min = canvas_point_to_surface(
+                                view,
+                                Point::new(point[0] - half_stroke, point[1] - half_stroke),
+                            );
+                            let max = canvas_point_to_surface(
+                                view,
+                                Point::new(point[0] + half_stroke, point[1] + half_stroke),
+                            );
+                            assert!(
+                                bounds.min_x <= min.x + 1e-9
+                                    && bounds.min_y <= min.y + 1e-9
+                                    && bounds.max_x >= max.x - 1e-9
+                                    && bounds.max_y >= max.y - 1e-9,
+                                "{head:?} {arrow_type:?} at zoom {zoom}: {bounds:?} clips {point:?}"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

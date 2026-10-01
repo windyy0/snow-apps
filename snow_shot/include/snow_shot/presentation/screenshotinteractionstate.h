@@ -3,6 +3,8 @@
 
 #include "snow_shot/presentation/screenshotselectiongeometry.h"
 
+class ScreenshotSelectionModel;
+
 enum class ScreenshotActiveTool {
     Move,
     Select,
@@ -25,12 +27,13 @@ enum class ScreenshotActiveTool {
     Markdown,
     Html,
     AutoFilter,
+    Latex,
 };
 
 [[nodiscard]] inline bool isScreenshotRecognitionTool(ScreenshotActiveTool tool) {
     return tool == ScreenshotActiveTool::Ocr || tool == ScreenshotActiveTool::Table ||
-           tool == ScreenshotActiveTool::Qr || tool == ScreenshotActiveTool::Markdown ||
-           tool == ScreenshotActiveTool::Html;
+           tool == ScreenshotActiveTool::Latex || tool == ScreenshotActiveTool::Qr ||
+           tool == ScreenshotActiveTool::Markdown || tool == ScreenshotActiveTool::Html;
 }
 
 enum class ScreenshotCaptureMode {
@@ -74,6 +77,7 @@ class ScreenshotInteractionState final {
     [[nodiscard]] bool editing() const;
     [[nodiscard]] bool scrollingCapture() const;
     [[nodiscard]] bool selecting() const;
+    [[nodiscard]] bool preselectionActive(const ScreenshotSelectionModel& selection) const;
     [[nodiscard]] bool cursorMovementEnabled() const;
     [[nodiscard]] bool selectionToolbarMode() const;
     [[nodiscard]] bool canResizeSelection() const;
@@ -84,6 +88,7 @@ class ScreenshotInteractionState final {
     ScreenshotCaptureMode m_mode = ScreenshotCaptureMode::Inactive;
     ScreenshotSelectionDragMode m_dragMode = ScreenshotSelectionDragMode::None;
     bool m_dragging = false;
+    bool m_marqueeGesture = false;
     bool m_recognitionSelectionActive = false;
 };
 

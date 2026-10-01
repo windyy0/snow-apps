@@ -174,6 +174,10 @@
             <translation>取消</translation>
         </message>
         <message>
+            <source>Concurrency</source>
+            <translation>并发数</translation>
+        </message>
+        <message>
             <source>Copy</source>
             <translation>复制</translation>
         </message>
@@ -222,6 +226,14 @@
             <translation>请输入不含 /chat/completions 的基础 URL。</translation>
         </message>
         <message>
+            <source>Explicitly enable or disable reasoning in model requests.</source>
+            <translation>在模型请求中显式开启或关闭推理。</translation>
+        </message>
+        <message>
+            <source>Maximum simultaneous translation and image conversion requests for this model (1-16).</source>
+            <translation>此模型同时进行的翻译和图像转换请求数上限（1-16）。</translation>
+        </message>
+        <message>
             <source>Model Name</source>
             <translation>模型名称</translation>
         </message>
@@ -236,6 +248,10 @@
         <message>
             <source>Optional for servers that do not require authentication.</source>
             <translation>不需要身份验证的服务器可留空。</translation>
+        </message>
+        <message>
+            <source>Reasoning Support</source>
+            <translation>推理支持</translation>
         </message>
         <message>
             <source>Save</source>
@@ -285,8 +301,8 @@
             <translation>绘制工具栏预览</translation>
         </message>
         <message>
-            <source>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row.</source>
-            <translation>拖放到工具旁边可新建位置；拖放到工具上方可将其堆叠。最下方的工具会保留在主工具栏上。</translation>
+            <source>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row. Separator Component occupies its own position.</source>
+            <translation>将工具拖到旁边以创建位置，拖到上方以堆叠。最下方的工具显示在主工具栏中。分隔组件单独占据一个位置。</translation>
         </message>
         <message>
             <source>Eraser</source>
@@ -321,6 +337,14 @@
             <translation>画笔</translation>
         </message>
         <message>
+            <source>Redo</source>
+            <translation>重做</translation>
+        </message>
+        <message>
+            <source>Separator Component</source>
+            <translation>分隔组件</translation>
+        </message>
+        <message>
             <source>Serial number</source>
             <translation>序号</translation>
         </message>
@@ -335,6 +359,10 @@
         <message>
             <source>Text</source>
             <translation>文本</translation>
+        </message>
+        <message>
+            <source>Undo</source>
+            <translation>撤销</translation>
         </message>
         <message>
             <source>Watermark</source>
@@ -378,6 +406,10 @@
         <message>
             <source>Left-button drag</source>
             <translation>左键拖动</translation>
+        </message>
+        <message>
+            <source>Middle-button drag</source>
+            <translation>中键拖动</translation>
         </message>
         <message>
             <source>Mouse button</source>
@@ -432,12 +464,59 @@
             <translation>未设置</translation>
         </message>
         <message>
-            <source>Wheel drag</source>
-            <translation>滚轮拖动</translation>
-        </message>
-        <message>
             <source>Windows</source>
             <translation>Windows</translation>
+        </message>
+    </context>
+    <context>
+        <name>LoginItemService</name>
+        <message>
+            <source>%1 needs a valid code signature to use launch at login. Reinstall the signed app.</source>
+            <translation>%1 需要有效的代码签名才能在登录时启动。请重新安装已签名的应用。</translation>
+        </message>
+        <message>
+            <source>A launch-at-login change is already in progress.</source>
+            <translation>正在更改登录时启动设置。</translation>
+        </message>
+        <message>
+            <source>Approval required. Allow Snow Shot in System Settings &gt; General &gt; Login Items.</source>
+            <translation>需要批准。请在“系统设置 &gt; 通用 &gt; 登录项”中允许 Snow Shot。</translation>
+        </message>
+        <message>
+            <source>Could not change launch at login: %1</source>
+            <translation>无法更改登录时启动设置：%1</translation>
+        </message>
+        <message>
+            <source>Could not save launch-at-login initialization. Registration was not changed.</source>
+            <translation>无法保存登录时启动初始化状态。注册状态未更改。</translation>
+        </message>
+        <message>
+            <source>Could not save the launch-at-login preference. The displayed macOS status is still current.</source>
+            <translation>无法保存登录时启动偏好设置。显示的 macOS 状态仍为当前状态。</translation>
+        </message>
+        <message>
+            <source>Move the signed %1 app to /Applications or ~/Applications to use launch at login.</source>
+            <translation>请将已签名的 %1 应用移至 /Applications 或 ~/Applications，以便在登录时启动。</translation>
+        </message>
+        <message>
+            <source>Move the signed Snow Shot app to /Applications or ~/Applications to use launch at login.</source>
+            <translation>请将已签名的 Snow Shot 应用移至 /Applications 或 ~/Applications，以使用登录时启动功能。</translation>
+        </message>
+        <message>
+            <source>Snow Shot needs a valid code signature to use launch at login. Reinstall the signed app.</source>
+            <translation>Snow Shot 需要有效的代码签名才能使用登录时启动功能。请重新安装已签名的应用。</translation>
+        </message>
+        <message>
+            <source>macOS could not find %1's login item. Reinstall the app in Applications.</source>
+            <translation>macOS 找不到 %1 的登录项。请将应用重新安装到 Applications。</translation>
+        </message>
+        <message>
+            <source>macOS could not find Snow Shot's login item. Reinstall the app in Applications.</source>
+            <translation>macOS 找不到 Snow Shot 的登录项。请将应用重新安装到“应用程序”中。</translation>
+        </message>
+        <message>
+            <source>macOS did not apply the launch-at-login change. Check Login Items in System Settings.</source>
+            <translation>macOS 未应用登录时启动更改。请检查“系统设置”中的“登录项”。</translation>
         </message>
     </context>
     <context>
@@ -494,6 +573,10 @@
     <context>
         <name>PinnedToolbarEditorSettingsWidget</name>
         <message>
+            <source>Copy to clipboard</source>
+            <translation>复制到剪贴板</translation>
+        </message>
+        <message>
             <source>Drag tools here to hide them from the pinned toolbar.</source>
             <translation>将工具拖到此处，即可在固定到屏幕工具栏中隐藏。</translation>
         </message>
@@ -516,6 +599,49 @@
         <message>
             <source>Pin to Screen toolbar preview</source>
             <translation>固定到屏幕工具栏预览</translation>
+        </message>
+    </context>
+    <context>
+        <name>ScreenshotMcpSettings</name>
+        <message>
+            <source>Add this configuration to your MCP client, then restart the client to connect. Keep %1 running while using MCP.</source>
+            <translation>将此配置添加到您的 MCP 客户端，然后重启客户端以连接。使用 MCP 时请保持 %1 运行。</translation>
+        </message>
+        <message>
+            <source>Add this configuration to your MCP client, then restart the client to connect. Keep Snow Shot running while using MCP.</source>
+            <translation>将此配置添加到 MCP 客户端，然后重启客户端以连接。使用 MCP 时请保持 Snow Shot 运行。</translation>
+        </message>
+        <message>
+            <source>Connected clients: %1</source>
+            <translation>已连接的客户端：%1</translation>
+        </message>
+        <message>
+            <source>Copied</source>
+            <translation>已复制</translation>
+        </message>
+        <message>
+            <source>Copy configuration</source>
+            <translation>复制配置</translation>
+        </message>
+        <message>
+            <source>Local endpoint descriptor: %1</source>
+            <translation>本地端点描述文件：%1</translation>
+        </message>
+        <message>
+            <source>MCP client configuration</source>
+            <translation>MCP 客户端配置</translation>
+        </message>
+        <message>
+            <source>MCP is disabled or unavailable.</source>
+            <translation>MCP 已禁用或不可用。</translation>
+        </message>
+        <message>
+            <source>Running</source>
+            <translation>运行中</translation>
+        </message>
+        <message>
+            <source>Unavailable</source>
+            <translation>不可用</translation>
         </message>
     </context>
     <context>
@@ -547,6 +673,10 @@
         <message>
             <source>Hidden tools</source>
             <translation>隐藏的工具</translation>
+        </message>
+        <message>
+            <source>LaTeX Formula Recognition</source>
+            <translation>LaTeX 公式识别</translation>
         </message>
         <message>
             <source>No hidden tools</source>
@@ -591,6 +721,10 @@
     </context>
     <context>
         <name>SettingsBackend</name>
+        <message>
+            <source>Enter a valid HTTP or HTTPS server address without credentials, a query, or a fragment.</source>
+            <translation>请输入有效的 HTTP 或 HTTPS 服务器地址，不包含凭据、查询参数或片段。</translation>
+        </message>
         <message>
             <source>The clipboard is unavailable.</source>
             <translation>剪贴板不可用。</translation>
@@ -711,8 +845,16 @@
             <translation>活动窗口</translation>
         </message>
         <message>
+            <source>Adjust MP4 quality and file size</source>
+            <translation>调整 MP4 画质和文件大小</translation>
+        </message>
+        <message>
             <source>Age</source>
             <translation>期限</translation>
+        </message>
+        <message>
+            <source>All closed pinned windows will be removed; retained windows are protected</source>
+            <translation>将移除所有已关闭的固定到屏幕窗口；保留中的窗口不受影响</translation>
         </message>
         <message>
             <source>All current application settings will be replaced by the archive's values. Some changes take effect after the app restarts.</source>
@@ -723,12 +865,24 @@
             <translation>所有截图历史都将被删除</translation>
         </message>
         <message>
+            <source>Allow MCP clients running as your OS user to control Snow Shot. Snow Shot must be running.</source>
+            <translation>允许以当前系统用户身份运行的 MCP 客户端控制 Snow Shot。Snow Shot 必须保持运行。</translation>
+        </message>
+        <message>
+            <source>Allow resizing the selection from its borders while non-move tools are active</source>
+            <translation>启用非移动工具时，允许从选区边缘调整选区大小</translation>
+        </message>
+        <message>
             <source>Always</source>
             <translation>始终</translation>
         </message>
         <message>
             <source>Always hide</source>
             <translation>始终隐藏</translation>
+        </message>
+        <message>
+            <source>Always on Top</source>
+            <translation>始终置顶</translation>
         </message>
         <message>
             <source>Always show</source>
@@ -745,6 +899,10 @@
         <message>
             <source>Animated image frame rate</source>
             <translation>动图帧率</translation>
+        </message>
+        <message>
+            <source>App Font</source>
+            <translation>应用字体</translation>
         </message>
         <message>
             <source>App Permissions</source>
@@ -775,6 +933,10 @@
             <translation>应用快捷键</translation>
         </message>
         <message>
+            <source>Apply to recognized text when editing or copying</source>
+            <translation>编辑或复制识别文字时应用</translation>
+        </message>
+        <message>
             <source>Arrow</source>
             <translation>箭头</translation>
         </message>
@@ -803,8 +965,12 @@
             <translation>开机时自动启动</translation>
         </message>
         <message>
-            <source>Auto-save screenshot filename format</source>
-            <translation>自动保存截图文件名格式</translation>
+            <source>Auto-recognize QR Code</source>
+            <translation>自动识别二维码</translation>
+        </message>
+        <message>
+            <source>Auto-save image filename format</source>
+            <translation>自动保存图像文件名格式</translation>
         </message>
         <message>
             <source>Automatic text recognition</source>
@@ -821,6 +987,10 @@
         <message>
             <source>Back up and restore application settings</source>
             <translation>备份和恢复应用设置</translation>
+        </message>
+        <message>
+            <source>Background</source>
+            <translation>后台</translation>
         </message>
         <message>
             <source>Background Fill</source>
@@ -853,6 +1023,10 @@
         <message>
             <source>Browse</source>
             <translation>浏览</translation>
+        </message>
+        <message>
+            <source>Browse, restore, and delete pinned windows</source>
+            <translation>浏览、恢复和删除固定到屏幕窗口</translation>
         </message>
         <message>
             <source>Cached history thumbnails will be removed and rebuilt on demand</source>
@@ -911,12 +1085,20 @@
             <translation>自动检查</translation>
         </message>
         <message>
+            <source>Check for new versions on GitHub and Gitee</source>
+            <translation>在 GitHub 和 Gitee 上检查新版本</translation>
+        </message>
+        <message>
             <source>Child elements</source>
             <translation>子元素</translation>
         </message>
         <message>
             <source>Choose how much execution time the application receives</source>
             <translation>选择应用程序获得的执行时间</translation>
+        </message>
+        <message>
+            <source>Choose how text detection resizes images. Limiting the long side is faster; enlarging the short side may find smaller text.</source>
+            <translation>选择文字检测时的图像缩放方式。限制长边可提高速度；放大短边可能识别出更小的文字。</translation>
         </message>
         <message>
             <source>Choose how the area behind recognized text is filled</source>
@@ -932,7 +1114,7 @@
         </message>
         <message>
             <source>Choose the action for double-clicking a draggable area of a pinned screenshot</source>
-            <translation>选择双击固定截图可拖动区域时执行的操作</translation>
+            <translation>选择双击固定到屏幕的截图可拖动区域时执行的操作</translation>
         </message>
         <message>
             <source>Choose the action for double-clicking while moving or drawing in a screenshot</source>
@@ -940,7 +1122,7 @@
         </message>
         <message>
             <source>Choose the action for middle-clicking a draggable area of a pinned screenshot</source>
-            <translation>选择在固定截图可拖动区域单击鼠标中键时执行的操作</translation>
+            <translation>选择在固定到屏幕的截图可拖动区域单击鼠标中键时执行的操作</translation>
         </message>
         <message>
             <source>Choose the action for middle-clicking while moving or drawing in a screenshot</source>
@@ -951,16 +1133,32 @@
             <translation>选择系统托盘使用的内置图标</translation>
         </message>
         <message>
-            <source>Choose the dialog used for manual screenshot saves</source>
-            <translation>选择手动保存截图时使用的对话框</translation>
+            <source>Choose the compression effort used for display images saved in closed pinned windows</source>
+            <translation>选择保存已关闭的固定到屏幕内容时使用的图像压缩级别</translation>
+        </message>
+        <message>
+            <source>Choose the compression effort used for display images saved in screenshot history</source>
+            <translation>选择截图历史记录中保存的显示器图像的压缩级别</translation>
+        </message>
+        <message>
+            <source>Choose the compression effort used for image output and history results</source>
+            <translation>选择图像输出和历史记录结果图像的压缩级别</translation>
+        </message>
+        <message>
+            <source>Choose the dialog used for manual image saves</source>
+            <translation>选择手动保存图像时使用的对话框</translation>
         </message>
         <message>
             <source>Choose the fixed point used when zooming a pinned screenshot</source>
-            <translation>选择缩放固定截图时使用的固定点</translation>
+            <translation>选择缩放固定到屏幕的截图时使用的固定点</translation>
         </message>
         <message>
-            <source>Choose the format used for automatically saved screenshot files</source>
-            <translation>选择自动保存的截图文件所使用的格式</translation>
+            <source>Choose the font used throughout the application</source>
+            <translation>选择整个应用使用的字体</translation>
+        </message>
+        <message>
+            <source>Choose the format used for automatically saved image files</source>
+            <translation>选择自动保存图像文件时使用的格式</translation>
         </message>
         <message>
             <source>Choose the functions shown in the system tray menu</source>
@@ -979,6 +1177,14 @@
             <translation>选择整个主题使用的主色</translation>
         </message>
         <message>
+            <source>Choose the scheduling level for the interface and application workers. Changes take effect after restarting Snow Shot.</source>
+            <translation>选择界面和应用工作线程的调度级别。更改将在重启 Snow Shot 后生效。</translation>
+        </message>
+        <message>
+            <source>Choose the server for built-in online services. Application updates are not affected.</source>
+            <translation>选择内置在线服务使用的服务器。此设置不影响应用更新。</translation>
+        </message>
+        <message>
             <source>Choose the size of the screenshot, pinned, and recording toolbars</source>
             <translation>选择截图、固定到屏幕和屏幕录制工具栏的大小</translation>
         </message>
@@ -987,20 +1193,24 @@
             <translation>选择视频编码器</translation>
         </message>
         <message>
-            <source>Choose what clicking the tray icon with the scroll wheel does</source>
-            <translation>选择使用滚轮点击托盘图标时执行的操作</translation>
-        </message>
-        <message>
             <source>Choose what happens automatically when text recognition completes</source>
             <translation>选择文本识别完成后自动执行的操作</translation>
+        </message>
+        <message>
+            <source>Choose what happens when the clipboard content or selected file is already pinned</source>
+            <translation>选择剪贴板内容或所选文件已固定到屏幕时的操作</translation>
         </message>
         <message>
             <source>Choose what left-clicking the tray icon does</source>
             <translation>选择左键单击托盘图标时执行的操作</translation>
         </message>
         <message>
+            <source>Choose what middle-clicking the tray icon does</source>
+            <translation>选择中键单击托盘图标时执行的操作</translation>
+        </message>
+        <message>
             <source>Choose when recognized text can be selected on pinned screenshots.</source>
-            <translation>选择何时可以在固定截图上选择识别出的文本。</translation>
+            <translation>选择何时可以在固定到屏幕的截图上选择识别出的文本。</translation>
         </message>
         <message>
             <source>Choose where images are written for automatic save and copy-file actions</source>
@@ -1021,6 +1231,14 @@
         <message>
             <source>Clear cache</source>
             <translation>清除缓存</translation>
+        </message>
+        <message>
+            <source>Clear closed records</source>
+            <translation>清除已关闭记录</translation>
+        </message>
+        <message>
+            <source>Clear closed records?</source>
+            <translation>清除已关闭记录？</translation>
         </message>
         <message>
             <source>Clear history</source>
@@ -1063,6 +1281,10 @@
             <translation>关闭窗口</translation>
         </message>
         <message>
+            <source>Closed window count</source>
+            <translation>已关闭窗口数量</translation>
+        </message>
+        <message>
             <source>Color mode</source>
             <translation>颜色模式</translation>
         </message>
@@ -1073,6 +1295,10 @@
         <message>
             <source>Color picker display mode</source>
             <translation>颜色拾取器显示模式</translation>
+        </message>
+        <message>
+            <source>Compression level</source>
+            <translation>压缩级别</translation>
         </message>
         <message>
             <source>Configuration</source>
@@ -1091,8 +1317,8 @@
             <translation>配置应用程序进程行为</translation>
         </message>
         <message>
-            <source>Configure custom AI model connections</source>
-            <translation>配置自定义 AI 模型连接</translation>
+            <source>Configure custom AI models and text translation services</source>
+            <translation>配置自定义 AI 模型和文本翻译服务</translation>
         </message>
         <message>
             <source>Configure drawing tools and the screenshot drawing toolbar</source>
@@ -1125,6 +1351,10 @@
         <message>
             <source>Confirm before exiting screenshot via shortcut</source>
             <translation>使用快捷键退出截图前确认</translation>
+        </message>
+        <message>
+            <source>Connect AI clients to Snow Shot</source>
+            <translation>将 AI 客户端连接到 Snow Shot</translation>
         </message>
         <message>
             <source>Control when the screenshot color picker is visible</source>
@@ -1199,6 +1429,10 @@
             <translation>光标辅助线颜色</translation>
         </message>
         <message>
+            <source>Custom DeepL, Baidu, and Youdao-compatible services</source>
+            <translation>自定义兼容 DeepL、百度和有道的服务</translation>
+        </message>
+        <message>
             <source>Custom Models</source>
             <translation>自定义模型</translation>
         </message>
@@ -1219,6 +1453,10 @@
             <translation>自定义截图工具栏</translation>
         </message>
         <message>
+            <source>Custom translation endpoints and concurrency</source>
+            <translation>自定义翻译端点和并发数</translation>
+        </message>
+        <message>
             <source>DXGI</source>
             <translation>DXGI</translation>
         </message>
@@ -1227,8 +1465,28 @@
             <translation>深色</translation>
         </message>
         <message>
+            <source>Data storage</source>
+            <translation>数据存储</translation>
+        </message>
+        <message>
+            <source>Decrease opacity by 10%</source>
+            <translation>不透明度减少 10%</translation>
+        </message>
+        <message>
+            <source>Decrease scale by 10%</source>
+            <translation>缩放比例减少 10%</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>默认</translation>
+        </message>
+        <message>
+            <source>Default Formatting</source>
+            <translation>默认格式</translation>
+        </message>
+        <message>
+            <source>Default Punctuation</source>
+            <translation>默认标点</translation>
         </message>
         <message>
             <source>Delay %1s to execute</source>
@@ -1245,6 +1503,14 @@
         <message>
             <source>Delete</source>
             <translation>删除</translation>
+        </message>
+        <message>
+            <source>Delete closed windows</source>
+            <translation>删除已关闭窗口</translation>
+        </message>
+        <message>
+            <source>Delete closed windows after they reach this age</source>
+            <translation>删除关闭时间超过此期限的窗口</translation>
         </message>
         <message>
             <source>Delete files</source>
@@ -1265,6 +1531,10 @@
         <message>
             <source>Delete temporary recording files?</source>
             <translation>删除屏幕录制临时文件？</translation>
+        </message>
+        <message>
+            <source>Destroy</source>
+            <translation>销毁</translation>
         </message>
         <message>
             <source>DirectML</source>
@@ -1359,6 +1629,10 @@
             <translation>编辑选区</translation>
         </message>
         <message>
+            <source>Enable MCP integration</source>
+            <translation>启用 MCP 集成</translation>
+        </message>
+        <message>
             <source>Enable edit mode</source>
             <translation>启用编辑模式</translation>
         </message>
@@ -1381,6 +1655,14 @@
         <message>
             <source>End recording</source>
             <translation>结束录屏</translation>
+        </message>
+        <message>
+            <source>Enlarge short side (more detail)</source>
+            <translation>放大短边（更多细节）</translation>
+        </message>
+        <message>
+            <source>Enter an HTTP or HTTPS address. Changes apply immediately. Clear to use the default server.</source>
+            <translation>输入 HTTP 或 HTTPS 地址。更改立即生效。清空可使用默认服务器。</translation>
         </message>
         <message>
             <source>Enter or browse to a PNG or ICO file; invalid files use the selected bundled icon</source>
@@ -1448,7 +1730,15 @@
         </message>
         <message>
             <source>Fixed screenshot</source>
-            <translation>固定截图</translation>
+            <translation>固定到屏幕的截图</translation>
+        </message>
+        <message>
+            <source>Flip horizontally</source>
+            <translation>水平翻转</translation>
+        </message>
+        <message>
+            <source>Flip vertically</source>
+            <translation>垂直翻转</translation>
         </message>
         <message>
             <source>Focused window</source>
@@ -1475,6 +1765,14 @@
             <translation>全屏</translation>
         </message>
         <message>
+            <source>Full-screen canvas (enable/disable click-through)</source>
+            <translation>全屏画布（开启/关闭鼠标穿透）</translation>
+        </message>
+        <message>
+            <source>Full-width</source>
+            <translation>全角</translation>
+        </message>
+        <message>
             <source>Fullscreen suppression</source>
             <translation>全屏抑制</translation>
         </message>
@@ -1497,6 +1795,10 @@
         <message>
             <source>General system integration settings</source>
             <translation>常规系统集成设置</translation>
+        </message>
+        <message>
+            <source>Global Canvas</source>
+            <translation>全局画布</translation>
         </message>
         <message>
             <source>Global hotkey activation behavior</source>
@@ -1531,6 +1833,10 @@
             <translation>H.265</translation>
         </message>
         <message>
+            <source>Half-width</source>
+            <translation>半角</translation>
+        </message>
+        <message>
             <source>Hidden tools</source>
             <translation>隐藏的工具</translation>
         </message>
@@ -1552,7 +1858,7 @@
         </message>
         <message>
             <source>Hotkey hint opacity</source>
-            <translation>快捷键提示透明度</translation>
+            <translation>快捷键提示不透明度</translation>
         </message>
         <message>
             <source>Icon</source>
@@ -1563,12 +1869,20 @@
             <translation>焦点窗口占满整个显示器时忽略全局快捷键</translation>
         </message>
         <message>
+            <source>Image Export</source>
+            <translation>图像导出</translation>
+        </message>
+        <message>
             <source>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</source>
             <translation>图像文件 (*.png *.ico);;PNG 图像 (*.png);;图标文件 (*.ico)</translation>
         </message>
         <message>
             <source>Image format</source>
             <translation>图像格式</translation>
+        </message>
+        <message>
+            <source>Image quality</source>
+            <translation>图像质量</translation>
         </message>
         <message>
             <source>Image save directory</source>
@@ -1611,6 +1925,14 @@
             <translation>在拼接后的滚动截图中包含截图窗口及其工具栏。</translation>
         </message>
         <message>
+            <source>Increase opacity by 10%</source>
+            <translation>不透明度增加 10%</translation>
+        </message>
+        <message>
+            <source>Increase scale by 10%</source>
+            <translation>缩放比例增加 10%</translation>
+        </message>
+        <message>
             <source>Input Monitoring</source>
             <translation>输入监控</translation>
         </message>
@@ -1633,6 +1955,14 @@
         <message>
             <source>Jump to Translation Page</source>
             <translation>跳转到翻译页面</translation>
+        </message>
+        <message>
+            <source>Keep closed windows available for restoration; disabling does not delete existing records</source>
+            <translation>保留已关闭窗口以便恢复；禁用不会删除现有记录</translation>
+        </message>
+        <message>
+            <source>Keep line breaks</source>
+            <translation>保留换行</translation>
         </message>
         <message>
             <source>Keep records permanently</source>
@@ -1667,6 +1997,10 @@
             <translation>以管理员身份启动</translation>
         </message>
         <message>
+            <source>Launch at login</source>
+            <translation>登录时启动</translation>
+        </message>
+        <message>
             <source>Layout Processing</source>
             <translation>排版处理</translation>
         </message>
@@ -1683,8 +2017,16 @@
             <translation>浅色</translation>
         </message>
         <message>
+            <source>Limit how much disk space closed pinned windows can use</source>
+            <translation>限制已关闭的固定到屏幕窗口占用的磁盘空间</translation>
+        </message>
+        <message>
             <source>Limit how much disk space screenshot history can use</source>
             <translation>限制截图历史可使用的磁盘空间</translation>
+        </message>
+        <message>
+            <source>Limit long side (faster)</source>
+            <translation>限制长边（更快）</translation>
         </message>
         <message>
             <source>Line</source>
@@ -1699,12 +2041,28 @@
             <translation>循环播放动图</translation>
         </message>
         <message>
+            <source>Low</source>
+            <translation>低</translation>
+        </message>
+        <message>
+            <source>MCP</source>
+            <translation>MCP</translation>
+        </message>
+        <message>
+            <source>MCP connection and client setup</source>
+            <translation>MCP 连接和客户端设置</translation>
+        </message>
+        <message>
             <source>MSAA</source>
             <translation>MSAA</translation>
         </message>
         <message>
             <source>Magnifier visibility</source>
             <translation>放大镜可见性</translation>
+        </message>
+        <message>
+            <source>Manage Snow Shot's login permission in macOS System Settings</source>
+            <translation>在 macOS 系统设置中管理 Snow Shot 的登录权限</translation>
         </message>
         <message>
             <source>Manage macOS permissions for Snow Shot</source>
@@ -1715,8 +2073,8 @@
             <translation>手动</translation>
         </message>
         <message>
-            <source>Manual save screenshot filename format</source>
-            <translation>手动保存截图文件名格式</translation>
+            <source>Manual save image filename format</source>
+            <translation>手动保存图像文件名格式</translation>
         </message>
         <message>
             <source>Match your system appearance or choose a light or dark theme</source>
@@ -1855,12 +2213,28 @@
             <translation>仅在显示时</translation>
         </message>
         <message>
+            <source>Open</source>
+            <translation>打开</translation>
+        </message>
+        <message>
             <source>Open Function Settings</source>
             <translation>打开功能设置</translation>
         </message>
         <message>
+            <source>Open Login Items Settings</source>
+            <translation>打开登录项设置</translation>
+        </message>
+        <message>
+            <source>Open a canvas on the current display or toggle click-through</source>
+            <translation>在当前显示器上打开画布或切换鼠标穿透</translation>
+        </message>
+        <message>
             <source>Open selected text translation in a standalone window.</source>
             <translation>在独立窗口中翻译选中的文本。</translation>
+        </message>
+        <message>
+            <source>Open the Pin to Screen Management page in the main window</source>
+            <translation>在主窗口打开固定到屏幕管理页面</translation>
         </message>
         <message>
             <source>Open the folder where recorded videos are saved</source>
@@ -1927,6 +2301,10 @@
             <translation>永久移除所有已保存的截图</translation>
         </message>
         <message>
+            <source>Permanently remove closed pinned windows</source>
+            <translation>永久移除已关闭的固定到屏幕窗口</translation>
+        </message>
+        <message>
             <source>Permission status and access</source>
             <translation>权限状态与授权</translation>
         </message>
@@ -1936,35 +2314,43 @@
         </message>
         <message>
             <source>Pin Selected Files to Screen</source>
-            <translation>固定选中文件到屏幕</translation>
+            <translation>将选中文件固定到屏幕</translation>
         </message>
         <message>
             <source>Pin clipboard</source>
-            <translation>固定剪贴板</translation>
+            <translation>将剪贴板内容固定到屏幕</translation>
         </message>
         <message>
             <source>Pin clipboard content to screen</source>
-            <translation>固定剪贴板内容到屏幕</translation>
+            <translation>将剪贴板内容固定到屏幕</translation>
         </message>
         <message>
             <source>Pin images, image files, formatted text, or HTML from the clipboard to the screen</source>
-            <translation>固定剪贴板中的图像、图像文件、格式化文本或 HTML 到屏幕</translation>
+            <translation>将剪贴板中的图像、图像文件、格式化文本或 HTML 固定到屏幕</translation>
         </message>
         <message>
             <source>Pin selected image files from File Explorer or the desktop to the screen</source>
-            <translation>固定文件资源管理器或桌面中选中的图像文件到屏幕</translation>
+            <translation>将文件资源管理器或桌面中选中的图像文件固定到屏幕</translation>
+        </message>
+        <message>
+            <source>Pin selected image files from Finder or the desktop to the screen</source>
+            <translation>将访达或桌面中选中的图像文件固定到屏幕</translation>
         </message>
         <message>
             <source>Pin selection</source>
-            <translation>固定选区</translation>
+            <translation>将选区固定到屏幕</translation>
         </message>
         <message>
             <source>Pin the confirmed screenshot selection to the screen</source>
-            <translation>固定确认的截图选区到屏幕</translation>
+            <translation>将确认的截图选区固定到屏幕</translation>
         </message>
         <message>
             <source>Pin to Screen</source>
             <translation>固定到屏幕</translation>
+        </message>
+        <message>
+            <source>Pin to Screen Management</source>
+            <translation>固定到屏幕管理</translation>
         </message>
         <message>
             <source>Pin to Screen toolbar settings</source>
@@ -2023,6 +2409,10 @@
             <translation>预览和管理已保存的截图历史</translation>
         </message>
         <message>
+            <source>Preview window groups, then release the shortcut keys to switch</source>
+            <translation>预览窗口分组，松开所有快捷键后切换</translation>
+        </message>
+        <message>
             <source>Previous screenshot history</source>
             <translation>上一条截图历史</translation>
         </message>
@@ -2033,6 +2423,14 @@
         <message>
             <source>Proxy</source>
             <translation>代理</translation>
+        </message>
+        <message>
+            <source>Quality of service (QoS)</source>
+            <translation>服务质量（QoS）</translation>
+        </message>
+        <message>
+            <source>Quick Selection Modification</source>
+            <translation>快速修改选区</translation>
         </message>
         <message>
             <source>Quick save</source>
@@ -2051,6 +2449,10 @@
             <translation>重新截图</translation>
         </message>
         <message>
+            <source>Recognize QR codes automatically after confirming the screenshot selection area.</source>
+            <translation>确认截图选区后自动识别二维码。</translation>
+        </message>
+        <message>
             <source>Recognize global mouse gestures while you use other apps.</source>
             <translation>在使用其他应用时识别全局鼠标手势。</translation>
         </message>
@@ -2060,7 +2462,7 @@
         </message>
         <message>
             <source>Recognize text automatically when a pinned screenshot is created</source>
-            <translation>创建固定截图时自动识别文本</translation>
+            <translation>创建固定到屏幕的截图时自动识别文本</translation>
         </message>
         <message>
             <source>Recognize text in the confirmed screenshot selection</source>
@@ -2069,6 +2471,10 @@
         <message>
             <source>Record screen</source>
             <translation>录制屏幕</translation>
+        </message>
+        <message>
+            <source>Record separate audio tracks</source>
+            <translation>录制独立音轨</translation>
         </message>
         <message>
             <source>Record/Copy Video</source>
@@ -2115,20 +2521,40 @@
             <translation>删除已缓存的截图历史缩略图</translation>
         </message>
         <message>
+            <source>Remove closed windows</source>
+            <translation>移除已关闭窗口</translation>
+        </message>
+        <message>
             <source>Remove leftover recording working files that are no longer needed</source>
             <translation>删除不再需要的屏幕录制遗留工作文件</translation>
+        </message>
+        <message>
+            <source>Remove line breaks</source>
+            <translation>移除换行</translation>
         </message>
         <message>
             <source>Remove screenshots</source>
             <translation>移除截图</translation>
         </message>
         <message>
+            <source>Remove the oldest closed windows when this limit is exceeded</source>
+            <translation>超过限制时移除最早关闭的窗口</translation>
+        </message>
+        <message>
             <source>Remove the oldest screenshots when this limit is exceeded</source>
             <translation>超过此限制时移除最早的截图</translation>
         </message>
         <message>
+            <source>Repeat Action</source>
+            <translation>重复执行</translation>
+        </message>
+        <message>
             <source>Reset Zoom</source>
             <translation>重置缩放</translation>
+        </message>
+        <message>
+            <source>Reset transform</source>
+            <translation>重置变换</translation>
         </message>
         <message>
             <source>Resident Recognition Process</source>
@@ -2143,8 +2569,20 @@
             <translation>调整窗口大小</translation>
         </message>
         <message>
+            <source>Responsive</source>
+            <translation>响应优先</translation>
+        </message>
+        <message>
+            <source>Responsiveness</source>
+            <translation>响应速度</translation>
+        </message>
+        <message>
             <source>Restart</source>
             <translation>重启</translation>
+        </message>
+        <message>
+            <source>Restart App</source>
+            <translation>重启应用</translation>
         </message>
         <message>
             <source>Restart Snow Shot with administrator privileges</source>
@@ -2153,6 +2591,10 @@
         <message>
             <source>Restart as administrator</source>
             <translation>以管理员身份重启</translation>
+        </message>
+        <message>
+            <source>Restore Last Closed Window</source>
+            <translation>恢复上次关闭的窗口</translation>
         </message>
         <message>
             <source>Restore application settings from a configuration archive</source>
@@ -2167,6 +2609,18 @@
             <translation>恢复设置</translation>
         </message>
         <message>
+            <source>Restore the most recently closed window in the current group</source>
+            <translation>恢复当前分组中最近关闭的窗口</translation>
+        </message>
+        <message>
+            <source>Retain closed windows</source>
+            <translation>保留已关闭窗口</translation>
+        </message>
+        <message>
+            <source>Retention limits apply only to closed windows; retained windows are always protected</source>
+            <translation>存储限制仅适用于已关闭窗口；保留中的窗口始终受到保护</translation>
+        </message>
+        <message>
             <source>Retention period</source>
             <translation>保留期限</translation>
         </message>
@@ -2175,8 +2629,12 @@
             <translation>在截图中还原受支持的全屏颜色滤镜效果。</translation>
         </message>
         <message>
-            <source>Save a PNG file automatically whenever a screenshot is copied</source>
-            <translation>每次复制截图时自动保存 PNG 文件</translation>
+            <source>Rotate clockwise</source>
+            <translation>顺时针旋转</translation>
+        </message>
+        <message>
+            <source>Rotate counterclockwise</source>
+            <translation>逆时针旋转</translation>
         </message>
         <message>
             <source>Save as file</source>
@@ -2195,12 +2653,20 @@
             <translation>将识别结果保存为图片</translation>
         </message>
         <message>
+            <source>Save speaker and microphone audio as separate MP4 tracks for independent editing. Most players play one track at a time.</source>
+            <translation>将扬声器和麦克风音频保存为独立的 MP4 音轨，以便分别编辑。大多数播放器一次只播放一个音轨。</translation>
+        </message>
+        <message>
             <source>Saved screenshots</source>
             <translation>已保存截图</translation>
         </message>
         <message>
             <source>Scale recordings that exceed the selected maximum resolution</source>
             <translation>缩放超过所选最大分辨率的录制屏幕</translation>
+        </message>
+        <message>
+            <source>Scheduling</source>
+            <translation>调度</translation>
         </message>
         <message>
             <source>Screen &amp; System Audio Recording</source>
@@ -2251,6 +2717,10 @@
             <translation>截图 API</translation>
         </message>
         <message>
+            <source>Screenshot Area Type Hint</source>
+            <translation>截图区域类型提示</translation>
+        </message>
+        <message>
             <source>Screenshot count</source>
             <translation>截图数量</translation>
         </message>
@@ -2265,10 +2735,6 @@
         <message>
             <source>Screenshot interface and visual guidance settings</source>
             <translation>截图界面和视觉辅助设置</translation>
-        </message>
-        <message>
-            <source>Screenshot output locations, formats, and filenames</source>
-            <translation>截图输出位置、格式和文件名</translation>
         </message>
         <message>
             <source>Screenshot selection behavior</source>
@@ -2297,14 +2763,6 @@
         <message>
             <source>Screenshot translation settings</source>
             <translation>截图翻译设置</translation>
-        </message>
-        <message>
-            <source>Screenshots</source>
-            <translation>截图</translation>
-        </message>
-        <message>
-            <source>Scroll-wheel click action</source>
-            <translation>滚轮点击操作</translation>
         </message>
         <message>
             <source>Scrolling screenshot</source>
@@ -2363,12 +2821,20 @@
             <translation>序号</translation>
         </message>
         <message>
+            <source>Server address</source>
+            <translation>服务器地址</translation>
+        </message>
+        <message>
+            <source>Set quality for image files saved outside the Snow Shot dialog</source>
+            <translation>设置在 Snow Shot 对话框以外保存的图像文件质量</translation>
+        </message>
+        <message>
             <source>Set the border color of pinned screenshots</source>
-            <translation>设置固定截图的边框颜色</translation>
+            <translation>设置固定到屏幕的截图的边框颜色</translation>
         </message>
         <message>
             <source>Set the border color of pinned screenshots while they have focus</source>
-            <translation>设置固定截图获得焦点时的边框颜色</translation>
+            <translation>设置固定到屏幕的截图获得焦点时的边框颜色</translation>
         </message>
         <message>
             <source>Set the border color of the screenshot selection</source>
@@ -2376,23 +2842,23 @@
         </message>
         <message>
             <source>Set the color and opacity outside the screenshot selection</source>
-            <translation>设置截图选区外区域的颜色和透明度</translation>
+            <translation>设置截图选区外区域的颜色和不透明度</translation>
         </message>
         <message>
             <source>Set the frame rate of exported animated images</source>
             <translation>设置导出动图的帧率</translation>
         </message>
         <message>
-            <source>Set the generated filename used by automatic screenshot file saves</source>
-            <translation>设置自动保存截图文件时使用的自动生成文件名</translation>
+            <source>Set the generated filename used by automatic image file saves</source>
+            <translation>设置自动保存图像文件时生成的文件名</translation>
         </message>
         <message>
             <source>Set the generated filename used for recording output files</source>
             <translation>设置录制输出文件使用的自动生成文件名</translation>
         </message>
         <message>
-            <source>Set the generated filename used when saving a screenshot as a file</source>
-            <translation>设置将截图保存为文件时使用的自动生成文件名</translation>
+            <source>Set the generated filename used when saving an image as a file</source>
+            <translation>设置将图像保存为文件时生成的文件名</translation>
         </message>
         <message>
             <source>Set the maximum resolution of exported animated images</source>
@@ -2400,7 +2866,7 @@
         </message>
         <message>
             <source>Set the overall opacity of screenshot shortcut hints</source>
-            <translation>设置截图快捷键提示的整体透明度</translation>
+            <translation>设置截图快捷键提示的整体不透明度</translation>
         </message>
         <message>
             <source>Set the screen recording frame rate</source>
@@ -2427,12 +2893,20 @@
             <translation>设置</translation>
         </message>
         <message>
+            <source>Shake Window</source>
+            <translation>晃动窗口</translation>
+        </message>
+        <message>
             <source>Shape tool</source>
             <translation>图形</translation>
         </message>
         <message>
+            <source>Shared image export settings for screenshot and pin-to-screen windows</source>
+            <translation>截图窗口和贴图窗口共用的图像导出设置</translation>
+        </message>
+        <message>
             <source>Shortcut hint opacity</source>
-            <translation>快捷键提示透明度</translation>
+            <translation>快捷键提示不透明度</translation>
         </message>
         <message>
             <source>Shortcut keys for drawing tools</source>
@@ -2459,6 +2933,10 @@
             <translation>在文本识别工具栏中显示一个按钮，将识别出的文本发送到翻译页面。</translation>
         </message>
         <message>
+            <source>Show border</source>
+            <translation>显示边框</translation>
+        </message>
+        <message>
             <source>Show main interface</source>
             <translation>显示主界面</translation>
         </message>
@@ -2473,6 +2951,10 @@
         <message>
             <source>Show the application icon and menu in the system tray</source>
             <translation>在系统托盘中显示应用图标和菜单</translation>
+        </message>
+        <message>
+            <source>Show the area type hint at the top of the screenshot window</source>
+            <translation>在截图窗口顶部显示区域类型提示</translation>
         </message>
         <message>
             <source>Shutter Sound Notification</source>
@@ -2505,6 +2987,10 @@
         <message>
             <source>Snow Shot</source>
             <translation>Snow Shot</translation>
+        </message>
+        <message>
+            <source>Snow Shot server</source>
+            <translation>Snow Shot 服务器</translation>
         </message>
         <message>
             <source>Snowflake</source>
@@ -2547,6 +3033,10 @@
             <translation>Windows 启动时在后台启动 Snow Shot</translation>
         </message>
         <message>
+            <source>Start Snow Shot in the background when you log in.</source>
+            <translation>登录时在后台启动 Snow Shot。</translation>
+        </message>
+        <message>
             <source>Start Snow Shot with administrator privileges when you sign in</source>
             <translation>登录时以管理员权限启动 Snow Shot</translation>
         </message>
@@ -2560,7 +3050,7 @@
         </message>
         <message>
             <source>Start new screenshot sessions and pin drawing mode with the last used drawing tool instead of the move tool</source>
-            <translation>开始新的截图会话或进入贴图绘制模式时，自动启用上次使用的绘图工具，而不是移动工具</translation>
+            <translation>开始新的截图会话或进入固定到屏幕绘制模式时，自动启用上次使用的绘图工具，而不是移动工具</translation>
         </message>
         <message>
             <source>Start/pause/resume recording</source>
@@ -2587,8 +3077,16 @@
             <translation>存储状态</translation>
         </message>
         <message>
+            <source>Switch Window Group</source>
+            <translation>切换窗口分组</translation>
+        </message>
+        <message>
             <source>System</source>
             <translation>系统</translation>
+        </message>
+        <message>
+            <source>System default</source>
+            <translation>系统默认</translation>
         </message>
         <message>
             <source>System settings</source>
@@ -2623,6 +3121,14 @@
             <translation>文字识别</translation>
         </message>
         <message>
+            <source>Text Translation</source>
+            <translation>文本翻译</translation>
+        </message>
+        <message>
+            <source>Text detection scaling</source>
+            <translation>文字检测缩放</translation>
+        </message>
+        <message>
             <source>Text recognition</source>
             <translation>文本识别</translation>
         </message>
@@ -2631,8 +3137,8 @@
             <translation>文字识别外观</translation>
         </message>
         <message>
-            <source>Text recognition image saving settings</source>
-            <translation>文字识别图片保存设置</translation>
+            <source>Text recognition output settings</source>
+            <translation>文字识别输出设置</translation>
         </message>
         <message>
             <source>Text selection on recognition results</source>
@@ -2661,6 +3167,10 @@
         <message>
             <source>Thumbnail mode</source>
             <translation>缩略图模式</translation>
+        </message>
+        <message>
+            <source>Toggle Global/Relative Coordinates</source>
+            <translation>切换全局/相对坐标</translation>
         </message>
         <message>
             <source>Toggle hotkeys</source>
@@ -2701,6 +3211,10 @@
         <message>
             <source>Translation</source>
             <translation>翻译</translation>
+        </message>
+        <message>
+            <source>Translation Configurations</source>
+            <translation>翻译配置</translation>
         </message>
         <message>
             <source>Translation Page</source>
@@ -2763,6 +3277,14 @@
             <translation>使用系统代理</translation>
         </message>
         <message>
+            <source>User initiated</source>
+            <translation>用户发起</translation>
+        </message>
+        <message>
+            <source>Utility</source>
+            <translation>实用任务</translation>
+        </message>
+        <message>
             <source>Very fast</source>
             <translation>非常快</translation>
         </message>
@@ -2775,12 +3297,20 @@
             <translation>视频文件名格式</translation>
         </message>
         <message>
+            <source>Video quality</source>
+            <translation>视频画质</translation>
+        </message>
+        <message>
             <source>Video recording</source>
             <translation>视频录制</translation>
         </message>
         <message>
             <source>Video save directory</source>
             <translation>视频保存目录</translation>
+        </message>
+        <message>
+            <source>View connection status and configure your MCP client.</source>
+            <translation>查看连接状态并配置 MCP 客户端。</translation>
         </message>
         <message>
             <source>Vision Support</source>
@@ -2799,6 +3329,14 @@
             <translation>WebP</translation>
         </message>
         <message>
+            <source>When copying an image to the clipboard, also save it in the selected image format and save directory</source>
+            <translation>将图像复制到剪贴板时，同时按所选图像格式保存到指定目录</translation>
+        </message>
+        <message>
+            <source>When pinning duplicate content</source>
+            <translation>固定重复内容时</translation>
+        </message>
+        <message>
             <source>Window Element API</source>
             <translation>窗口元素 API</translation>
         </message>
@@ -2811,8 +3349,8 @@
             <translation>窗口分组</translation>
         </message>
         <message>
-            <source>Write the screenshot to a file and copy that file to the clipboard</source>
-            <translation>将截图写入文件并将该文件复制到剪贴板</translation>
+            <source>Write the image to a file and copy that file to the clipboard</source>
+            <translation>将图像写入文件并将该文件复制到剪贴板</translation>
         </message>
         <message>
             <source>Zip archives (*.zip);;All files (*.*)</source>
@@ -2962,6 +3500,73 @@ Unavailable: %2</source>
         </message>
     </context>
     <context>
+        <name>StorageDirectoryChange</name>
+        <message>
+            <source>An interrupted storage migration was detected. The last committed directory is in use; remaining copies have been preserved.</source>
+            <translation>检测到中断的存储迁移。当前使用上次确认的目录，剩余副本已保留。</translation>
+        </message>
+        <message>
+            <source>Another storage migration is in progress.</source>
+            <translation>另一项存储迁移正在进行。</translation>
+        </message>
+        <message>
+            <source>Choose a new or empty directory.</source>
+            <translation>请选择新目录或空目录。</translation>
+        </message>
+        <message>
+            <source>Choose an absolute storage directory path.</source>
+            <translation>请输入存储目录的绝对路径。</translation>
+        </message>
+        <message>
+            <source>Could not copy %1.</source>
+            <translation>无法复制 %1。</translation>
+        </message>
+        <message>
+            <source>Could not create the storage directory.</source>
+            <translation>无法创建存储目录。</translation>
+        </message>
+        <message>
+            <source>Could not save the storage directory selection.</source>
+            <translation>无法保存所选存储目录。</translation>
+        </message>
+        <message>
+            <source>Storage contains a link or unsupported file: %1</source>
+            <translation>存储目录包含链接或不支持的文件：%1</translation>
+        </message>
+        <message>
+            <source>Storage directory paths must not contain symbolic links or junctions.</source>
+            <translation>存储目录路径不能包含符号链接或目录联接。</translation>
+        </message>
+        <message>
+            <source>Storage migration is in progress</source>
+            <translation>正在迁移存储数据</translation>
+        </message>
+        <message>
+            <source>The destination does not have enough writable disk space.</source>
+            <translation>目标目录没有足够的可写磁盘空间。</translation>
+        </message>
+        <message>
+            <source>The new directory must be separate from the current storage directory.</source>
+            <translation>新目录不能与当前存储目录相同，也不能互相包含。</translation>
+        </message>
+        <message>
+            <source>The new storage directory is active, but some old files could not be removed: %1</source>
+            <translation>新存储目录已启用，但部分旧文件无法删除：%1</translation>
+        </message>
+        <message>
+            <source>The saved storage directory selection could not be read.</source>
+            <translation>无法读取已保存的存储目录选择。</translation>
+        </message>
+        <message>
+            <source>The storage directory is not writable.</source>
+            <translation>存储目录不可写。</translation>
+        </message>
+        <message>
+            <source>Verification failed for %1.</source>
+            <translation>%1 校验失败。</translation>
+        </message>
+    </context>
+    <context>
         <name>StorageStatusSettingsWidget</name>
         <message>
             <source>App storage usage</source>
@@ -2972,12 +3577,36 @@ Unavailable: %2</source>
             <translation>应用数据</translation>
         </message>
         <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Change storage directory?</source>
+            <translation>更改存储目录？</translation>
+        </message>
+        <message>
+            <source>Choose directory</source>
+            <translation>选择目录</translation>
+        </message>
+        <message>
+            <source>Choose storage directory</source>
+            <translation>选择存储目录</translation>
+        </message>
+        <message>
             <source>Copy today's log file</source>
             <translation>复制今日日志文件</translation>
         </message>
         <message>
             <source>Could not copy the log file: %1</source>
             <translation>无法复制日志文件：%1</translation>
+        </message>
+        <message>
+            <source>Current storage location: %1</source>
+            <translation>当前存储位置：%1</translation>
+        </message>
+        <message>
+            <source>Custom directory</source>
+            <translation>自定义目录</translation>
         </message>
         <message>
             <source>Diagnostics status</source>
@@ -2994,6 +3623,10 @@ Unavailable: %2</source>
         <message>
             <source>Effective storage mode</source>
             <translation>当前存储模式</translation>
+        </message>
+        <message>
+            <source>Existing data will be migrated to %1. Verified files will be removed from the old directory after the switch. Continue?</source>
+            <translation>现有数据将迁移至 %1。切换后将从旧目录删除已校验的文件。是否继续？</translation>
         </message>
         <message>
             <source>File logging active; crash capture unavailable</source>
@@ -3040,6 +3673,30 @@ Unavailable: %2</source>
             <translation>日志和崩溃报告磁盘用量</translation>
         </message>
         <message>
+            <source>Migrate existing data</source>
+            <translation>迁移现有数据</translation>
+        </message>
+        <message>
+            <source>Migrating OCR assets — %1/%2</source>
+            <translation>正在迁移 OCR 资源 — %1/%2</translation>
+        </message>
+        <message>
+            <source>Migrating logs — %1/%2</source>
+            <translation>正在迁移日志 — %1/%2</translation>
+        </message>
+        <message>
+            <source>Migrating other data — %1/%2</source>
+            <translation>正在迁移其他数据 — %1/%2</translation>
+        </message>
+        <message>
+            <source>Migrating pinned windows — %1/%2</source>
+            <translation>正在迁移贴图 — %1/%2</translation>
+        </message>
+        <message>
+            <source>Migrating screenshot history — %1/%2</source>
+            <translation>正在迁移截图历史 — %1/%2</translation>
+        </message>
+        <message>
             <source>None</source>
             <translation>无</translation>
         </message>
@@ -3050,6 +3707,10 @@ Unavailable: %2</source>
         <message>
             <source>OCR assets</source>
             <translation>OCR 资源</translation>
+        </message>
+        <message>
+            <source>OK</source>
+            <translation>确定</translation>
         </message>
         <message>
             <source>Other app data disk usage</source>
@@ -3072,6 +3733,14 @@ Unavailable: %2</source>
             <translation>便携模式</translation>
         </message>
         <message>
+            <source>Preparing migration…</source>
+            <translation>正在准备迁移…</translation>
+        </message>
+        <message>
+            <source>Proceed</source>
+            <translation>继续</translation>
+        </message>
+        <message>
             <source>Read-only (newer configuration)</source>
             <translation>只读（配置版本较新）</translation>
         </message>
@@ -3092,6 +3761,10 @@ Unavailable: %2</source>
             <translation>刷新存储用量</translation>
         </message>
         <message>
+            <source>Removing old files — %1/%2</source>
+            <translation>正在删除旧文件 — %1/%2</translation>
+        </message>
+        <message>
             <source>Scanning…</source>
             <translation>正在扫描…</translation>
         </message>
@@ -3104,12 +3777,28 @@ Unavailable: %2</source>
             <translation>截图历史磁盘用量</translation>
         </message>
         <message>
+            <source>Settings and open pinned windows will be copied to %1. Screenshot and closed pinned history will stay in the old directory. Continue?</source>
+            <translation>设置和已打开的贴图将复制至 %1。截图历史和已关闭的贴图历史将保留在旧目录中。是否继续？</translation>
+        </message>
+        <message>
+            <source>Storage directory</source>
+            <translation>存储目录</translation>
+        </message>
+        <message>
             <source>Storage location</source>
             <translation>存储位置</translation>
         </message>
         <message>
+            <source>Storage migration complete.</source>
+            <translation>存储迁移完成。</translation>
+        </message>
+        <message>
             <source>Storage mode</source>
             <translation>存储模式</translation>
+        </message>
+        <message>
+            <source>Switching storage directory…</source>
+            <translation>正在切换存储目录…</translation>
         </message>
         <message>
             <source>Thumbnail cache</source>
@@ -3130,6 +3819,141 @@ Unavailable: %2</source>
         <message>
             <source>Unavailable</source>
             <translation>不可用</translation>
+        </message>
+        <message>
+            <source>Verifying data — %1/%2</source>
+            <translation>正在校验数据 — %1/%2</translation>
+        </message>
+    </context>
+    <context>
+        <name>TextTranslationSettingsWidget</name>
+        <message>
+            <source>%1 (Copy %2)</source>
+            <translation>%1（副本 %2）</translation>
+        </message>
+        <message>
+            <source>%1 (Copy)</source>
+            <translation>%1（副本）</translation>
+        </message>
+        <message>
+            <source>%1 configuration %2</source>
+            <translation>%1配置 %2</translation>
+        </message>
+        <message>
+            <source>A configuration with this name already exists.</source>
+            <translation>已存在同名配置。</translation>
+        </message>
+        <message>
+            <source>API Key</source>
+            <translation>API 密钥</translation>
+        </message>
+        <message>
+            <source>API URL</source>
+            <translation>API URL</translation>
+        </message>
+        <message>
+            <source>Add Configuration</source>
+            <translation>添加配置</translation>
+        </message>
+        <message>
+            <source>Application ID</source>
+            <translation>应用 ID</translation>
+        </message>
+        <message>
+            <source>Application Secret</source>
+            <translation>应用密钥</translation>
+        </message>
+        <message>
+            <source>Baidu</source>
+            <translation>百度</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Concurrency</source>
+            <translation>并发数</translation>
+        </message>
+        <message>
+            <source>Configuration Name</source>
+            <translation>配置名称</translation>
+        </message>
+        <message>
+            <source>Copy</source>
+            <translation>复制</translation>
+        </message>
+        <message>
+            <source>DeepL</source>
+            <translation>DeepL</translation>
+        </message>
+        <message>
+            <source>Delete</source>
+            <translation>删除</translation>
+        </message>
+        <message>
+            <source>Delete Configuration</source>
+            <translation>删除配置</translation>
+        </message>
+        <message>
+            <source>Delete configuration "%1"? If selected, another available service will be used.</source>
+            <translation>删除配置“%1”？如果当前已选用此配置，将改用其他可用服务。</translation>
+        </message>
+        <message>
+            <source>Edit</source>
+            <translation>编辑</translation>
+        </message>
+        <message>
+            <source>Edit Configuration</source>
+            <translation>编辑配置</translation>
+        </message>
+        <message>
+            <source>Enter a configuration name.</source>
+            <translation>请输入配置名称。</translation>
+        </message>
+        <message>
+            <source>Enter a full HTTP or HTTPS endpoint without embedded credentials or a fragment.</source>
+            <translation>请输入完整的 HTTP 或 HTTPS 端点，不含嵌入式凭据或片段。</translation>
+        </message>
+        <message>
+            <source>Maximum simultaneous requests for this configuration across translation jobs (1-16).</source>
+            <translation>此配置在所有翻译任务中的最大同时请求数（1-16）。</translation>
+        </message>
+        <message>
+            <source>No translation configurations added</source>
+            <translation>尚未添加翻译配置</translation>
+        </message>
+        <message>
+            <source>Optional for servers that do not require authentication.</source>
+            <translation>不需要身份验证的服务器可留空。</translation>
+        </message>
+        <message>
+            <source>Save</source>
+            <translation>保存</translation>
+        </message>
+        <message>
+            <source>Service Format</source>
+            <translation>服务格式</translation>
+        </message>
+        <message>
+            <source>The API key must not contain line breaks.</source>
+            <translation>API 密钥不能包含换行符。</translation>
+        </message>
+        <message>
+            <source>The full translation endpoint. Its path and query are used as entered.</source>
+            <translation>完整的翻译端点。路径和查询参数将按输入内容使用。</translation>
+        </message>
+        <message>
+            <source>This configuration was deleted. Close this form and create a new configuration.</source>
+            <translation>此配置已被删除。请关闭此表单并创建新配置。</translation>
+        </message>
+        <message>
+            <source>Unable to save configurations. Check that configuration storage is writable and try again.</source>
+            <translation>无法保存配置。请检查配置存储是否可写，然后重试。</translation>
+        </message>
+        <message>
+            <source>Youdao</source>
+            <translation>有道</translation>
         </message>
     </context>
     <context>
@@ -3164,6 +3988,25 @@ Unavailable: %2</source>
         </message>
     </context>
     <context>
+        <name>snow_shot::storage::ApplicationStorage</name>
+        <message>
+            <source>Custom storage directories are only supported on Windows.</source>
+            <translation>仅 Windows 支持自定义存储目录。</translation>
+        </message>
+        <message>
+            <source>File logging could not be restarted.</source>
+            <translation>无法重新启动文件日志。</translation>
+        </message>
+        <message>
+            <source>Some pinned windows could not be prepared in the new directory.</source>
+            <translation>无法在新目录中准备部分贴图。</translation>
+        </message>
+        <message>
+            <source>Storage is busy or unavailable. Try again when current operations finish.</source>
+            <translation>存储正忙或不可用。请在当前操作完成后重试。</translation>
+        </message>
+    </context>
+    <context>
         <name>snow_shot::storage::ConfigurationArchive</name>
         <message>
             <source>The configuration archive contains no compatible settings.</source>
@@ -3189,8 +4032,8 @@ Unavailable: %2</source>
     <context>
         <name>snow_shot::storage::ConfigurationStore</name>
         <message>
-            <source>Some custom AI model configurations are invalid and were ignored</source>
-            <translation>部分自定义 AI 模型配置无效，已忽略。</translation>
+            <source>Some custom API configurations are invalid and were ignored</source>
+            <translation>部分自定义 API 配置无效，已被忽略</translation>
         </message>
     </context>
 </TS>

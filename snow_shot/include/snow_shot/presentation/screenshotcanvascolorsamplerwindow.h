@@ -13,7 +13,7 @@ class ScreenshotCanvasColorSamplerWindow final : public QWidget {
   public:
     explicit ScreenshotCanvasColorSamplerWindow(QWidget* parent = nullptr);
 
-    void beginSampling();
+    void beginSampling(QWidget* owner);
     void updateSample(const QImage& previewImage, const QPoint& globalCursorPosition);
     void endSampling();
 
@@ -21,6 +21,7 @@ class ScreenshotCanvasColorSamplerWindow final : public QWidget {
     [[nodiscard]] QSize sizeHint() const override;
 
   protected:
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
     void paintEvent(QPaintEvent* event) override;
 
   private:

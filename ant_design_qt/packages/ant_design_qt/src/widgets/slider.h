@@ -42,6 +42,8 @@ class AdMultiSlider : public QWidget, public AdControlScaleParticipant {
                  markStepSnapEnabledChanged)
   Q_PROPERTY(bool selectionHighlightVisible READ selectionHighlightVisible WRITE
                  setSelectionHighlightVisible NOTIFY selectionHighlightVisibleChanged)
+  Q_PROPERTY(double trackFillRatio READ trackFillRatio WRITE setTrackFillRatio RESET
+                 resetTrackFillRatio NOTIFY trackFillRatioChanged)
   Q_PROPERTY(
       Qt::Orientation orientation READ orientation WRITE setOrientation NOTIFY orientationChanged)
   Q_PROPERTY(bool disabled READ disabled WRITE setDisabled NOTIFY disabledChanged)
@@ -97,9 +99,11 @@ class AdMultiSlider : public QWidget, public AdControlScaleParticipant {
     QString label;
     std::optional<QColor> color;
     std::optional<QFont> font;
+    bool labelVisible = true;
 
     bool operator==(const Mark& other) const {
-      return label == other.label && color == other.color && font == other.font;
+      return label == other.label && color == other.color && font == other.font &&
+             labelVisible == other.labelVisible;
     }
   };
   using MarkMap = QMap<double, Mark>;
@@ -198,6 +202,12 @@ class AdMultiSlider : public QWidget, public AdControlScaleParticipant {
   bool selectionHighlightVisible() const;
   void setSelectionHighlightVisible(bool value);
 
+  // An independent visual fill from 0 to 1. The default -1 follows the handles.
+  // Updating it never changes the slider value, handle positions or accessibility value.
+  double trackFillRatio() const { return trackFillRatio_; }
+  void setTrackFillRatio(double ratio);
+  void resetTrackFillRatio();
+
   Qt::Orientation orientation() const;
   void setOrientation(Qt::Orientation value);
 
@@ -282,6 +292,7 @@ class AdMultiSlider : public QWidget, public AdControlScaleParticipant {
   void markIndicatorsVisibleChanged(bool value);
   void markStepSnapEnabledChanged(bool value);
   void selectionHighlightVisibleChanged(bool value);
+  void trackFillRatioChanged(double ratio);
   void orientationChanged(Qt::Orientation value);
   void disabledChanged(bool value);
   void keyboardEnabledChanged(bool value);
@@ -313,6 +324,7 @@ class AdMultiSlider : public QWidget, public AdControlScaleParticipant {
   void setMode(Mode value);
 
   void paintEvent(QPaintEvent* event) override;
+  bool event(QEvent* event) override;
   void enterEvent(QEnterEvent* event) override;
   void leaveEvent(QEvent* event) override;
   void mousePressEvent(QMouseEvent* event) override;
@@ -349,6 +361,7 @@ class AdMultiSlider : public QWidget, public AdControlScaleParticipant {
                           bool valueOnlyLayoutChange = false);
   void setInversionState(bool invertedAppearance, bool invertedControls);
   void setFocusHandleIndex(int index);
+  void setFocusVisible(bool visible);
   void setSliderDownInternal(bool value);
   void setPendingChangeStateFromVisuals();
   void commitPendingChanges();
@@ -405,6 +418,7 @@ class AdMultiSlider : public QWidget, public AdControlScaleParticipant {
   bool markIndicatorsVisible_ = true;
   bool markStepSnapEnabled_ = false;
   bool included_ = true;
+  double trackFillRatio_ = -1.0;
   Qt::Orientation orientation_ = Qt::Horizontal;
   bool keyboardEnabled_ = true;
   bool wheelEnabled_ = false;
@@ -424,7 +438,6 @@ class AdMultiSlider : public QWidget, public AdControlScaleParticipant {
   SemanticStyles semanticStyles_;
   SemanticStyleResolver semanticStyleResolver_;
 
-  bool hovered_ = false;
   bool focusVisible_ = false;
   bool dragging_ = false;
   bool sliderDown_ = false;

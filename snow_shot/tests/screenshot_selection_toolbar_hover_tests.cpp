@@ -11,7 +11,9 @@
 #include <QLabel>
 #include <QPainter>
 #include <QPointF>
+#include <QTranslator>
 #include <QWidget>
+#include <QWheelEvent>
 
 #include <cstdlib>
 #include <iostream>
@@ -29,7 +31,8 @@ class NoOpSelectionToolbarCommands final : public ScreenshotSelectionToolbarComm
     void hideColorPickersForScreenshotUi() override {
         ++interactionCount;
     }
-    void adjustSelectionFromToolbar(int, int, int, int) override {
+    void adjustSelectionFromToolbar(int minDx, int minDy, int maxDx, int maxDy) override {
+        lastAdjustment = {minDx, minDy, maxDx, maxDy};
         ++interactionCount;
     }
     void setSelectionCornerRadiusFromToolbar(int) override {
@@ -38,11 +41,29 @@ class NoOpSelectionToolbarCommands final : public ScreenshotSelectionToolbarComm
     void setSelectionShadowWidthFromToolbar(int) override {
         ++interactionCount;
     }
-    void setSelectionToolbarHovered(bool) override {
+    void setSelectionToolbarHovered(bool hovered) override {
+        toolbarHovered = hovered;
         ++interactionCount;
     }
 
+    std::vector<int> lastAdjustment;
     int interactionCount = 0;
+    bool toolbarHovered = false;
+};
+
+class PixelUnitTranslator final : public QTranslator {
+  public:
+    bool isEmpty() const override {
+        return false;
+    }
+
+    QString translate(const char*, const char* sourceText, const char*, int) const override {
+        const QByteArray source(sourceText);
+        if (source == "Pixels" || source == "Logical pixels") {
+            return QStringLiteral("translated-unit");
+        }
+        return {};
+    }
 };
 
 void require(bool condition, const char* message) {
@@ -138,12 +159,21 @@ void panelBoundaryExclusivelyOwnsToolbarHoverState() {
     panel.setPointerInteractionEnabled(false);
     require(hoverTransitions == std::vector<bool>({true, false, true, false, true, false}),
             "disabling a hovered panel must synchronously clear its hover state");
+    panel.setPointerInteractionEnabled(true);
+    sendEnter(&panel);
+    require(panel.pointerHovered(), "the panel must expose its authoritative hover state");
+    panel.setEnabled(false);
+    require(!panel.pointerHovered(), "QWidget disabling must synchronously end panel hover");
+    sendEnter(&panel);
+    require(!panel.pointerHovered(), "disabled panels must reject stale enter events");
 }
 
-void valueLabelPaintsFromItsOwnEnterLeaveState() {
+void valueLabelPaintsFromQtHoverState() {
     SelectionToolbarValueLabel label;
     label.setText(QStringLiteral("640"));
     label.setFixedSize(label.sizeHint());
+    require(label.testAttribute(Qt::WA_Hover) && !label.hasMouseTracking(),
+            "value labels should use Qt hover state without mouse move tracking");
 
     const QImage idleImage = renderWidget(&label);
     sendEnter(&label);
@@ -168,6 +198,18 @@ void valueLabelPaintsFromItsOwnEnterLeaveState() {
     sendLeave(&label);
     require(renderWidget(&label) == idleImage,
             "value-label leave events should restore the idle visual");
+
+    sendEnter(&label);
+    label.setEnabled(false);
+    SelectionToolbarValueLabel disabledReference;
+    disabledReference.setText(label.text());
+    disabledReference.setFixedSize(label.size());
+    disabledReference.setEnabled(false);
+    require(renderWidget(&label) == renderWidget(&disabledReference),
+            "disabling a hovered value label must clear its hover visual");
+    label.setEnabled(true);
+    require(renderWidget(&label) == idleImage,
+            "re-enabling a value label must wait for a fresh hover event");
 }
 
 void selectionToolbarInputSurfaceMatchesInteractivePanel() {
@@ -220,6 +262,44 @@ void selectionToolbarInputSurfaceMatchesInteractivePanel() {
     sendLeave(panel);
     require(host.childAt(QPoint(panelRect.center().x(), panelRect.bottom() + 2)) == &canvas,
             "leaving the toolbar must shrink the input surface back to the panel");
+}
+
+void selectionDragCannotActivateToolbarPreview() {
+    NoOpSelectionToolbarCommands commands;
+    QWidget host;
+    host.resize(1000, 400);
+    QWidget canvas(&host);
+    canvas.setGeometry(host.rect());
+    ScreenshotSelectionToolbarWidget toolbar(commands, &host);
+    toolbar.setSelectionState(QRect(40, 0, 100, 20), false, 0, 0);
+    toolbar.moveContentTo(QPoint(144, 0));
+    host.show();
+    toolbar.show();
+    QCoreApplication::processEvents();
+    auto* panel = toolbar.findChild<SelectionToolbarPanel*>();
+    require(panel != nullptr, "selection toolbar panel must exist");
+    sendEnter(panel);
+    require(commands.toolbarHovered, "idle toolbar hover must activate the result preview");
+    toolbar.setPointerInteractionEnabled(false);
+    require(!commands.toolbarHovered && !panel->pointerHovered(),
+            "starting a selection drag must clear the border-hiding toolbar preview");
+    const int before = commands.interactionCount;
+    sendEnter(panel);
+    toolbar.setSelectionState(QRect(40, 0, 200, 60), false, 0, 0);
+    toolbar.moveContentTo(QPoint(244, 0));
+    QCoreApplication::processEvents();
+    require(!commands.toolbarHovered && commands.interactionCount == before,
+            "a moving toolbar must not activate hover preview during a selection drag");
+    require(host.childAt(panel->mapTo(&host, panel->rect().center())) == &canvas,
+            "toolbar content must pass through pointer input while drawing a top-edge selection");
+    toolbar.setPointerInteractionEnabled(true);
+    sendEnter(panel);
+    require(commands.toolbarHovered, "ending a selection drag must restore toolbar hover");
+    toolbar.setPointerInteractionEnabled(false);
+    toolbar.hide();
+    toolbar.resetForNewCapture();
+    require(!toolbar.testAttribute(Qt::WA_TransparentForMouseEvents),
+            "capture reset must restore the toolbar interaction policy");
 }
 
 void smartSelectionToolbarIsClickThroughAcrossCaptureLifecycles() {
@@ -385,14 +465,157 @@ void selectionToolbarLabelsFollowApplicationFontFamily() {
                 "selection toolbar labels must follow the application font family");
     }
 }
+
+void selectionToolbarUsesCanvasUnitsForEditingAndSmartSelection() {
+    NoOpSelectionToolbarCommands commands;
+    QWidget host;
+    ScreenshotSelectionToolbarWidget toolbar(commands, &host);
+    using Mode = ScreenshotSelectionToolbarWidget::DisplayMode;
+    const QRect selection(80, 70, 317, 181);
+    toolbar.setSelectionState(selection, false, 10, 5, Mode::SizeOnly, true);
+
+    const auto labels = toolbar.findChildren<QLabel*>();
+    const auto field = [&](const char* name) -> QLabel* {
+        for (QLabel* label : labels) {
+            if (label->accessibleName() == QString::fromLatin1(name)) {
+                return label;
+            }
+        }
+        require(false, "selection toolbar field missing");
+        return nullptr;
+    };
+    QLabel* width = field("Width");
+    QLabel* height = field("Height");
+    const auto checkUnits = [&](int logicalPixels, int pixels) {
+        int logicalPixelLabels = 0;
+        int pixelLabels = 0;
+        for (QLabel* label : labels) {
+            if (label->text() == QStringLiteral("dp")) {
+                ++logicalPixelLabels;
+                require(label->toolTip() == QStringLiteral("Logical pixels") &&
+                            label->accessibleName() == QStringLiteral("Logical pixels"),
+                        "logical pixel units need descriptive accessibility text");
+            } else if (label->text() == QStringLiteral("px")) {
+                ++pixelLabels;
+                require(label->toolTip() == QStringLiteral("Pixels") &&
+                            label->accessibleName() == QStringLiteral("Pixels"),
+                        "pixel units need descriptive accessibility text");
+            }
+        }
+        require(logicalPixelLabels == logicalPixels && pixelLabels == pixels,
+                "incorrect toolbar unit system");
+    };
+    require(width->text() == QStringLiteral("317") && height->text() == QStringLiteral("181"),
+            "initial smart selection must show canvas dimensions");
+    checkUnits(4, 0);
+    toolbar.setSelectionState(selection, false, 10, 5, Mode::Full, true);
+    require(width->text() == QStringLiteral("317") && height->text() == QStringLiteral("181") &&
+                field("X coordinate")->text() == QStringLiteral("80") &&
+                field("Corner radius")->text() == QStringLiteral("10") &&
+                field("Shadow width")->text() == QStringLiteral("5"),
+            "editable values must match the canvas and resize dialog units");
+    checkUnits(4, 0);
+
+    const QPointF local(width->rect().center());
+    QWheelEvent wheel(local, width->mapToGlobal(local.toPoint()), QPoint(), QPoint(0, 120),
+                      Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(width, &wheel);
+    require(commands.lastAdjustment == std::vector<int>({0, 0, 1, 0}),
+            "width wheel must request one displayed canvas unit");
+    toolbar.setSelectionState(QRect(80, 70, 318, 181), false, 10, 5, Mode::Full, true);
+    require(width->text() == QStringLiteral("318"),
+            "one canvas-unit edit must advance the editable readout by one");
+
+    toolbar.setSelectionState(selection, false, 10, 5, Mode::Full, true);
+    toolbar.setSelectionState(selection, false, 10, 5, Mode::SizeOnly, true);
+    require(width->text() == QStringLiteral("317") && height->text() == QStringLiteral("181"),
+            "smart selection must show the same dimensions as manual selection");
+    checkUnits(4, 0);
+    commands.lastAdjustment.clear();
+    QApplication::sendEvent(width, &wheel);
+    require(commands.lastAdjustment.empty(), "smart selection must not dispatch canvas edits");
+    toolbar.setSelectionState(selection, false, 10, 5, Mode::Full, true);
+    require(width->text() == QStringLiteral("317"), "editing must restore canvas dimensions");
+    checkUnits(4, 0);
+
+    PixelUnitTranslator translator;
+    require(QApplication::installTranslator(&translator), "pixel-unit translator unavailable");
+    QCoreApplication::processEvents();
+    for (QLabel* label : labels) {
+        if (label->text() == QStringLiteral("dp")) {
+            require(label->toolTip() == QStringLiteral("translated-unit") &&
+                        label->accessibleName() == QStringLiteral("translated-unit"),
+                    "unit descriptions must follow language changes");
+        }
+    }
+    toolbar.setSelectionState(selection, false, 10, 5, Mode::SizeOnly, true);
+    for (QLabel* label : labels) {
+        if (label->text() == QStringLiteral("dp")) {
+            require(label->accessibleName() == QStringLiteral("translated-unit"),
+                    "smart-selection unit descriptions must follow language changes");
+        }
+    }
+    QApplication::removeTranslator(&translator);
+    QCoreApplication::processEvents();
+
+    // Converted labels must never change geometry-edit commands or effect units.
+    const ScreenshotSelectionDisplayValues logicalValues{
+        QPointF(64, 56), QSizeF(253.6, 144.8), ScreenshotSelectionDisplayUnit::LogicalPixels,
+        false};
+    toolbar.setSelectionState(selection, false, 10, 5, Mode::Full, false, logicalValues);
+    require(width->text() == QStringLiteral("254") && height->text() == QStringLiteral("145") &&
+                field("X coordinate")->text() == QStringLiteral("64") &&
+                field("Corner radius")->text() == QStringLiteral("10") &&
+                field("Shadow width")->text() == QStringLiteral("5"),
+            "unit toggles must update position and size while retaining effect values");
+    const QSize stableSize = toolbar.contentSizeHint();
+    auto fractionalChange = logicalValues;
+    fractionalChange.position = QPointF(64.2, 56.3);
+    fractionalChange.size = QSizeF(254.2, 145.1);
+    toolbar.setSelectionState(selection, false, 10, 5, Mode::Full, false, fractionalChange);
+    require(width->text() == QStringLiteral("254") && height->text() == QStringLiteral("145") &&
+                field("X coordinate")->text() == QStringLiteral("64") &&
+                toolbar.contentSizeHint() == stableSize,
+            "fractional changes within the same rounded pixel must keep labels and layout stable");
+    checkUnits(2, 2);
+    int dpLabels = 0;
+    for (auto* label : labels)
+        dpLabels += label->text() == QStringLiteral("dp") ? 1 : 0;
+    require(dpLabels == 2, "logical Windows mode must label only coordinates and dimensions as dp");
+    commands.lastAdjustment.clear();
+    QApplication::sendEvent(width, &wheel);
+    require(commands.lastAdjustment == std::vector<int>({0, 0, 1, 0}),
+            "logical unit display must retain one native geometry unit per wheel step");
+    const ScreenshotSelectionDisplayValues physicalValues{
+        QPointF(160, 140), QSizeF(634, 362), ScreenshotSelectionDisplayUnit::PhysicalPixels, true};
+    toolbar.setSelectionState(selection, false, 10, 5, Mode::Full, true, physicalValues);
+    require(width->text() == QStringLiteral("634") &&
+                field("Corner radius")->text() == QStringLiteral("10"),
+            "physical macOS readout must not scale editable effect values");
+    checkUnits(2, 2);
+
+    // A point-backed 1x display still uses points, even when values coincide.
+    toolbar.setSelectionState(selection, false, 10, 5, Mode::Full, true);
+    checkUnits(4, 0);
+    toolbar.setSelectionState(selection, false, 10, 5, Mode::SizeOnly, false);
+    checkUnits(0, 4);
+    toolbar.setSelectionState(selection, false, 10, 5, Mode::Full);
+    require(width->text() == QStringLiteral("317"), "pixel canvases must retain their dimensions");
+    checkUnits(0, 4);
+    toolbar.resetForNewCapture();
+    checkUnits(0, 4);
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
+    selectionDragCannotActivateToolbarPreview();
     panelBoundaryExclusivelyOwnsToolbarHoverState();
-    valueLabelPaintsFromItsOwnEnterLeaveState();
+    valueLabelPaintsFromQtHoverState();
     selectionToolbarInputSurfaceMatchesInteractivePanel();
     selectionToolbarLabelsFollowApplicationFontFamily();
+    selectionToolbarUsesCanvasUnitsForEditingAndSmartSelection();
     smartSelectionToolbarIsClickThroughAcrossCaptureLifecycles();
     smartSelectionToolbarShedsNativeWindowForcedByNativeSiblingEmbed();
     return 0;

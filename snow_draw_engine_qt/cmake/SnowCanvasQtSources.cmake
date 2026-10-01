@@ -7,6 +7,8 @@ set(SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS
 )
 
 set(SNOW_CANVAS_QT_SOURCES
+    src/rendering/snow_canvas_path_geometry.cpp
+    include/snow_draw_engine_qt/snow_canvas_path_geometry.h
     src/core/snow_canvas_changed_viewports.cpp
     src/core/snow_canvas_changed_viewports.h
     src/core/snow_canvas_commands.cpp
@@ -44,6 +46,8 @@ set(SNOW_CANVAS_QT_SOURCES
     src/rendering/snow_canvas_compositor.cpp
     src/rendering/snow_canvas_compositor.h
     src/rendering/snow_canvas_custom_renderer.cpp
+    src/rendering/snow_canvas_reference_scene.cpp
+    src/rendering/snow_canvas_reference_scene.h
     src/rendering/snow_canvas_display_cache.cpp
     src/rendering/snow_canvas_display_cache.h
     src/rendering/snow_canvas_display_item.cpp
@@ -125,5 +129,6 @@ set(SNOW_CANVAS_QT_SOURCES
     include/snow_draw_engine_qt/snow_canvas_region_filter.h
     include/snow_draw_engine_qt/snow_canvas_runtime.h
     include/snow_draw_engine_qt/snow_canvas_types.h
+    include/snow_draw_engine_qt/snow_canvas_style_edit.h
     include/snow_draw_engine_qt/snow_canvas_widget.h
 )

@@ -468,4 +468,11 @@
             <translation>更新權限被拒絕，或無法獲取權限</translation>
         </message>
     </context>
+    <context>
+        <name>UpdateService</name>
+        <message>
+            <source>Could not check for updates. Please try again.</source>
+            <translation>無法檢查更新，請重試。</translation>
+        </message>
+    </context>
 </TS>

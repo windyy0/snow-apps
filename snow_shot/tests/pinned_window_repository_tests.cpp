@@ -4,16 +4,20 @@
 #include <QBuffer>
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QUuid>
 
+#include <atomic>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 
 namespace storage = snow_shot::storage;
 
@@ -37,6 +41,20 @@ QImage patternedImage(const QSize& size, int seed) {
     return image;
 }
 
+struct TrackedImageOwner final {
+    QImage image;
+    std::shared_ptr<int> lifetime = std::make_shared<int>(0);
+};
+
+QImage trackedImage(std::weak_ptr<int>* lifetime, int seed) {
+    auto* owner = new TrackedImageOwner{patternedImage(QSize(33, 17), seed)};
+    *lifetime = owner->lifetime;
+    return QImage(
+        owner->image.bits(), owner->image.width(), owner->image.height(),
+        owner->image.bytesPerLine(), owner->image.format(),
+        [](void* data) { delete static_cast<TrackedImageOwner*>(data); }, owner);
+}
+
 bool samePixels(const QImage& first, const QImage& second) {
     return first.size() == second.size() && first.convertToFormat(QImage::Format_ARGB32) ==
                                                 second.convertToFormat(QImage::Format_ARGB32);
@@ -50,7 +68,7 @@ storage::PinnedWindowRecord recordWithId(const QString& id, const QImage& image)
     value.canvasSourceRect = QRectF(0, 0, 2, 2);
     value.contentCanvasRect = QRectF(0, 0, 2, 2);
     value.surfaceCanvasRect = QRectF(0, 0, 2, 2);
-    value.initialPhysicalSize = image.size();
+    value.initialWindowSize = image.size();
     value.screenDpi = 1.0;
     value.firstCreationTextDpi = 1.0;
     value.scalePercent = 100.0;
@@ -83,6 +101,10 @@ void stateUpdatesBeforeFirstFlushPreserveRestorableSources() {
         const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         const QString group = QUuid::createUuid().toString(QUuid::WithoutBraces);
         auto record = recordWithId(id, patternedImage(QSize(29, 13), 3));
+        if (source == 0) {
+            record.image.setPixelColor(0, 0, Qt::transparent);
+        }
+        record.checkerboardEnabled = source == 0;
         const QImage originalImage = record.image;
         const QByteArray encoded = pngBytes(originalImage, 8);
         if (source == 1) {
@@ -120,6 +142,7 @@ void stateUpdatesBeforeFirstFlushPreserveRestorableSources() {
                     "move pin into inactive group and activate it");
             const auto beforeFlush = repository.loadRecord(id);
             require(beforeFlush && beforeFlush->groupId == group &&
+                        beforeFlush->checkerboardEnabled == record.checkerboardEnabled &&
                         beforeFlush->canvasSession == record.canvasSession &&
                         beforeFlush->recognitionResults == record.recognitionResults &&
                         (source == 1 ? beforeFlush->originalHtml == record.originalHtml
@@ -130,13 +153,59 @@ void stateUpdatesBeforeFirstFlushPreserveRestorableSources() {
         storage::PinnedWindowRepository reopened(directory.path(), false);
         const auto restored = reopened.loadRecord(id);
         require(reopened.summaries().size() == 1 && reopened.activeGroupId() == group && restored &&
-                    restored->groupId == group && restored->canvasSession == record.canvasSession &&
+                    restored->groupId == group &&
+                    restored->checkerboardEnabled == record.checkerboardEnabled &&
+                    restored->canvasSession == record.canvasSession &&
                     restored->recognitionResults == record.recognitionResults &&
                     (source == 1 ? restored->originalText == record.originalText &&
                                        restored->originalHtml == record.originalHtml
                                  : samePixels(restored->image, originalImage)),
                 "restart must retain group count, source, annotations, and recognition");
     }
+}
+
+void allocationAdmissionPrecedesSourceDecode() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary storage directory is unavailable");
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const auto image = patternedImage(QSize(81, 63), 23);
+    auto record = recordWithId(id, image);
+    record.canvasSession = QByteArrayLiteral("retained editor session");
+    record.originalText = QStringLiteral("retained source text");
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const auto prepared = storage::PreparedPngImage::fromBytes(
+        image.size(), std::make_shared<const QByteArray>(pngBytes(image, 8)));
+    require(prepared && repository.create(record, *prepared).success && repository.flush().success,
+            "publish pinned source admission fixture");
+    int rejectedCalls = 0;
+    require(!repository.loadRecord(
+                id,
+                [&](qint64 bytes) {
+                    ++rejectedCalls;
+                    require(bytes > 0, "pin admission must include retained text/session payloads");
+                    return false;
+                }) &&
+                rejectedCalls == 1,
+            "rejected pin payload must stop before reading or decoding the image");
+    qint64 peak = 0;
+    const auto accepted = repository.loadRecord(id, [&](qint64 bytes) {
+        peak = std::max(peak, bytes);
+        return true;
+    });
+    require(accepted && samePixels(accepted->image, image) && peak >= 2 * image.sizeInBytes() &&
+                accepted->canvasSession == record.canvasSession,
+            "pin admission must account for decoded buffers and preserve source payloads");
+    int decodedReservations = 0;
+    require(!repository.loadRecord(id,
+                                   [&](qint64 bytes) {
+                                       if (bytes >= 2 * image.sizeInBytes()) {
+                                           ++decodedReservations;
+                                           return false;
+                                       }
+                                       return true;
+                                   }) &&
+                decodedReservations == 1,
+            "encoded pin may be admitted while decoded raster allocation is rejected");
 }
 
 void preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt() {
@@ -183,6 +252,11 @@ void preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt() {
     require(cleared.has_value() && cleared->canvasSession.isEmpty() &&
                 samePixels(cleared->image, persisted),
             "cleared pinned state left a stale payload descriptor");
+    require(
+        !QFileInfo::exists(
+            QDir(directory.path())
+                .filePath(QStringLiteral("pinned_windows_v2/pins/%1/canvas_session.bin").arg(id))),
+        "a committed state removal must prune its obsolete payload file");
 }
 
 // Invariant: payload data is available before the writer commits it and is
@@ -230,6 +304,267 @@ void committedPayloadsAreServedFromDisk() {
             "the committed lazy record did not survive a repository restart");
 }
 
+void manifestFailuresReleaseWrittenPayloadsAndRetryMetadata() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary storage directory is unavailable");
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString manifestPath =
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
+    const QImage expected = patternedImage(QSize(33, 17), 7);
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        require(QDir().mkpath(manifestPath), "block the manifest commit");
+        std::weak_ptr<int> lifetime;
+        auto record = recordWithId(id, trackedImage(&lifetime, 7));
+        record.originalHtml = QStringLiteral("<p>original</p>");
+        record.originalText = QStringLiteral("original");
+        record.resultStyle = QByteArrayLiteral("style");
+        record.canvasSession = QByteArrayLiteral("annotations");
+        record.recognitionResults = QByteArrayLiteral("recognition");
+        require(repository.upsert(std::move(record)).success &&
+                    repository.markClosedDeferred(id).success,
+                "save and close a pin before its first commit");
+        require(!repository.flush().success && lifetime.expired(),
+                "a manifest failure must release completely written image buffers");
+        const auto loaded = repository.loadRecord(id);
+        require(loaded && loaded->ignored && samePixels(loaded->image, expected) &&
+                    loaded->originalHtml == QStringLiteral("<p>original</p>") &&
+                    loaded->originalText == QStringLiteral("original") &&
+                    loaded->resultStyle == QByteArrayLiteral("style") &&
+                    loaded->canvasSession == QByteArrayLiteral("annotations") &&
+                    loaded->recognitionResults == QByteArrayLiteral("recognition"),
+                "uncommitted metadata must still reload its written payloads");
+        QFile source(payloadFilePath(directory.path(), id));
+        const QDateTime originalTimestamp =
+            QDateTime::fromString(QStringLiteral("2000-01-01T00:00:00Z"), Qt::ISODate);
+        require(source.open(QIODevice::ReadWrite) &&
+                    source.setFileTime(originalTimestamp, QFileDevice::FileModificationTime),
+                "stamp the independently written source");
+        source.close();
+        require(QDir(manifestPath).removeRecursively() && repository.flush().success,
+                "retry the manifest after storage recovers");
+        require(QFileInfo(source.fileName()).lastModified() == originalTimestamp,
+                "a manifest retry must not rewrite already durable payloads");
+    }
+    storage::PinnedWindowRepository reopened(directory.path(), false);
+    const auto restored = reopened.loadRecord(id);
+    require(restored && restored->ignored && samePixels(restored->image, expected) &&
+                restored->canvasSession == QByteArrayLiteral("annotations"),
+            "recovered manifest metadata and payloads must survive restart");
+}
+
+void partialPayloadFailuresDemoteOnlyCompleteRevisions() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary storage directory is unavailable");
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const QString firstId = QStringLiteral("11111111-1111-4111-8111-111111111111");
+    const QString secondId = QStringLiteral("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee");
+    const QString blockedSession = QDir(directory.path())
+                                       .filePath(QStringLiteral("pinned_windows_v2/pins/%1/"
+                                                                "canvas_session.bin")
+                                                     .arg(secondId));
+    require(QDir().mkpath(blockedSession), "block the second record's session write");
+    std::weak_ptr<int> firstLifetime;
+    std::weak_ptr<int> secondLifetime;
+    auto first = recordWithId(firstId, trackedImage(&firstLifetime, 11));
+    first.canvasSession = QByteArrayLiteral("first annotations");
+    auto second = recordWithId(secondId, trackedImage(&secondLifetime, 13));
+    second.canvasSession = QByteArrayLiteral("second annotations");
+    require(repository.upsert(std::move(first)).success &&
+                repository.upsert(std::move(second)).success && !repository.flush().success,
+            "fail after writing one complete record and part of the next");
+    require(firstLifetime.expired() && !secondLifetime.expired(),
+            "only the completely written payload revision may release its image");
+    {
+        const auto loaded = repository.loadRecord(secondId);
+        require(loaded && loaded->canvasSession == QByteArrayLiteral("second annotations") &&
+                    samePixels(loaded->image, patternedImage(QSize(33, 17), 13)),
+                "a partially written record must preserve its complete resident source");
+    }
+    std::weak_ptr<int> replacementLifetime;
+    auto replacement = recordWithId(firstId, trackedImage(&replacementLifetime, 17));
+    replacement.canvasSession = QByteArrayLiteral("replacement annotations");
+    require(repository.upsertExisting(std::move(replacement)).success &&
+                !replacementLifetime.expired(),
+            "an older written revision must not demote a new source replacement");
+    require(QDir(blockedSession).removeRecursively() && repository.flush().success &&
+                replacementLifetime.expired() && secondLifetime.expired(),
+            "successful retry must release the remaining original image buffers");
+    const auto loaded = repository.loadRecord(firstId);
+    require(loaded && loaded->canvasSession == QByteArrayLiteral("replacement annotations") &&
+                samePixels(loaded->image, patternedImage(QSize(33, 17), 17)),
+            "retry must reload the replacement rather than an older source revision");
+
+    const QString abandonedId = QStringLiteral("ffffffff-ffff-4fff-8fff-ffffffffffff");
+    const QString abandonedDirectory =
+        QDir(directory.path())
+            .filePath(QStringLiteral("pinned_windows_v2/pins/%1").arg(abandonedId));
+    require(QDir().mkpath(QDir(abandonedDirectory).filePath(QStringLiteral("canvas_session.bin"))),
+            "block a payload that will be deleted before its first manifest commit");
+    auto abandoned = recordWithId(abandonedId, patternedImage(QSize(33, 17), 31));
+    abandoned.canvasSession = QByteArrayLiteral("abandoned annotations");
+    require(repository.upsert(std::move(abandoned)).success && !repository.flush().success &&
+                repository.remove(abandonedId).success && repository.flush().success &&
+                !QFileInfo::exists(abandonedDirectory),
+            "deleting a partially written record must reclaim its uncommitted payload directory");
+}
+
+void failedManifestSourceReplacementsKeepCurrentPayloadDescriptors() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary storage directory is unavailable");
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const QString manifestPath =
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
+    require(QDir().mkpath(manifestPath), "block replacement manifest commits");
+    const QString importedPath = QDir(directory.path()).filePath(QStringLiteral("imported.png"));
+    const QImage expected = patternedImage(QSize(33, 17), 19);
+    require(expected.save(importedPath), "save replacement file source");
+    for (int source = 0; source < 3; ++source) {
+        auto record = recordWithId(id, expected);
+        record.canvasSession = QByteArrayLiteral("old annotations");
+        record.recognitionResults = QByteArrayLiteral("old recognition");
+        if (source == 1) {
+            record.sourceKind = storage::PinnedWindowSourceKind::ClipboardImageFile;
+            record.originalFilePath = importedPath;
+            record.originalFileName = QStringLiteral("imported.png");
+        } else if (source == 2) {
+            record.sourceKind = storage::PinnedWindowSourceKind::ClipboardText;
+            record.image = {};
+            record.originalText = QStringLiteral("replacement text");
+            record.originalHtml = QStringLiteral("<b>replacement text</b>");
+        }
+        require(repository.upsert(std::move(record)).success && !repository.flush().success,
+                "write a source replacement while its manifest remains blocked");
+        const auto loaded = repository.loadRecord(id);
+        require(loaded && loaded->canvasSession == QByteArrayLiteral("old annotations") &&
+                    (source == 2
+                         ? loaded->sourceKind == storage::PinnedWindowSourceKind::ClipboardText &&
+                               loaded->originalText == QStringLiteral("replacement text") &&
+                               loaded->originalHtml == QStringLiteral("<b>replacement text</b>")
+                         : samePixels(loaded->image, expected)),
+                "each written replacement must reload its own source kind and descriptor");
+        if (source == 1) {
+            require(
+                QFile::remove(importedPath) && !repository.flush().success &&
+                    repository.loadRecord(id).has_value(),
+                "manifest retry must use the private file after its external source disappears");
+        }
+    }
+    auto state = *repository.loadRecord(id);
+    state.canvasSession = QByteArrayLiteral("new annotations");
+    state.recognitionResults = QByteArrayLiteral("new recognition");
+    require(repository.updateState(state).success, "update demoted state before retry");
+    const auto beforeFlush = repository.loadRecord(id);
+    require(beforeFlush && beforeFlush->canvasSession == state.canvasSession &&
+                beforeFlush->recognitionResults == state.recognitionResults,
+            "lazy source reload must not overwrite newer resident state with older disk bytes");
+    require(!repository.flush().success && QDir(manifestPath).removeRecursively() &&
+                repository.flush().success,
+            "commit the final replacement after manifest recovery");
+    storage::PinnedWindowRepository reopened(directory.path(), false);
+    const auto restored = reopened.loadRecord(id);
+    require(restored && restored->sourceKind == storage::PinnedWindowSourceKind::ClipboardText &&
+                restored->canvasSession == state.canvasSession &&
+                restored->recognitionResults == state.recognitionResults &&
+                !QFileInfo::exists(payloadFilePath(directory.path(), id)),
+            "final metadata must restore current text/state and prune obsolete image payloads");
+}
+
+void continuousChangesDoNotPostponePayloadWrites() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary storage directory is unavailable");
+    storage::PinnedWindowRepository repository(directory.path(), true, 200);
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, patternedImage(QSize(33, 17), 23));
+    require(repository.upsert(record).success, "queue a source with a debounce deadline");
+    const QString manifestPath =
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
+    QElapsedTimer timeout;
+    timeout.start();
+    while (!QFileInfo::exists(manifestPath) && timeout.elapsed() < 3000) {
+        record.opacityPercent = record.opacityPercent == 100 ? 99 : 100;
+        require(repository.updateState(record).success, "keep changing queued pin metadata");
+        QThread::msleep(1);
+    }
+    require(QFileInfo::exists(manifestPath),
+            "continuous mutations must not postpone the first payload commit indefinitely");
+    const auto loaded = repository.loadRecord(id);
+    require(loaded && loaded->image.cacheKey() != record.image.cacheKey(),
+            "the continuously updated record must release its original resident source");
+}
+
+void residentPayloadPressureBypassesLongDebounce() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary storage directory is unavailable");
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    std::weak_ptr<int> lifetime;
+    auto record = recordWithId(id, trackedImage(&lifetime, 29));
+    constexpr qsizetype bytes = 24 * 1024 * 1024;
+    record.resultStyle = QByteArray(bytes, 's');
+    record.canvasSession = QByteArray(bytes, 'c');
+    record.recognitionResults = QByteArray(bytes, 'r');
+    require(repository.upsert(std::move(record)).success, "queue a large resident payload batch");
+    QElapsedTimer timeout;
+    timeout.start();
+    while (!lifetime.expired() && timeout.elapsed() < 3000)
+        QThread::msleep(1);
+    require(lifetime.expired(),
+            "resident payload pressure must trigger a write before the long debounce expires");
+    const auto loaded = repository.loadRecord(id);
+    require(loaded && loaded->resultStyle.size() == bytes && loaded->resultStyle.front() == 's' &&
+                loaded->canvasSession.size() == bytes && loaded->canvasSession.front() == 'c' &&
+                loaded->recognitionResults.size() == bytes &&
+                loaded->recognitionResults.front() == 'r',
+            "pressure-triggered demotion must preserve every state payload");
+}
+
+void missingOptionalPayloadDoesNotHideRestorableImage() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary storage directory is unavailable");
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QImage image = patternedImage(QSize(33, 17), 8);
+    auto record = recordWithId(id, image);
+    record.canvasSession = QByteArrayLiteral("drawing");
+    record.recognitionResults = QByteArrayLiteral("recognition");
+    const QString missingPath =
+        QDir(directory.path())
+            .filePath(QStringLiteral("pinned_windows_v2/pins/%1/recognition_results.bin").arg(id));
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        require(repository.upsert(record).success && repository.flush().success,
+                "commit the pin with optional recognition results");
+        require(QFile::remove(missingPath), "simulate an interrupted optional-payload cleanup");
+        const auto loaded = repository.loadRecord(id);
+        require(loaded && samePixels(loaded->image, image) &&
+                    loaded->canvasSession == record.canvasSession &&
+                    loaded->recognitionResults.isEmpty(),
+                "a missing optional payload must not block full image loading or restore");
+    }
+    storage::PinnedWindowRepository reopened(directory.path(), true, 30000);
+    const auto loaded = reopened.loadRecord(id);
+    require(loaded && samePixels(loaded->image, image) &&
+                loaded->canvasSession == record.canvasSession &&
+                loaded->recognitionResults.isEmpty(),
+            "a missing optional payload must not hide the pin after restart");
+    require(reopened.markClosed(id).success && reopened.flush().success,
+            "persist the recovered record");
+    const QJsonObject manifest =
+        QJsonDocument::fromJson(
+            readBytes(
+                QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"))))
+            .object();
+    const QJsonObject payloads = manifest.value(QStringLiteral("records"))
+                                     .toArray()
+                                     .first()
+                                     .toObject()
+                                     .value(QStringLiteral("payloads"))
+                                     .toObject();
+    require(!payloads.contains(QStringLiteral("recognition_results")),
+            "the recovered index must drop the missing optional payload reference");
+}
+
 // Invariant: demotion must not corrupt payload identity. A metadata-only
 // update after a commit reuses the committed payload instead of re-encoding
 // and re-writing it.
@@ -254,6 +589,16 @@ void metadataOnlyUpdatesDoNotRewriteCommittedPayloads() {
     require(repository.flush().success, "failed to flush the metadata update");
     require(payload.lastModified() == committedAt,
             "a metadata-only update re-wrote the committed payload");
+
+    const QString sessionPath =
+        QDir(directory.path())
+            .filePath(QStringLiteral("pinned_windows_v2/pins/%1/canvas_session.bin").arg(id));
+    const QFileInfo session(sessionPath);
+    const QDateTime sessionCommittedAt = session.lastModified();
+    record.opacityPercent = 87;
+    require(repository.updateState(record).success && repository.flush().success &&
+                session.lastModified() == sessionCommittedAt,
+            "a state-only update must not rewrite an unchanged drawing session");
 
     const auto updated = repository.loadRecord(id);
     require(updated.has_value() && updated->nativeGeometry == QRect(16, 12, 2, 2),
@@ -534,7 +879,7 @@ void alwaysOnTopStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
     auto record = recordWithId(id, patternedImage(QSize(200, 100), 5));
     record.alwaysOnTop = false;
     const QString manifest =
-        QDir(directory.path()).filePath(QStringLiteral("pinned_windows/index.json"));
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
     {
         storage::PinnedWindowRepository repository(directory.path());
         require(repository.upsert(record).success && repository.flush().success,
@@ -571,6 +916,138 @@ void alwaysOnTopStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
     const auto loaded = repository.loadRecord(id);
     require(loaded.has_value() && loaded->alwaysOnTop,
             "legacy records must restore with always-on-top enabled");
+}
+void pinSourceIdentitySurvivesRestart() {
+    QTemporaryDir directory;
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, patternedImage(QSize(20, 10), 5));
+    const QString sourcePath = directory.filePath(QStringLiteral("original.png"));
+    require(record.image.save(sourcePath), "save original file fixture");
+    record.sourceKind = storage::PinnedWindowSourceKind::ClipboardImageFile;
+    record.originalFilePath = sourcePath;
+    record.sourceIdentity = {QStringLiteral("file:") + sourcePath};
+    const auto identity = record.sourceIdentity;
+    const QString manifest =
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
+    {
+        storage::PinnedWindowRepository repository(directory.path());
+        require(repository.upsert(record).success && repository.flush().success,
+                "commit source identity");
+        const auto stored = repository.loadRecord(id);
+        require(stored && stored->sourceIdentity == identity &&
+                    stored->originalFilePath != sourcePath,
+                "original identity survives rewriting file paths to a private copy");
+        record.sourceIdentity = {};
+        record.nativeGeometry.translate(20, 30);
+        require(repository.updateState(record).success && repository.flush().success,
+                "ordinary state updates preserve immutable source identity");
+    }
+    {
+        storage::PinnedWindowRepository repository(directory.path());
+        require(repository.sourceIdentity(id) == identity,
+                "source identity is available before image loading");
+        const auto restored = repository.loadRecord(id);
+        require(restored && restored->sourceIdentity == identity,
+                "source identity survives restart");
+    }
+    auto root = QJsonDocument::fromJson(readBytes(manifest)).object();
+    auto records = root.value(QStringLiteral("records")).toArray();
+    auto item = records.first().toObject();
+    item.remove(QStringLiteral("pin_source_identity"));
+    records.replace(0, item);
+    root.insert(QStringLiteral("records"), records);
+    QFile file(manifest);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "open legacy identity fixture");
+    file.write(QJsonDocument(root).toJson());
+    file.close();
+    storage::PinnedWindowRepository repository(directory.path());
+    const auto legacy = repository.loadRecord(id);
+    require(legacy && !legacy->sourceIdentity.isValid(),
+            "legacy records remain readable without invented identity");
+}
+
+void showBorderStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary show border storage is unavailable");
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, patternedImage(QSize(200, 100), 5));
+    record.showBorder = false;
+    record.borderAppearance =
+        storage::PinnedBorderAppearance{QSize(200, 100), QRectF(8, 8, 184, 84), 16.0, true, {}};
+    const QString manifest =
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
+    {
+        storage::PinnedWindowRepository repository(directory.path());
+        require(repository.upsert(record).success && repository.flush().success,
+                "the show border opt-out must be committed to disk");
+        const auto demoted = repository.loadRecord(id);
+        require(demoted.has_value() && !demoted->showBorder &&
+                    demoted->borderAppearance == record.borderAppearance,
+                "the show border opt-out must survive payload demotion");
+        record.showBorder = true;
+        require(repository.updateState(record).success && repository.flush().success,
+                "re-enabling the border must update persisted metadata");
+    }
+    {
+        storage::PinnedWindowRepository repository(directory.path());
+        const auto loaded = repository.loadRecord(id);
+        require(loaded.has_value() && loaded->showBorder &&
+                    loaded->borderAppearance == record.borderAppearance,
+                "show border state must survive repository recreation");
+    }
+
+    // Records saved before the preference existed always rendered their rim,
+    // so a missing key must restore with the border visible.
+    auto root = QJsonDocument::fromJson(readBytes(manifest)).object();
+    auto records = root.value(QStringLiteral("records")).toArray();
+    auto item = records.at(0).toObject();
+    item.remove(QStringLiteral("show_border"));
+    item.remove(QStringLiteral("border_appearance"));
+    records.replace(0, item);
+    root.insert(QStringLiteral("records"), records);
+    QFile file(manifest);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate),
+            "open show border legacy fixture");
+    const QByteArray bytes = QJsonDocument(root).toJson();
+    require(file.write(bytes) == bytes.size(), "write show border legacy fixture");
+    file.close();
+    storage::PinnedWindowRepository repository(directory.path());
+    const auto loaded = repository.loadRecord(id);
+    require(loaded.has_value() && loaded->showBorder && !loaded->borderAppearance,
+            "legacy records must restore with the border visible");
+}
+void malformedCustomBorderRejectsRecord() {
+    QTemporaryDir directory;
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, patternedImage(QSize(200, 100), 5));
+    record.borderAppearance =
+        storage::PinnedBorderAppearance{QSize(200, 100), QRectF(0, 0, 200, 100), 0, false, {}};
+    QPainterPath shape;
+    shape.addEllipse(QRectF(0, 0, 200, 100));
+    record.borderAppearance->region =
+        ScreenshotRegionGeometry::fromPath(shape, ScreenshotRegionType::Curve);
+    {
+        storage::PinnedWindowRepository repository(directory.path());
+        require(repository.upsert(record).success && repository.flush().success,
+                "save custom pin fixture");
+    }
+    const auto manifest =
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
+    auto root = QJsonDocument::fromJson(readBytes(manifest)).object();
+    auto records = root.value(QStringLiteral("records")).toArray();
+    auto item = records.first().toObject();
+    auto border = item.value(QStringLiteral("border_appearance")).toObject();
+    border.insert(QStringLiteral("geometry"), QJsonObject{{QStringLiteral("version"), 999}});
+    item.insert(QStringLiteral("border_appearance"), border);
+    records[0] = item;
+    root.insert(QStringLiteral("records"), records);
+    QFile file(manifest);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "open malformed pin fixture");
+    file.write(QJsonDocument(root).toJson());
+    file.close();
+    storage::PinnedWindowRepository repository(directory.path());
+    require(!repository.loadRecord(id),
+            "malformed custom outline must not restore as a bounding rectangle");
 }
 void thumbnailStateSurvivesRestartAndExit() {
     QTemporaryDir directory;
@@ -678,6 +1155,8 @@ void precisePlacementAndPreviousVersionIsolation() {
     oldFile.close();
     const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     auto record = recordWithId(id, patternedImage(QSize(321, 181), 9));
+    record.initialWindowSize = QSize(301, 201);
+    record.screenDpi = 2.;
     record.placement = {QStringLiteral("Retina"), QStringLiteral("display-serial"),
                         QPointF(-10.5, 38.5), QSize(321, 181)};
     record.preThumbnailPlacement = {QStringLiteral("External"), QStringLiteral("external-serial"),
@@ -693,19 +1172,426 @@ void precisePlacementAndPreviousVersionIsolation() {
     const auto loaded = restored.loadRecord(id);
     require(loaded && loaded->placement == record.placement &&
                 loaded->preThumbnailPlacement == record.preThumbnailPlacement &&
-                loaded->hideToTopPlacement == record.hideToTopPlacement,
+                loaded->hideToTopPlacement == record.hideToTopPlacement &&
+                loaded->initialWindowSize == record.initialWindowSize &&
+                loaded->image.size() == record.image.size() &&
+                loaded->placement.units == storage::kPinnedGeometryUnits,
             "all placement states must retain display identity and fractional point positions");
     require(readBytes(oldIndex) == oldBytes,
             "version two must not modify or reinterpret previous-version storage");
 }
+
+void managementLifecycleAndRetention() {
+    QTemporaryDir directory;
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const auto now = QDateTime::currentDateTimeUtc();
+    const auto make = [&]() {
+        return recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                            patternedImage({8, 8}, 1));
+    };
+    auto first = make();
+    first.creationSource = storage::PinnedWindowCreationSource::Clipboard;
+    auto second = make();
+    auto protectedRecord = make();
+    require(repository.upsert(first).success && repository.upsert(second).success &&
+                repository.upsert(protectedRecord).success,
+            "create management records");
+    const auto original = repository.loadRecord(first.id);
+    require(original && original->createdUtc.isValid() && !original->ignored,
+            "new pins must have creation metadata and be retained");
+    require(repository.markClosed(first.id, now).success &&
+                repository.markClosed(second.id, now).success,
+            "close pins");
+    require(repository.loadRecord(second.id)->activitySequence >
+                repository.loadRecord(first.id)->activitySequence,
+            "equal-time closes must retain deterministic order");
+    require(repository.updateState(first).success, "stale snapshot update");
+    auto closed = repository.loadRecord(first.id);
+    require(closed->ignored &&
+                closed->creationSource == storage::PinnedWindowCreationSource::Clipboard &&
+                closed->createdUtc == original->createdUtc,
+            "state updates must preserve lifecycle metadata");
+    auto policy = repository.policy();
+    policy.maxEntries = 1;
+    require(repository.setPolicy(policy).success, "set closed-record count limit");
+    require(!repository.loadRecord(first.id) && repository.loadRecord(second.id) &&
+                repository.loadRecord(protectedRecord.id),
+            "prune oldest closed pin without affecting retained pins");
+    require(!repository.upsertExisting(first).success,
+            "late state save must not recreate pruned record");
+    require(repository.markRestored(second.id).success &&
+                !repository.loadRecord(second.id)->ignored,
+            "restore must unignore record");
+    require(repository.clearClosed().success && repository.summaries().size() == 2,
+            "clear closed must protect restored pins");
+    auto pending = make();
+    repository.reserveCreation(pending.id);
+    require(repository.markClosed(pending.id, now).success && repository.upsert(pending).success &&
+                repository.loadRecord(pending.id)->ignored,
+            "close before first image publication must survive");
+    require(repository.remove(pending.id).success && !repository.upsertExisting(pending).success,
+            "destroy blocks late state publication");
+    require(repository.markClosed(second.id, now).success, "close before disabling history");
+    policy.enabled = false;
+    require(repository.setPolicy(policy).success, "disable closed history");
+    require(repository.loadRecord(second.id).has_value(),
+            "disabling keeps existing closed records");
+    require(repository.markClosed(protectedRecord.id, now).success &&
+                !repository.loadRecord(protectedRecord.id),
+            "future closes delete when disabled");
+    require(repository.flush().success, "flush management metadata");
+    storage::PinnedWindowRepository reloaded(directory.path(), true, 30000);
+    const auto restored = reloaded.loadRecord(second.id);
+    require(restored && restored->ignored && restored->lastClosedUtc == now &&
+                restored->activitySequence > 0,
+            "closed lifecycle survives restart");
+    policy.enabled = true;
+    policy.retentionDays = 1;
+    require(reloaded.setPolicy(policy).success && reloaded.enforcePolicy(now.addDays(2)).success &&
+                reloaded.summaries().isEmpty(),
+            "retention age uses close date");
+}
+
+void managementDiskQuotaAndRestorationProtection() {
+    QTemporaryDir directory;
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const auto make = [&]() {
+        return recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                            patternedImage({2, 2}, 1));
+    };
+    auto active = make();
+    auto closed = make();
+    require(repository.upsert(active).success && repository.upsert(closed).success,
+            "seed quota records");
+    auto policy = repository.policy();
+    policy.keepPermanently = true;
+    policy.maxDiskMiB = 128;
+    require(repository.setPolicy(policy).success && repository.markClosed(closed.id).success &&
+                repository.flush().success,
+            "persist quota fixture");
+    for (const auto& id : {active.id, closed.id}) {
+        QFile payload(payloadFilePath(directory.path(), id));
+        require(payload.open(QIODevice::ReadWrite) && payload.resize(129LL * 1024 * 1024),
+                "extend payload for deterministic byte accounting");
+    }
+    require(repository.enforcePolicy().success && repository.summaries().size() == 2,
+            "permanent retention bypasses disk quota");
+    require(repository.beginRestore(closed.id).success &&
+                !repository.beginRestore(closed.id).success,
+            "restoration reservation excludes duplicate attempts");
+    policy.keepPermanently = false;
+    require(repository.setPolicy(policy).success && repository.summaries().size() == 2,
+            "quota must protect an in-flight restoration");
+    repository.cancelRestore(closed.id);
+    require(repository.enforcePolicy().success && repository.summaries().size() == 1 &&
+                repository.summaries().front().id == active.id,
+            "quota removes closed bytes and never active pins");
+}
+
+void membershipAndPreviewRevisionsTrackOnlyTheirSources() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "revision fixture needs a directory");
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    quint64 previewRevision = 0;
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        auto record = recordWithId(id, patternedImage({12, 8}, 1));
+        require(repository.upsert(record).success, "create revision fixture");
+        const quint64 membershipRevision = repository.membershipRevision();
+        previewRevision = *repository.previewSourceRevision(id);
+        record.opacityPercent = 70;
+        require(repository.updateState(record).success &&
+                    repository.membershipRevision() == membershipRevision &&
+                    repository.previewSourceRevision(id) == previewRevision,
+                "state-only saves must not rebuild membership or thumbnails");
+        require(repository.markClosed(id).success &&
+                    repository.membershipRevision() > membershipRevision,
+                "closing a pin changes membership");
+        const quint64 closedRevision = repository.membershipRevision();
+        require(repository.markRestored(id).success &&
+                    repository.membershipRevision() > closedRevision,
+                "restoring a pin changes membership");
+        record.image = patternedImage({12, 8}, 2);
+        require(repository.upsert(record).success, "change preview source");
+        previewRevision = *repository.previewSourceRevision(id);
+        require(repository.flush().success, "commit stable preview revision");
+    }
+    {
+        storage::PinnedWindowRepository reloaded(directory.path(), true, 30000);
+        require(reloaded.previewSourceRevision(id) == previewRevision,
+                "disk thumbnail keys must remain stable across restart");
+        require(reloaded.remove(id).success && reloaded.flush().success,
+                "remove source before reusing its id");
+    }
+    storage::PinnedWindowRepository recreated(directory.path(), true, 30000);
+    require(recreated.upsert(recordWithId(id, patternedImage({12, 8}, 3))).success &&
+                *recreated.previewSourceRevision(id) > previewRevision,
+            "recreated ids must not reuse a stale disk thumbnail key");
+}
+
+void deferredPolicyEnforcementRunsOnlyWhenRequested() {
+    QTemporaryDir directory;
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    auto first =
+        recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces), patternedImage({2, 2}, 1));
+    auto second =
+        recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces), patternedImage({2, 2}, 2));
+    require(repository.upsert(first).success && repository.upsert(second).success &&
+                repository.markClosedDeferred(first.id).success &&
+                repository.markClosedDeferred(second.id).success,
+            "seed closed pins without a synchronous sweep");
+    auto policy = repository.policy();
+    policy.maxEntries = 1;
+    require(repository.setPolicy(policy, false).success && repository.summaries().size() == 2,
+            "deferred policy update leaves cleanup to the maintenance worker");
+    require(repository.enforcePolicy().success && repository.summaries().size() == 1,
+            "maintenance applies the deferred policy");
+}
+
+void managementPolicySizeCacheTracksPayloadCommits() {
+    QTemporaryDir directory;
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    auto record =
+        recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces), patternedImage({2, 2}, 1));
+    auto policy = repository.policy();
+    policy.maxDiskMiB = 128;
+    require(repository.setPolicy(policy).success && repository.upsert(record).success &&
+                repository.markClosed(record.id).success && repository.flush().success &&
+                repository.enforcePolicy().success,
+            "warm closed-record disk usage");
+
+    auto changed = repository.loadRecord(record.id);
+    require(changed.has_value(), "load closed record before payload update");
+    changed->canvasSession = QByteArrayLiteral("changed canvas state");
+    require(repository.updateState(*changed).success && repository.flush().success,
+            "commit changed payload after disk usage was cached");
+    QFile payload(payloadFilePath(directory.path(), record.id));
+    require(payload.open(QIODevice::ReadWrite) && payload.resize(129LL * 1024 * 1024),
+            "extend committed payload for deterministic quota accounting");
+    require(repository.enforcePolicy().success && !repository.loadRecord(record.id),
+            "payload commit invalidates cached disk usage before quota enforcement");
+}
+
+void managementCreationOrderSurvivesOutOfOrderEncoding() {
+    QTemporaryDir directory;
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const auto now = QDateTime::currentDateTimeUtc();
+    auto first =
+        recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces), patternedImage({2, 2}, 1));
+    auto second = first;
+    second.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    repository.reserveCreation(first.id, now);
+    repository.reserveCreation(second.id, now);
+    require(repository.upsert(second).success && repository.upsert(first).success,
+            "image encoding may finish in reverse creation order");
+    require(repository.loadRecord(first.id)->activitySequence <
+                    repository.loadRecord(second.id)->activitySequence &&
+                repository.loadRecord(first.id)->createdUtc == now,
+            "creation order and date belong to window creation, not encoding completion");
+}
+
+void managementExpiresBeforeApplyingQuotas() {
+    QTemporaryDir directory;
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const auto now = QDateTime::currentDateTimeUtc();
+    auto policy = repository.policy();
+    policy.keepPermanently = true;
+    policy.maxEntries = 1;
+    require(repository.setPolicy(policy).success, "suspend cleanup for clock-change fixture");
+    const auto retained =
+        recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces), patternedImage({2, 2}, 1));
+    auto expired = retained;
+    expired.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    require(repository.upsert(retained).success && repository.upsert(expired).success &&
+                repository.markClosed(retained.id, now).success &&
+                repository.markClosed(expired.id, now.addDays(-8)).success,
+            "close records across a backward wall-clock adjustment");
+    policy.keepPermanently = false;
+    require(repository.setPolicy(policy).success && repository.summaries().size() == 1 &&
+                repository.loadRecord(retained.id).has_value(),
+            "expired records must be removed before count quota consumes an unexpired record");
+}
+
+void managementLegacyMetadataDefaults() {
+    QTemporaryDir directory;
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    {
+        storage::PinnedWindowRepository repository(directory.path());
+        require(repository.upsert(recordWithId(id, patternedImage({2, 2}, 1))).success &&
+                    repository.flush().success,
+                "write legacy fixture");
+    }
+    const QString path =
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
+    auto root = QJsonDocument::fromJson(readBytes(path)).object();
+    auto entries = root.value(QStringLiteral("records")).toArray();
+    auto item = entries[0].toObject();
+    for (const auto* key :
+         {"creation_source", "created_utc", "last_closed_utc", "ignored", "activity_sequence"})
+        item.remove(QString::fromLatin1(key));
+    entries[0] = item;
+    root.insert(QStringLiteral("records"), entries);
+    QFile file(path);
+    require(file.open(QIODevice::WriteOnly), "edit legacy fixture");
+    file.write(QJsonDocument(root).toJson());
+    file.close();
+    storage::PinnedWindowRepository repository(directory.path());
+    const auto loaded = repository.loadRecord(id);
+    require(loaded && !loaded->ignored &&
+                loaded->creationSource == storage::PinnedWindowCreationSource::Other &&
+                loaded->createdUtc == loaded->updatedUtc,
+            "legacy records remain retained with recoverable metadata");
+}
+
+void managementHasNoTotalRecordCap() {
+    QTemporaryDir directory;
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    for (int i = 0; i < 140; ++i) {
+        auto record = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                                   patternedImage({2, 2}, i));
+        require(repository.upsert(record).success,
+                "active pins must not be capped by closed-history limits");
+    }
+    require(repository.flush().success, "flush more than 128 pins");
+    storage::PinnedWindowRepository reloaded(directory.path());
+    require(reloaded.summaries().size() == 140, "loading must not truncate at 128 pins");
+}
+
+void previewsReadOnlySourcePayloadAndKeepStableRevision() {
+    QTemporaryDir directory;
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    auto record = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                               patternedImage({64, 32}, 7));
+    record.canvasSession = QByteArrayLiteral("first drawing");
+    record.recognitionResults = QByteArrayLiteral("first recognition");
+    require(repository.upsert(record).success && repository.flush().success,
+            "save preview source with unrelated payloads");
+
+    const auto revision = repository.previewSourceRevision(record.id);
+    const auto preview = repository.loadPreviewSource(record.id);
+    require(revision && preview && samePixels(preview->image, record.image) &&
+                preview->originalHtml.isEmpty() && preview->originalText.isEmpty(),
+            "preview reads the saved source image");
+
+    const QString extraPath =
+        QDir(directory.path())
+            .filePath(
+                QStringLiteral("pinned_windows_v2/pins/%1/canvas_session.bin").arg(record.id));
+    require(QFile::remove(extraPath), "remove unrelated drawing payload");
+    const auto recovered = repository.loadRecord(record.id);
+    require(repository.loadPreviewSource(record.id).has_value() && recovered &&
+                samePixels(recovered->image, record.image) && recovered->canvasSession.isEmpty(),
+            "a missing drawing payload must not hide the restorable source image");
+
+    record.canvasSession = QByteArrayLiteral("second drawing");
+    require(repository.updateState(record).success &&
+                repository.previewSourceRevision(record.id) == revision,
+            "drawing updates do not invalidate the source preview");
+    require(repository.upsert(record).success &&
+                repository.previewSourceRevision(record.id) == revision,
+            "a subsequent state save keeps the immutable source revision");
+    record.image = patternedImage({64, 32}, 19);
+    require(repository.upsert(record).success &&
+                repository.previewSourceRevision(record.id) != revision,
+            "replacing image content invalidates the source preview");
+}
+
+void bulkRemovalIsAtomicAndNotifiesOnce() {
+    QTemporaryDir directory;
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    QVector<QString> ids;
+    for (int index = 0; index < 20; ++index) {
+        const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        ids.push_back(id);
+        require(repository.upsert(recordWithId(id, patternedImage({2, 2}, index))).success,
+                "create bulk-removal fixture");
+    }
+    require(repository.flush().success, "commit bulk-removal fixture");
+    std::atomic_int notifications{0};
+    repository.setChangedCallback([&notifications]() { ++notifications; });
+    require(!repository.removeMany({ids.front(), QStringLiteral("../invalid")}).success &&
+                repository.summaries().size() == ids.size() && notifications == 0,
+            "invalid bulk removal leaves every record untouched");
+    require(repository.removeMany(ids).success && repository.summaries().isEmpty() &&
+                notifications == 1,
+            "bulk removal updates all records with one change notification");
+    repository.setChangedCallback({});
+}
+
+void canceledCreationReleasesLifecycleState() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary storage directory is unavailable");
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const QDateTime firstTime = QDateTime::currentDateTimeUtc().addSecs(-60);
+    const QDateTime secondTime = firstTime.addSecs(30);
+    auto record = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                               patternedImage({8, 8}, 17));
+    const auto prepared =
+        storage::PreparedPngImage::fromBytes(record.image.size(), pngBytes(record.image, 6));
+    require(prepared.has_value(), "prepare reserved pin source");
+
+    repository.reserveCreation(record.id, firstTime);
+    require(repository.markClosed(record.id, firstTime).success,
+            "close can precede first publication");
+    repository.cancelCreation(record.id);
+    require(!repository.createReserved(record, *prepared).success,
+            "canceled asynchronous publication must not create a record");
+
+    repository.reserveCreation(record.id, secondTime);
+    require(repository.createReserved(record, *prepared).success,
+            "a new explicit reservation can create a record");
+    const auto created = repository.loadRecord(record.id);
+    require(created && !created->ignored && created->createdUtc == secondTime,
+            "cancellation must release both creation and close state");
+    require(repository.remove(record.id).success && !repository.upsertExisting(record).success,
+            "a late update must not recreate a removed record");
+
+    repository.reserveCreation(record.id, secondTime);
+    require(repository.createReserved(record, *prepared).success,
+            "removed IDs must not remain in a permanent tombstone set");
+    require(repository.remove(record.id).success, "remove explicitly recreated record");
+
+    const QString removedBeforeCreate = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    record.id = removedBeforeCreate;
+    repository.reserveCreation(record.id);
+    require(repository.remove(record.id).success &&
+                !repository.createReserved(record, *prepared).success,
+            "deletion must revoke an outstanding first save");
+
+    record.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    repository.reserveCreation(record.id);
+    require(repository.markClosed(record.id).success && repository.clearClosed().success &&
+                !repository.createReserved(record, *prepared).success,
+            "clearing closed pins must revoke an outstanding first save");
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
     QCoreApplication application(argc, argv);
+    managementLifecycleAndRetention();
+    managementHasNoTotalRecordCap();
+    previewsReadOnlySourcePayloadAndKeepStableRevision();
+    bulkRemovalIsAtomicAndNotifiesOnce();
+    canceledCreationReleasesLifecycleState();
+    managementDiskQuotaAndRestorationProtection();
+    membershipAndPreviewRevisionsTrackOnlyTheirSources();
+    deferredPolicyEnforcementRunsOnlyWhenRequested();
+    managementPolicySizeCacheTracksPayloadCommits();
+    managementLegacyMetadataDefaults();
+    managementExpiresBeforeApplyingQuotas();
+    managementCreationOrderSurvivesOutOfOrderEncoding();
     precisePlacementAndPreviousVersionIsolation();
     stateUpdatesBeforeFirstFlushPreserveRestorableSources();
     committedPayloadsAreServedFromDisk();
+    manifestFailuresReleaseWrittenPayloadsAndRetryMetadata();
+    partialPayloadFailuresDemoteOnlyCompleteRevisions();
+    failedManifestSourceReplacementsKeepCurrentPayloadDescriptors();
+    continuousChangesDoNotPostponePayloadWrites();
+    residentPayloadPressureBypassesLongDebounce();
+    missingOptionalPayloadDoesNotHideRestorableImage();
     preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt();
+    allocationAdmissionPrecedesSourceDecode();
     metadataOnlyUpdatesDoNotRewriteCommittedPayloads();
     changedPayloadsRecommitAndStayLazy();
     removedRecordsPruneTheirPayloads();
@@ -713,6 +1599,9 @@ int main(int argc, char* argv[]) {
     recognitionVisibilityRoundTripsAndDefaultsToHidden();
     clickThroughStateRoundTripsAndRecoversLegacyOrConflictingMetadata();
     alwaysOnTopStateRoundTripsAndDefaultsToEnabledForLegacyRecords();
+    pinSourceIdentitySurvivesRestart();
+    showBorderStateRoundTripsAndDefaultsToEnabledForLegacyRecords();
+    malformedCustomBorderRejectsRecord();
     thumbnailStateSurvivesRestartAndExit();
     hideToTopRoundTripsAndRecoversLegacyMetadata();
     return 0;

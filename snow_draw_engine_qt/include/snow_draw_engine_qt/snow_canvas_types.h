@@ -80,6 +80,7 @@ enum SnowCanvasTextStyleMixedFlag : quint32 {
     SnowCanvasTextStyleMixedVerticalAlign = 1u << 9,
     SnowCanvasTextStyleMixedOpacity = 1u << 10,
 };
+inline constexpr quint32 SnowCanvasTextStyleAllProperties = (1u << 11) - 1u;
 
 enum SnowCanvasSerialNumberStyleMixedFlag : quint32 {
     SnowCanvasSerialNumberStyleMixedNumber = 1u << 0,
@@ -109,6 +110,8 @@ enum SnowCanvasShapeStyleMixedFlag : quint32 {
     SnowCanvasShapeStyleMixedStartArrowhead = 1u << 5,
     SnowCanvasShapeStyleMixedEndArrowhead = 1u << 6,
     SnowCanvasShapeStyleMixedStrokeStyle = 1u << 7,
+    SnowCanvasShapeStyleMixedArrowShaftType = 1u << 12,
+    SnowCanvasShapeStyleMixedArrowRatio = 1u << 13,
     SnowCanvasShapeStyleMixedArrowType = 1u << 8,
     SnowCanvasShapeStyleMixedOpacity = 1u << 9,
     SnowCanvasShapeStyleMixedHighlightShape = 1u << 10,
@@ -142,6 +145,8 @@ enum SnowCanvasShapeStyleProperty : quint32 {
     SnowCanvasShapeStylePropertyStartArrowhead = 1u << 5,
     SnowCanvasShapeStylePropertyEndArrowhead = 1u << 6,
     SnowCanvasShapeStylePropertyStrokeStyle = 1u << 7,
+    SnowCanvasShapeStylePropertyArrowShaftType = 1u << 12,
+    SnowCanvasShapeStylePropertyArrowRatio = 1u << 13,
     SnowCanvasShapeStylePropertyArrowType = 1u << 8,
     SnowCanvasShapeStylePropertyOpacity = 1u << 9,
     SnowCanvasShapeStylePropertyShape = 1u << 11,
@@ -176,6 +181,7 @@ enum class SnowCanvasFilterType {
     Inversion,
     Emboss = 4,
     SmartErase = 5,
+    Brightness = 6,
 };
 
 // Capability flag returned alongside filterStyleMixed property bits.
@@ -219,7 +225,10 @@ enum class SnowCanvasArrowhead {
     CrowfootOne,
     CrowfootMany,
     CrowfootOneOrMany,
+    IndentedTriangle,
 };
+
+enum class SnowCanvasArrowShaftType { Plain, Tapered };
 
 enum class SnowCanvasArrowType {
     Straight,
@@ -279,6 +288,8 @@ struct SnowCanvasShapeStyle {
     SnowCanvasArrowhead endArrowhead = SnowCanvasArrowhead::None;
     SnowCanvasStrokeStyle strokeStyle = SnowCanvasStrokeStyle::Solid;
     SnowCanvasArrowType arrowType = SnowCanvasArrowType::Straight;
+    SnowCanvasArrowShaftType arrowShaftType = SnowCanvasArrowShaftType::Plain;
+    double arrowRatio = 1.0;
     double opacity = 1.0;
     SnowCanvasHighlightShape highlightShape = SnowCanvasHighlightShape::Rectangle;
     SnowCanvasRectangleShape shape = SnowCanvasRectangleShape::Rectangle;
@@ -289,7 +300,10 @@ inline bool operator==(const SnowCanvasShapeStyle& lhs, const SnowCanvasShapeSty
            snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) &&
            lhs.cornerRadii == rhs.cornerRadii && lhs.startArrowhead == rhs.startArrowhead &&
            lhs.endArrowhead == rhs.endArrowhead && lhs.strokeStyle == rhs.strokeStyle &&
-           lhs.arrowType == rhs.arrowType && snowCanvasExactDoubleEqual(lhs.opacity, rhs.opacity) &&
+           lhs.arrowType == rhs.arrowType &&
+           snowCanvasExactDoubleEqual(lhs.arrowRatio, rhs.arrowRatio) &&
+           lhs.arrowShaftType == rhs.arrowShaftType &&
+           snowCanvasExactDoubleEqual(lhs.opacity, rhs.opacity) &&
            lhs.highlightShape == rhs.highlightShape && lhs.shape == rhs.shape;
 }
 
@@ -384,13 +398,17 @@ struct SnowCanvasArrowStyle {
     SnowCanvasArrowhead endArrowhead = SnowCanvasArrowhead::None;
     SnowCanvasStrokeStyle strokeStyle = SnowCanvasStrokeStyle::Solid;
     SnowCanvasArrowType arrowType = SnowCanvasArrowType::Straight;
+    SnowCanvasArrowShaftType arrowShaftType = SnowCanvasArrowShaftType::Plain;
+    double arrowRatio = 1.0;
 };
 
 inline bool operator==(const SnowCanvasArrowStyle& lhs, const SnowCanvasArrowStyle& rhs) {
     return lhs.stroke == rhs.stroke &&
            snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) &&
            lhs.startArrowhead == rhs.startArrowhead && lhs.endArrowhead == rhs.endArrowhead &&
-           lhs.strokeStyle == rhs.strokeStyle && lhs.arrowType == rhs.arrowType;
+           lhs.strokeStyle == rhs.strokeStyle && lhs.arrowType == rhs.arrowType &&
+           snowCanvasExactDoubleEqual(lhs.arrowRatio, rhs.arrowRatio) &&
+           lhs.arrowShaftType == rhs.arrowShaftType;
 }
 
 inline bool operator!=(const SnowCanvasArrowStyle& lhs, const SnowCanvasArrowStyle& rhs) {

@@ -15,8 +15,12 @@ HWND toNativeHwnd(WId windowId) {
 #endif
 
 Qt::WindowFlags screenshot_floating_palette_native::windowFlags() {
-    return Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
-           Qt::WindowDoesNotAcceptFocus | Qt::NoDropShadowWindowHint;
+    Qt::WindowFlags flags = Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
+                            Qt::WindowDoesNotAcceptFocus;
+#if !defined(Q_OS_MACOS)
+    flags |= Qt::NoDropShadowWindowHint;
+#endif
+    return flags;
 }
 
 bool screenshot_floating_palette_native::currentPhysicalCursorPosition(QPointF* position) {
@@ -119,7 +123,9 @@ void screenshot_floating_palette_native::setNativePaletteOwner(WId windowId, QWi
         return;
     }
     const HWND ownerHwnd = owner != nullptr ? toNativeHwnd(owner->winId()) : nullptr;
-    SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(ownerHwnd));
+    if (GetWindow(hwnd, GW_OWNER) != ownerHwnd) {
+        SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(ownerHwnd));
+    }
 #else
     Q_UNUSED(windowId);
     Q_UNUSED(owner);

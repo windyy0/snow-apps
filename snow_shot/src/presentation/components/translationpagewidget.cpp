@@ -1,3 +1,4 @@
+#include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/presentation/components/translationpagewidget.h"
 
 #include "snow_shot/network/snowshotapiclient.h"
@@ -273,7 +274,7 @@ void TranslationPageWidget::deactivate() {
 }
 
 void TranslationPageWidget::dismissPopups() {
-    m_menu->hide();
+    m_menu->dismissPopup();
     for (auto* select : m_selects) {
         select->setPopupVisible(false);
     }
@@ -289,7 +290,7 @@ void TranslationPageWidget::copyResult(bool closeWindow) {
         return;
     }
     QApplication::clipboard()->setText(m_controller->resultText());
-    m_menu->hide();
+    m_menu->dismissPopup();
     if (closeWindow) {
         emit closeWindowRequested();
     }
@@ -322,7 +323,7 @@ bool TranslationPageWidget::eventFilter(QObject* watched, QEvent* event) {
     }
     if (event->type() == QEvent::KeyPress || event->type() == QEvent::ShortcutOverride) {
         auto* key = static_cast<QKeyEvent*>(event);
-        const bool copy = key->matches(QKeySequence::Copy);
+        const bool copy = snow_shot::shortcuts::matchesStandardShortcut(*key, QKeySequence::Copy);
         static const snow_shot::shortcuts::ShortcutBinding copyCloseBinding =
             snow_shot::shortcuts::bindingFromPortableText(QStringLiteral("Ctrl+Q"));
         const bool copyClose = snow_shot::shortcuts::shortcutMatchesEvent(copyCloseBinding, *key);

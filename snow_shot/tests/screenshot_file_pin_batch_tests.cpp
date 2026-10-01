@@ -1,9 +1,10 @@
 #include "snow_shot/presentation/screenshotfilepinbatch.h"
 
-#include "snow_shot/platform/windows/selectedfiles.h"
+#include "snow_shot/platform/selectedfiles.h"
 
 #include <QApplication>
 #include <QClipboard>
+#include <QColorSpace>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QMimeData>
@@ -15,7 +16,7 @@
 #include <iostream>
 
 namespace {
-using namespace snow_shot::platform::windows;
+using namespace snow_shot::platform;
 
 void require(bool condition, const char* message) {
     if (!condition) {
@@ -49,11 +50,12 @@ class FakeBackend final : public SelectedFileBackend {
     mutable QSemaphore entered;
     mutable QSemaphore release;
     bool block = false;
+    SelectedFileError error = SelectedFileError::None;
     SelectedFileTarget captureTarget() const override {
         return target;
     }
-    QStringList selectedFiles(const SelectedFileTarget& captured,
-                              const std::function<bool()>& cancelled) const override {
+    SelectedFileResult selectedFiles(const SelectedFileTarget& captured,
+                                     const std::function<bool()>& cancelled) const override {
         require(QThread::currentThread() != qApp->thread(),
                 "selection must run off the GUI thread");
         require(captured.window == 1 && captured.view == 2 && captured.tab == 3 &&
@@ -63,7 +65,7 @@ class FakeBackend final : public SelectedFileBackend {
         if (block) {
             release.acquire();
         }
-        return cancelled() ? QStringList{} : paths;
+        return {cancelled() ? QStringList{} : paths, error};
     }
 };
 
@@ -102,6 +104,92 @@ void mixedFilesAndLargeBatches() {
         return true;
     });
     finish(batch);
+}
+
+void profiledFilesSurviveBatchDecode() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "profile fixture directory must exist");
+    QImage source(7, 5, QImage::Format_RGBA8888);
+    source.setColorSpace(QColorSpace::DisplayP3);
+    source.fill(QColor(200, 100, 50));
+    const QString path = directory.filePath(QStringLiteral("display-p3.png"));
+    require(source.save(path, "PNG"), "profiled pin fixture must encode");
+    ScreenshotFilePinBatch batch;
+    int presented = 0;
+    batch.start({path}, [&](ScreenshotClipboardContent content) {
+        require(content.image == source,
+                "asynchronous file pinning must preserve the embedded profile and pixels");
+        ++presented;
+        return true;
+    });
+    finish(batch);
+    require(presented == 1, "profiled file must be presented once");
+}
+
+void duplicateFiltering() {
+    QTemporaryDir directory;
+    const QString first = imageFile(directory, QStringLiteral("first.png"));
+    const QString second = imageFile(directory, QStringLiteral("second.png"));
+    auto files = ScreenshotClipboardContentReader::snapshotLocalFiles({first, second});
+    require(files.size() == 2 && files[0].sourceIdentity.isValid(),
+            "file identities are captured with metadata");
+    const auto firstIdentity = files[0].sourceIdentity;
+    const auto alias = ScreenshotClipboardContentReader::snapshotLocalFiles(
+        {directory.filePath(QStringLiteral("./first.png"))});
+    require(alias.size() == 1 && alias[0].sourceIdentity == firstIdentity,
+            "equivalent file paths share one identity");
+    require(files[1].sourceIdentity != firstIdentity,
+            "identical images at different paths remain distinct");
+    imageFile(directory, QStringLiteral("first.png"));
+    require(ScreenshotClipboardContentReader::snapshotLocalFiles({first})[0].sourceIdentity ==
+                firstIdentity,
+            "rewriting a file does not change its source identity");
+    ScreenshotFilePinBatch batch;
+    int consumed = 0;
+    QStringList presented;
+    ScreenshotFilePinBatch::DuplicateFilter filter;
+    filter.identities.insert(firstIdentity.key);
+    filter.consume = [&](const auto& identity) {
+        require(QThread::currentThread() == qApp->thread(),
+                "duplicates are revalidated on the GUI thread");
+        require(identity == firstIdentity,
+                "duplicate callback receives the original source identity");
+        ++consumed;
+        return true;
+    };
+    // A known duplicate must be handled without attempting to decode its bytes.
+    QFile corrupt(first);
+    require(corrupt.open(QIODevice::WriteOnly | QIODevice::Truncate), "open duplicate fixture");
+    corrupt.write("invalid");
+    corrupt.close();
+    batch.start(
+        {first, second},
+        [&](ScreenshotClipboardContent content) {
+            presented.append(content.originalContent.localFilePath);
+            require(content.sourceIdentity == files[1].sourceIdentity,
+                    "decoded files carry their identities");
+            return true;
+        },
+        filter);
+    finish(batch);
+    require(consumed == 1 && presented == QStringList{second},
+            "mixed batch skips duplicate decode and pins new files");
+    imageFile(directory, QStringLiteral("first.png"));
+    filter.consume = [&](const auto&) {
+        ++consumed;
+        return false;
+    };
+    presented.clear();
+    batch.start(
+        {first, second},
+        [&](ScreenshotClipboardContent content) {
+            presented.append(content.originalContent.localFilePath);
+            return true;
+        },
+        filter);
+    finish(batch);
+    require(consumed == 2 && presented == QStringList{first, second},
+            "a closed duplicate target falls back to decoding in source order");
 }
 
 void changedFilesAndPresentationStop() {
@@ -223,6 +311,40 @@ void selectionAndCancellation() {
     require(presented == 2, "destroyed batch must not present");
 }
 
+void selectionFailures() {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->error = SelectedFileError::PermissionDenied;
+    ScreenshotFilePinBatch batch;
+    int failures = 0;
+    const auto present = [](ScreenshotClipboardContent) {
+        require(false, "failed selection must not present an image");
+        return true;
+    };
+    const auto failure = [&](SelectedFileError error) {
+        require(QThread::currentThread() == qApp->thread(), "failure must run on the GUI thread");
+        require(!batch.active(), "batch must be stopped before reporting failure");
+        require(error == SelectedFileError::PermissionDenied,
+                "preserve structured selection error");
+        ++failures;
+    };
+    batch.startSelection(backend, backend->captureTarget(), present, failure);
+    finish(batch);
+    require(failures == 1, "selection failure must be delivered exactly once");
+
+    backend = std::make_shared<FakeBackend>();
+    backend->error = SelectedFileError::PermissionDenied;
+    backend->block = true;
+    batch.startSelection(backend, backend->captureTarget(), present, failure);
+    require(backend->entered.tryAcquire(1, 5000), "failing selection worker must start");
+    batch.start({}, present);
+    backend->release.release();
+    finish(batch);
+    // Drain all worker completions before checking for a stale warning.
+    ScreenshotExportCoordinator::shared().shutdown();
+    QCoreApplication::processEvents();
+    require(failures == 1, "replaced selection must not report its late failure");
+}
+
 void clipboardFiles() {
     QTemporaryDir directory;
     const QString first = imageFile(directory, QStringLiteral("first.png"));
@@ -253,11 +375,14 @@ void clipboardFiles() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     mixedFilesAndLargeBatches();
+    profiledFilesSurviveBatchDecode();
+    duplicateFiltering();
     changedFilesAndPresentationStop();
     prefetchKeepsPresentationOrder();
     stoppingDiscardsPrefetchedDecodes();
     selectionAndCancellation();
     clipboardFiles();
+    selectionFailures();
     ScreenshotExportCoordinator::shared().shutdown();
     return 0;
 }

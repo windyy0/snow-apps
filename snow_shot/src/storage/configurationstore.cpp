@@ -1,5 +1,9 @@
 #include "snow_shot/storage/configurationstore.h"
+#include "snow_shot/app/edition.h"
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 #include "snow_shot/customaimodelconfiguration.h"
+#include "snow_shot/texttranslationconfiguration.h"
+#endif
 
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/storagelogging.h"
@@ -9,6 +13,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonParseError>
 #include <QMutexLocker>
 #include <QSaveFile>
@@ -20,7 +25,9 @@
 namespace snow_shot::storage {
 namespace {
 const QString kSchemaVersionKey = QStringLiteral("storage/schema_version");
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 const QString kCustomModelsKey = QStringLiteral("api_configuration/custom_models");
+#endif
 
 enum class ConfigurationOverlayPolicy {
     MergeFromDisk,
@@ -31,7 +38,7 @@ struct MaterializedConfiguration {
     QMap<QString, QJsonValue> values;
     QJsonObject document;
     bool dirty = false;
-    bool customModelsRepaired = false;
+    bool customConfigurationsRepaired = false;
 };
 
 QJsonValue valueAtPath(const QJsonObject& root, const QString& path, bool* present = nullptr) {
@@ -103,18 +110,51 @@ MaterializedConfiguration materializeConfiguration(const QMap<QString, QJsonValu
             continue;
         }
 
-        const QJsonValue raw = overlay.value(entry.key);
-        if (entry.key == kCustomModelsKey) {
+        QJsonValue raw = overlay.value(entry.key);
+        // Upgrade only the untouched previous tray default. A customized list keeps its order.
+        if (entry.key == QStringLiteral("tray/menu_options") && mutateDocument &&
+            !overlay.contains(QStringLiteral("global_shortcuts/restore_last_closed_windows"))) {
+            QJsonArray previousDefault = entry.defaultValue.toArray();
+            for (qsizetype i = previousDefault.size(); i > 0; --i) {
+                if (previousDefault.at(i - 1).toString() ==
+                    QStringLiteral("quick.restore-last-closed-windows"))
+                    previousDefault.removeAt(i - 1);
+            }
+            if (raw.toArray() == previousDefault) {
+                raw = entry.defaultValue;
+                insertPath(&result.document, entry.key, raw);
+                result.dirty = true;
+            }
+        }
+        bool migratedDestroyShortcut = false;
+        if (entry.key == QStringLiteral("pin_to_screen_shortcuts/destroy_window") &&
+            mutateDocument && schemaVersion < 3) {
+            const auto previousDefault =
+                ConfigurationSchema::normalize(entry.key, QJsonArray{QStringLiteral("Ctrl+Esc")});
+            const auto stored = ConfigurationSchema::normalize(entry.key, raw);
+            if (stored.valid && stored.value == previousDefault.value) {
+                raw = entry.defaultValue;
+                migratedDestroyShortcut = true;
+            }
+        }
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
+        if (entry.key == kCustomModelsKey ||
+            entry.key == QStringLiteral("api_configuration/text_translation")) {
             bool valid = false;
-            const QJsonValue canonical = customAiModelsToJson(customAiModelsFromJson(raw, &valid));
+            const QJsonValue canonical =
+                entry.key == kCustomModelsKey
+                    ? customAiModelsToJson(customAiModelsFromJson(raw, &valid))
+                    : textTranslationConfigurationsToJson(
+                          textTranslationConfigurationsFromJson(raw, &valid));
             result.values.insert(entry.key, canonical);
-            result.customModelsRepaired = result.customModelsRepaired || !valid;
+            result.customConfigurationsRepaired = result.customConfigurationsRepaired || !valid;
             if (replaceAll) {
                 insertPath(&result.document, entry.key, canonical);
             }
             continue;
         }
 
+#endif
         const ConfigurationNormalization normalized =
             ConfigurationSchema::normalize(entry.key, raw);
         if (!normalized.valid) {
@@ -129,9 +169,9 @@ MaterializedConfiguration materializeConfiguration(const QMap<QString, QJsonValu
         }
 
         result.values.insert(entry.key, normalized.value);
-        if (mutateDocument && (replaceAll || normalized.changed)) {
+        if (mutateDocument && (replaceAll || normalized.changed || migratedDestroyShortcut)) {
             insertPath(&result.document, entry.key, normalized.value);
-            if (normalized.changed && !replaceAll) {
+            if ((normalized.changed || migratedDestroyShortcut) && !replaceAll) {
                 result.dirty = true;
             }
         }
@@ -228,6 +268,20 @@ QMap<QString, QJsonValue> ConfigurationStore::snapshot() const {
     return m_values;
 }
 
+quint64 ConfigurationStore::revision() const {
+    QMutexLocker locker(&m_mutex);
+    return m_revision;
+}
+
+bool ConfigurationStore::mutateIfRevision(quint64 expectedRevision,
+                                          const std::function<bool()>& mutation, bool* conflict) {
+    QMutexLocker mutationLock(&m_mutationMutex);
+    const bool stale = revision() != expectedRevision;
+    if (conflict)
+        *conflict = stale;
+    return !stale && mutation && mutation();
+}
+
 bool ConfigurationStore::isDirty() const {
     QMutexLocker locker(&m_mutex);
     return m_dirty;
@@ -253,6 +307,7 @@ bool ConfigurationStore::setValue(const QString& key, const QJsonValue& value) {
 }
 
 bool ConfigurationStore::setValues(const QMap<QString, QJsonValue>& values) {
+    QMutexLocker mutationLock(&m_mutationMutex);
     QMap<QString, QJsonValue> normalizedValues;
     for (auto it = values.cbegin(); it != values.cend(); ++it) {
         if (!ConfigurationSchema::contains(it.key())) {
@@ -271,7 +326,8 @@ bool ConfigurationStore::setValues(const QMap<QString, QJsonValue>& values) {
     QVector<QPair<QString, QJsonValue>> changed;
     {
         QMutexLocker locker(&m_mutex);
-        if (!m_writeAvailable || m_compatibility == ConfigurationCompatibility::FutureVersion) {
+        if (m_suspended || !m_writeAvailable ||
+            m_compatibility == ConfigurationCompatibility::FutureVersion) {
             locker.unlock();
             rejectMutation(values.isEmpty() ? QString() : values.cbegin().key(),
                            QStringLiteral("Configuration storage is read-only"));
@@ -311,6 +367,7 @@ void ConfigurationStore::announceChanges(QVector<QPair<QString, QJsonValue>> cha
 }
 
 bool ConfigurationStore::applySnapshot(const QMap<QString, QJsonValue>& values, int schemaVersion) {
+    QMutexLocker mutationLock(&m_mutationMutex);
     const int currentVersion = ConfigurationSchema::currentVersion();
     if (schemaVersion <= 0) {
         schemaVersion = currentVersion;
@@ -323,14 +380,15 @@ bool ConfigurationStore::applySnapshot(const QMap<QString, QJsonValue>& values, 
         values, ConfigurationSchema::completeDefaultDocument(), schemaVersion,
         ConfigurationCompatibility::Current, ConfigurationOverlayPolicy::ReplaceAll);
     const QString customModelsError =
-        materialized.customModelsRepaired
-            ? tr("Some custom AI model configurations are invalid and were ignored")
+        materialized.customConfigurationsRepaired
+            ? tr("Some custom API configurations are invalid and were ignored")
             : QString();
 
     QVector<QPair<QString, QJsonValue>> changed;
     {
         QMutexLocker locker(&m_mutex);
-        if (!m_writeAvailable || m_compatibility == ConfigurationCompatibility::FutureVersion) {
+        if (m_suspended || !m_writeAvailable ||
+            m_compatibility == ConfigurationCompatibility::FutureVersion) {
             locker.unlock();
             rejectMutation({}, QStringLiteral("Configuration storage is read-only"));
             return false;
@@ -412,6 +470,20 @@ StorageResult ConfigurationStore::flushNow() {
     }
 }
 
+void ConfigurationStore::suspendWrites(bool suspended) {
+    QMutexLocker mutationLock(&m_mutationMutex);
+    QMutexLocker lock(&m_mutex);
+    m_suspended = suspended;
+    if (suspended)
+        m_flushTimer.stop();
+}
+
+void ConfigurationStore::relocate(const QString& directory) {
+    QMutexLocker ioLock(&m_ioMutex);
+    QMutexLocker lock(&m_mutex);
+    m_configurationFile = QDir(directory).filePath(QStringLiteral("config.json"));
+}
+
 void ConfigurationStore::load() {
     cleanupCorruptBackups(m_configurationFile);
     QMap<QString, QJsonValue> loaded;
@@ -469,8 +541,8 @@ void ConfigurationStore::load() {
                 loaded = materialized.values;
                 document = materialized.document;
                 dirty = materialized.dirty;
-                if (materialized.customModelsRepaired) {
-                    error = tr("Some custom AI model configurations are invalid and were ignored");
+                if (materialized.customConfigurationsRepaired) {
+                    error = tr("Some custom API configurations are invalid and were ignored");
                     qCWarning(storageLog) << error;
                 }
             }

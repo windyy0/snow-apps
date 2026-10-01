@@ -58,10 +58,14 @@ class ScreenshotCaptureRuntimeAdapter final : public ScreenshotCaptureRuntimePor
                             ScreenshotOverlayShowMode mode) override;
     void hideOverlayWindowsImmediately(const ScreenshotDisplaySession& displaySession) override;
     void hideOverlayWindows(const ScreenshotDisplaySession& displaySession) override;
+    void releaseSelectionPreviewCache() override;
     void prewarmToolbarSurface(const ScreenshotDisplaySession& displaySession) override;
 
     [[nodiscard]] bool clearDocumentPreservingViewports() override;
     [[nodiscard]] bool resetCanvasRuntime() override;
+    void createColorPicker(const QPoint& initialCursorGlobalPosition) override;
+    void prepareColorPickerSurface(const ScreenshotDisplaySession& displaySession) override;
+    void releaseColorPicker() override;
     void resetColorPicker() override;
 
   private:

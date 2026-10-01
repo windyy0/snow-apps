@@ -25,17 +25,15 @@ inline void startScreenshotRecording(const QRect& selection, const QPoint& canva
     if (selection.isEmpty() || !context.ensureRecording()) {
         return;
     }
-    const QRect physicalRegion = selection.translated(canvasOrigin);
-    if (physicalRegion.width() < 2 || physicalRegion.height() < 2) {
-        return;
-    }
+    const QRect recordingRegion = selection.translated(canvasOrigin);
     context.stopScrolling();
     context.resetEditing();
     context.invalidateRecognition();
     context.cancelCapture();
     context.resetHistoryNavigation();
-    QTimer::singleShot(0, &context.owner,
-                       [open = context.openRecording, physicalRegion]() { open(physicalRegion); });
+    QTimer::singleShot(0, &context.owner, [open = context.openRecording, recordingRegion]() {
+        open(recordingRegion);
+    });
 }
 
 } // namespace snow_shot::presentation::recording

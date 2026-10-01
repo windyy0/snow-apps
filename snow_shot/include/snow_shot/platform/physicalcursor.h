@@ -28,6 +28,7 @@ enum class PhysicalCursorMoveStatus {
 struct PhysicalCursorMoveResult {
     PhysicalCursorMoveStatus status = PhysicalCursorMoveStatus::Unsupported;
     std::optional<QPoint> position;
+    bool mouseMoveDispatched = false;
 
     [[nodiscard]] bool commandApplied() const noexcept {
         return status == PhysicalCursorMoveStatus::Applied ||
@@ -40,6 +41,11 @@ struct PhysicalCursorAccess {
     std::function<std::optional<QPoint>()> readPosition;
     std::function<bool(const QPoint&)> writePosition;
     std::function<std::optional<QPointF>()> readLogicalPosition = {};
+    // Cursor warps on macOS do not generate native mouse movement events.
+    bool generatesMouseMoveEvents = true;
+    // Physical pixels per native cursor step, evaluated after reading the live position
+    // so the backend can select the current display. Requests round up to whole steps.
+    std::function<int()> movementQuantum = {};
 };
 
 class PhysicalCursor final {
@@ -52,6 +58,8 @@ class PhysicalCursor final {
     [[nodiscard]] std::optional<QPoint> position() const;
     [[nodiscard]] std::optional<QPointF> logicalPosition() const;
     [[nodiscard]] PhysicalCursorMoveResult moveOnePixel(PhysicalCursorDirection direction) const;
+    [[nodiscard]] PhysicalCursorMoveResult movePixels(PhysicalCursorDirection direction,
+                                                      int distance) const;
 
   private:
     PhysicalCursorAccess m_access;

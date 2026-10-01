@@ -20,6 +20,15 @@ namespace adqt::widgets::detail {
 
 class OverlayPopupSurfaceTestAccess;
 
+// Cocoa shadows must lie outside the native input window, rather than inside
+// a larger masked window whose responder chain can still consume their clicks.
+inline Qt::WindowFlags overlayPopupSurfaceWindowFlags(Qt::WindowFlags flags) {
+#if defined(Q_OS_MACOS)
+  flags &= ~Qt::NoDropShadowWindowHint;
+#endif
+  return flags;
+}
+
 struct OverlayPopupSurfaceMetrics {
   int borderRadius = 8;
   int borderWidth = 1;
@@ -40,7 +49,11 @@ class OverlayPopupSurface final : public QWidget, public TopLevelToolResourceRel
  public:
   explicit OverlayPopupSurface(QWidget* parent = nullptr);
 
-  void releaseTopLevelToolResources() override { destroy(); }
+  // Read when deferred releases execute, including tasks posted before retention changed.
+  void releaseTopLevelToolResources() override {
+    if (!nativeSurfaceRetained_) destroy();
+  }
+  void setNativeSurfaceRetained(bool retained) { nativeSurfaceRetained_ = retained; }
 
   QWidget* bodyWidget() const { return bodyWidget_; }
 
@@ -87,6 +100,7 @@ class OverlayPopupSurface final : public QWidget, public TopLevelToolResourceRel
   qreal clampedArrowCenter(const QRectF& bubbleRect) const;
   QPolygonF arrowPolygon(const QRectF& bubbleRect) const;
   void updateBodyGeometry();
+  void updateNativeSurface();
   void invalidatePathCache() const;
   void invalidateShadowCache() const;
   void ensurePathCache() const;
@@ -111,6 +125,7 @@ class OverlayPopupSurface final : public QWidget, public TopLevelToolResourceRel
   OverlayPopupPlacement placement_ = OverlayPopupPlacement::Top;
   ArrowSide arrowSide_ = ArrowSide::Bottom;
   bool arrowVisible_ = true;
+  bool nativeSurfaceRetained_ = false;
   qreal arrowCenter_ = 0.0;
   mutable std::unique_ptr<PathCache> pathCache_;
   mutable std::unique_ptr<ShadowCache> shadowCache_;

@@ -36,11 +36,13 @@ template <typename Enum> bool enumInRange(Enum value, Enum first, Enum last) {
 bool validShapeStyleEnums(const SnowCanvasShapeStyle& style) {
     return enumInRange(style.fillStyle, SnowCanvasFillStyle::Line, SnowCanvasFillStyle::Solid) &&
            enumInRange(style.startArrowhead, SnowCanvasArrowhead::None,
-                       SnowCanvasArrowhead::CrowfootOneOrMany) &&
+                       SnowCanvasArrowhead::IndentedTriangle) &&
            enumInRange(style.endArrowhead, SnowCanvasArrowhead::None,
-                       SnowCanvasArrowhead::CrowfootOneOrMany) &&
+                       SnowCanvasArrowhead::IndentedTriangle) &&
            enumInRange(style.strokeStyle, SnowCanvasStrokeStyle::Solid,
                        SnowCanvasStrokeStyle::Dotted) &&
+           enumInRange(style.arrowShaftType, SnowCanvasArrowShaftType::Plain,
+                       SnowCanvasArrowShaftType::Tapered) &&
            enumInRange(style.arrowType, SnowCanvasArrowType::Straight,
                        SnowCanvasArrowType::Elbow) &&
            enumInRange(style.highlightShape, SnowCanvasHighlightShape::Rectangle,
@@ -227,6 +229,8 @@ SnowCanvasArrowhead toCanvasArrowhead(SnowArrowhead arrowhead) {
         return SnowCanvasArrowhead::Circle;
     case SNOW_ARROWHEAD_CIRCLE_OUTLINE:
         return SnowCanvasArrowhead::CircleOutline;
+    case SNOW_ARROWHEAD_INDENTED_TRIANGLE:
+        return SnowCanvasArrowhead::IndentedTriangle;
     case SNOW_ARROWHEAD_TRIANGLE:
         return SnowCanvasArrowhead::Triangle;
     case SNOW_ARROWHEAD_TRIANGLE_OUTLINE:
@@ -259,6 +263,8 @@ SnowArrowhead toEngineArrowhead(SnowCanvasArrowhead arrowhead) {
         return SNOW_ARROWHEAD_CIRCLE;
     case SnowCanvasArrowhead::CircleOutline:
         return SNOW_ARROWHEAD_CIRCLE_OUTLINE;
+    case SnowCanvasArrowhead::IndentedTriangle:
+        return SNOW_ARROWHEAD_INDENTED_TRIANGLE;
     case SnowCanvasArrowhead::Triangle:
         return SNOW_ARROWHEAD_TRIANGLE;
     case SnowCanvasArrowhead::TriangleOutline:
@@ -426,6 +432,8 @@ SnowCanvasShapeStyle toCanvasShapeStyle(const SnowShapeStyle& style) {
         toCanvasArrowhead(style.end_arrowhead),
         toCanvasStrokeStyle(style.stroke_style),
         toCanvasArrowType(style.arrow_type),
+        static_cast<SnowCanvasArrowShaftType>(style.arrow_shaft_type),
+        style.arrow_ratio,
         style.opacity,
         style.highlight_shape == SNOW_HIGHLIGHT_SHAPE_ELLIPSE ? SnowCanvasHighlightShape::Ellipse
                                                               : SnowCanvasHighlightShape::Rectangle,
@@ -446,6 +454,9 @@ SnowShapeStyle toEngineShapeStyle(const SnowCanvasShapeStyle& style) {
     engineStyle.end_arrowhead = toEngineArrowhead(style.endArrowhead);
     engineStyle.stroke_style = toEngineStrokeStyle(style.strokeStyle);
     engineStyle.arrow_type = toEngineArrowType(style.arrowType);
+    engineStyle.arrow_shaft_type = static_cast<SnowArrowShaftType>(style.arrowShaftType);
+    engineStyle.arrow_ratio =
+        std::isfinite(style.arrowRatio) ? std::clamp(style.arrowRatio, 1.0, 3.0) : 1.0;
     engineStyle.opacity = style.opacity;
     engineStyle.highlight_shape = style.highlightShape == SnowCanvasHighlightShape::Ellipse
                                       ? SNOW_HIGHLIGHT_SHAPE_ELLIPSE
@@ -673,9 +684,9 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
             std::begin(shapes), std::end(shapes),
             [](const SnowCanvasShapeStyle* style) { return !validShapeStyleEnums(*style); }) ||
         !enumInRange(defaults.rectangleFilter.type, SnowCanvasFilterType::Mosaic,
-                     SnowCanvasFilterType::SmartErase) ||
+                     SnowCanvasFilterType::Brightness) ||
         !enumInRange(defaults.penFilter.type, SnowCanvasFilterType::Mosaic,
-                     SnowCanvasFilterType::SmartErase) ||
+                     SnowCanvasFilterType::Brightness) ||
         !enumInRange(defaults.text.fillStyle, SnowCanvasFillStyle::Line,
                      SnowCanvasFillStyle::Solid) ||
         !enumInRange(defaults.text.horizontalAlign, SnowCanvasTextHorizontalAlign::Left,

@@ -49,6 +49,8 @@ pub(crate) fn arrow_with_style(
     next.end_arrowhead = style.end_arrowhead;
     next.stroke_style = style.stroke_style;
     next.arrow_type = style.arrow_type;
+    next.arrow_shaft_type = style.arrow_shaft_type;
+    next.arrow_ratio = snow_draw_engine_core::arrow::normalize_arrow_ratio(style.arrow_ratio);
 
     if arrow.arrow_type == style.arrow_type {
         return next;
@@ -73,6 +75,8 @@ pub(crate) fn arrow_with_style(
         return next;
     };
     updated.inherit_linear_metadata_from(arrow);
+    updated.arrow_shaft_type = style.arrow_shaft_type;
+    updated.arrow_ratio = snow_draw_engine_core::arrow::normalize_arrow_ratio(style.arrow_ratio);
     updated.rotation = arrow.rotation;
     updated.start_binding = arrow.start_binding.clone();
     updated.end_binding = arrow.end_binding.clone();
@@ -88,7 +92,7 @@ pub(crate) fn preview_arrow_from_points(
         [] | [_] => return None,
         _ => points.to_vec(),
     };
-    let arrow = ArrowData::from_global_points(
+    let mut arrow = ArrowData::from_global_points(
         &points,
         style.stroke,
         style.stroke_width,
@@ -97,6 +101,8 @@ pub(crate) fn preview_arrow_from_points(
         style.start_arrowhead,
         style.end_arrowhead,
     )?;
+    arrow.arrow_shaft_type = style.arrow_shaft_type;
+    arrow.arrow_ratio = snow_draw_engine_core::arrow::normalize_arrow_ratio(style.arrow_ratio);
     (arrow_length(&arrow) > 1e-6).then_some(arrow)
 }
 
@@ -250,6 +256,7 @@ pub(crate) fn arrow_target_position(
     let points = arrow.global_points();
     match target {
         ArrowHitTarget::Move => None,
+        ArrowHitTarget::Label => Some(snow_draw_engine_document::arrow_text_anchor(arrow)),
         ArrowHitTarget::Endpoint(edge) => points
             .get(arrow_endpoint_index(points.len(), edge))
             .copied(),
@@ -542,6 +549,44 @@ mod tests {
         assert_eq!(rotated.arrow_type, ArrowType::Straight);
         assert_eq!(rotated.start_arrowhead, None);
         assert_eq!(rotated.end_arrowhead, None);
+    }
+
+    #[test]
+    fn arrow_resize_and_rotation_preserve_bound_label() {
+        let text_id = ElementId {
+            index: 2,
+            generation: 1,
+        };
+        let mut arrow = ArrowData::from_global_points(
+            &[Point::new(0.0, 0.0), Point::new(100.0, 50.0)],
+            ColorRgba8::default(),
+            2.0,
+            StrokeStyle::Solid,
+            ArrowType::Straight,
+            None,
+            None,
+        )
+        .unwrap();
+        arrow.text_element_id = Some(text_id);
+        let bounds = selection_bounds_from_selection(
+            &[],
+            &[SelectionArrowState {
+                id: ElementId::default(),
+                arrow: arrow.clone(),
+            }],
+        )
+        .unwrap();
+        let resized = resized_arrow_for_selection(
+            &arrow,
+            &bounds,
+            Point::new(-bounds.width / 2.0, -bounds.height / 2.0),
+            1.5,
+            1.5,
+        )
+        .unwrap();
+        assert_eq!(resized.text_element_id, Some(text_id));
+        let rotated = rotated_arrow_for_selection(&resized, bounds.center, 0.5).unwrap();
+        assert_eq!(rotated.text_element_id, Some(text_id));
     }
 
     #[test]

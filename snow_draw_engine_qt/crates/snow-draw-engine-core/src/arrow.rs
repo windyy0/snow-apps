@@ -79,6 +79,8 @@ pub enum Arrowhead {
     Square,
     #[serde(rename = "invertedTriangle")]
     InvertedTriangle,
+    #[serde(rename = "indented_triangle")]
+    IndentedTriangle,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +99,15 @@ pub enum ArrowType {
     Straight,
     Curve,
     Elbow,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+/// Stored preference. Unsupported arrowheads render plain without changing it.
+pub enum ArrowShaftType {
+    #[default]
+    Plain,
+    Tapered,
 }
 
 impl ArrowType {
@@ -305,5 +316,43 @@ pub fn normalize_engine_context(context: Option<&PartialEngineContext>) -> Engin
             .max_coordinate
             .filter(|max_coordinate| max_coordinate.is_finite())
             .unwrap_or(DEFAULT_ENGINE_CONTEXT.max_coordinate),
+    }
+}
+
+/// The identity scale used by legacy documents and new arrows.
+pub const fn default_arrow_ratio() -> f64 {
+    1.0
+}
+
+pub fn normalize_arrow_ratio(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(1.0, 3.0)
+    } else {
+        1.0
+    }
+}
+
+pub fn deserialize_arrow_ratio<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<f64, D::Error> {
+    let value = f64::deserialize(deserializer)?;
+    Ok(normalize_arrow_ratio(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Arrowhead;
+
+    #[test]
+    fn indented_triangle_serialization_preserves_existing_triangle_names() {
+        for (style, name) in [
+            (Arrowhead::IndentedTriangle, "indented_triangle"),
+            (Arrowhead::Triangle, "triangle"),
+            (Arrowhead::TriangleOutline, "triangle_outline"),
+        ] {
+            let value = serde_json::to_value(style).unwrap();
+            assert_eq!(value, name);
+            assert_eq!(serde_json::from_value::<Arrowhead>(value).unwrap(), style);
+        }
     }
 }

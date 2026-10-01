@@ -89,6 +89,7 @@ pub(crate) struct UiState {
     pub(crate) marquee: Option<RectangleData>,
     pub(crate) snap_guides: Vec<SnapGuide>,
     pub(crate) hovered_element: Option<ElementId>,
+    pub(crate) free_draw_hover_position: Option<Point<f64>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -124,6 +125,7 @@ pub(crate) struct EraserState {
 pub(crate) struct CreateFreeDrawState {
     pub(crate) pointer_id: u32,
     pub(crate) builder: crate::free_draw_workflow::StreamingFreeDrawBuilder,
+    pub(crate) continuation: Option<crate::free_draw_workflow::FreeDrawContinuation>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -262,6 +264,7 @@ pub(crate) struct PendingArrowMoveState {
     pub(crate) pointer_id: u32,
     pub(crate) arrow_id: ElementId,
     pub(crate) original_arrow: ArrowData,
+    pub(crate) label: bool,
     pub(crate) start_canvas_position: Point<f64>,
     pub(crate) start_view_position: Point<f64>,
 }
@@ -269,6 +272,7 @@ pub(crate) struct PendingArrowMoveState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ArrowHitTarget {
     Move,
+    Label,
     Endpoint(ArrowEndpointEdge),
     Point(usize),
     FocusPoint(ArrowEndpointEdge),
@@ -278,6 +282,7 @@ pub(crate) enum ArrowHitTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ArrowEditMode {
     Move,
+    Label,
     Endpoint(ArrowEndpointEdge),
     Point(usize),
     FocusPoint(ArrowEndpointEdge),
@@ -439,6 +444,7 @@ pub(crate) struct EditorState {
     pub(crate) pending_text_edit: Option<ElementId>,
     pub(crate) pending_new_text_draft: bool,
     pub(crate) arrow_text_measurements: Vec<crate::arrow_text::ArrowTextMeasurement>,
+    pub(crate) arrow_text_measurement_generation: u64,
     pub(crate) default_rectangle_shape_style: RectangleShapeStyle,
     pub(crate) default_arrow_style: ArrowStyle,
     pub(crate) default_line_style: ShapeStyle,
@@ -526,10 +532,18 @@ impl EditorState {
             pending_text_edit: None,
             pending_new_text_draft: false,
             arrow_text_measurements: Vec::new(),
+            arrow_text_measurement_generation: 0,
             default_rectangle_shape_style: default_styles.rectangle,
-            default_arrow_style: default_styles.arrow,
+            default_arrow_style: ArrowStyle {
+                arrow_ratio: snow_draw_engine_core::arrow::normalize_arrow_ratio(
+                    default_styles.arrow.arrow_ratio,
+                ),
+                ..default_styles.arrow
+            },
             default_line_style: ShapeStyle {
                 arrow_type: normalized_line_arrow_type(default_styles.line.arrow_type),
+                arrow_shaft_type: Default::default(),
+                arrow_ratio: 1.0,
                 ..default_styles.line
             },
             default_free_draw_style: default_styles.free_draw,

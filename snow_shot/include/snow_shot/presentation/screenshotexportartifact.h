@@ -26,6 +26,10 @@ struct ScreenshotPinnedViewportExportSource final {
     QSize contentPixelSize;
     ScreenshotResultStyle resultStyle;
     SnowCanvasSmartEraseSnapshot smartErase;
+    qreal outputOpacity = 1.0;
+    QPainterPath bakedSelectionPath;
+    std::optional<ScreenshotClipboardPlacement> clipboardPlacement = std::nullopt;
+    std::optional<ScreenshotClipboardAppearance> clipboardAppearance = std::nullopt;
 };
 
 struct ScreenshotExportImageResult final {
@@ -64,14 +68,18 @@ class ScreenshotExportSource final {
 
     ScreenshotExportSource() = default;
 
-    [[nodiscard]] static ScreenshotExportSource fromImage(QImage image);
+    [[nodiscard]] static ScreenshotExportSource
+    fromImage(QImage image, std::optional<ScreenshotClipboardPlacement> placement = {},
+              std::optional<ScreenshotClipboardAppearance> appearance = {});
     [[nodiscard]] static ScreenshotExportSource
     fromRecognitionImage(ScreenshotRecognitionImageSnapshot snapshot);
     [[nodiscard]] static ScreenshotExportSource
     fromScrollingSnapshot(ScreenshotScrollingSnapshot snapshot);
     [[nodiscard]] static ScreenshotExportSource
     fromPinnedViewport(ScreenshotPinnedViewportExportSource source);
-    [[nodiscard]] static ScreenshotExportSource fromImageLoader(ImageLoader loader);
+    [[nodiscard]] static ScreenshotExportSource
+    fromImageLoader(ImageLoader loader, std::optional<ScreenshotClipboardPlacement> placement = {},
+                    std::optional<ScreenshotClipboardAppearance> appearance = {});
     [[nodiscard]] static ScreenshotExportSource
     fromProducer(ImageProducer producer, RowSourceFactory rowSourceFactory = {});
 
@@ -81,17 +89,31 @@ class ScreenshotExportSource final {
     ImageLoader m_imageLoader;
     ImageProducer m_imageProducer;
     RowSourceFactory m_rowSourceFactory;
+    std::optional<ScreenshotClipboardPlacement> m_clipboardPlacement;
+    std::optional<ScreenshotClipboardAppearance> m_clipboardAppearance;
 
     friend class ScreenshotExportArtifact;
 };
 
 class ScreenshotExportArtifact final : public QObject {
   public:
+    struct PngCachePolicy {
+        // Bounds retained cache entries, not in-flight encoders or consumer-owned bytes.
+        qsizetype maximumBytes = 64 * 1024 * 1024;
+        // Optional internal instrumentation, invoked on the encoder worker only when encoding.
+        std::function<void()> encodingStarted;
+    };
     using ImageCallback = std::function<void(ScreenshotExportImageResult)>;
     using EncodingCallback = std::function<void(ScreenshotExportEncodingResult)>;
     using ClipboardCallback = std::function<void(ScreenshotExportClipboardResult)>;
 
     explicit ScreenshotExportArtifact(ScreenshotExportSource source, QObject* parent = nullptr);
+    ScreenshotExportArtifact(ScreenshotExportSource source,
+                             ScreenshotCompressionLevel compressionLevel,
+                             QObject* parent = nullptr);
+    ScreenshotExportArtifact(ScreenshotExportSource source,
+                             ScreenshotCompressionLevel compressionLevel,
+                             PngCachePolicy cachePolicy, QObject* parent = nullptr);
     ~ScreenshotExportArtifact() override;
 
     ScreenshotExportArtifact(const ScreenshotExportArtifact&) = delete;
@@ -101,13 +123,30 @@ class ScreenshotExportArtifact final : public QObject {
     using RowSourceCallback = std::function<void(ScreenshotImageRowSource, QString)>;
     [[nodiscard]] bool requestRowSource(QObject* receiver, RowSourceCallback callback);
     [[nodiscard]] bool requestCanonicalPng(QObject* receiver, EncodingCallback callback);
-    [[nodiscard]] bool adoptCanonicalPng(snow_shot::storage::PreparedPngImage image);
+    // Manual exports can stream large images instead of allocating a complete PNG.
+    [[nodiscard]] bool shouldCachePng(QSize pixelSize) const;
+    [[nodiscard]] snow_shot::storage::PreparedPngImage
+    cachedPng(ScreenshotCompressionLevel compression);
+    // PNG requests with the same effective compression share one in-flight/cached encoding.
+    [[nodiscard]] bool requestPng(QObject* receiver, ScreenshotCompressionLevel compression,
+                                  EncodingCallback callback);
     [[nodiscard]] bool requestClipboard(QObject* receiver, ClipboardCallback callback);
+    [[nodiscard]] std::optional<ScreenshotClipboardPlacement> clipboardPlacement() const;
+    [[nodiscard]] std::optional<ScreenshotClipboardAppearance> clipboardAppearance() const;
+    // Used by file-URL clipboard publications after the export has completed.
+    void setClipboardFileMetadata(QMimeData& mime, const QString& path) const;
+    [[nodiscard]] bool requestSaveToPath(QObject* receiver, QString path,
+                                         ScreenshotImageFileFormat format,
+                                         ScreenshotImageEncodingOptions encoding,
+                                         ScreenshotExportCoordinator::Completion callback,
+                                         ScreenshotPdfOptions pdf = {});
     [[nodiscard]] bool requestAutomaticSave(QObject* receiver, QStringList directories,
                                             ScreenshotImageFileFormat format,
                                             QString filenameFormat,
+                                            ScreenshotImageEncodingOptions encoding,
                                             ScreenshotExportCoordinator::Completion callback,
-                                            ScreenshotPdfOptions pdf = {});
+                                            ScreenshotPdfOptions pdf = {},
+                                            QDateTime requestedAt = {});
     [[nodiscard]] bool requestQuickSave(QObject* receiver,
                                         ScreenshotExportCoordinator::Completion callback);
     void cancel();
@@ -117,6 +156,11 @@ class ScreenshotExportArtifact final : public QObject {
     [[nodiscard]] QString diagnosticId() const;
 
   private:
+    using FileSourceCallback = std::function<void(snow_shot::storage::PreparedPngImage,
+                                                  ScreenshotImageRowSource, QString)>;
+    [[nodiscard]] bool requestFileSource(ScreenshotImageFileFormat format,
+                                         ScreenshotCompressionLevel compression,
+                                         FileSourceCallback callback);
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 
@@ -125,9 +169,9 @@ class ScreenshotExportArtifact final : public QObject {
     void startRowSource();
     void startRowSourceFromImage(QImage image);
     void completeRowSource(ScreenshotImageRowSource source, QString error);
-    void startCanonicalPng();
-    void startCanonicalPngFromRows(ScreenshotImageRowSource source);
-    void completeCanonicalPng(ScreenshotExportEncodingResult result);
+    void startPng(int compressionLevel);
+    void startPngFromRows(int compressionLevel, ScreenshotImageRowSource source);
+    void completePng(int compressionLevel, ScreenshotExportEncodingResult result);
     [[nodiscard]] bool prepareClipboard(QObject* receiver, QByteArray canonicalPng,
                                         ClipboardCallback callback);
 };

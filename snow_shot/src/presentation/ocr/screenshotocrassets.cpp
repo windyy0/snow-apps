@@ -1,4 +1,7 @@
+#include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/presentation/screenshotocrassets.h"
+#include "snow_shot/platform/minizippath.h"
+#include "screenshotocrprotocol.h"
 
 #include <QCryptographicHash>
 #include <QCoreApplication>
@@ -38,7 +41,6 @@
 
 namespace {
 constexpr auto kManifestName = "asset-manifest.json";
-constexpr auto kRuntimeVersion = "1.0.7";
 #if defined(Q_OS_MACOS) && defined(Q_PROCESSOR_ARM_64)
 constexpr auto kPlatform = "macos-arm64";
 #else
@@ -142,14 +144,14 @@ QString formatError(const QString& context, const QString& detail = {}) {
 bool safeRelativePath(const QString& path) {
     const QString normalized = QDir::fromNativeSeparators(path);
     if (normalized.isEmpty() || normalized.startsWith(u'/') ||
-        normalized.contains(QStringLiteral("//")) || normalized.contains(u'\0') ||
+        normalized.contains(QStringLiteral("//")) || normalized.contains(QChar(u'\0')) ||
         QDir::isAbsolutePath(normalized)) {
         return false;
     }
     const QStringList parts = normalized.split(u'/');
     return std::all_of(parts.cbegin(), parts.cend(), [](const QString& part) {
         return !part.isEmpty() && part != QStringLiteral(".") && part != QStringLiteral("..") &&
-               !part.contains(u':');
+               !part.contains(QChar(u':'));
     });
 }
 
@@ -252,8 +254,14 @@ std::optional<Descriptor> loadDescriptor(const QString& root, QString* error) {
     Descriptor result;
     result.runtimeVersion = runtime.value(QStringLiteral("version")).toString();
     result.platform = runtime.value(QStringLiteral("platform")).toString();
+    const bool staticRuntime = runtime.value(QStringLiteral("static")).toBool();
 #if defined(Q_OS_MACOS) && defined(Q_PROCESSOR_ARM_64)
     result.bundled = true;
+#endif
+#if defined(SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
+    constexpr bool expectedStaticRuntime = true;
+#else
+    constexpr bool expectedStaticRuntime = false;
 #endif
     result.executable =
         result.bundled
@@ -262,7 +270,7 @@ std::optional<Descriptor> loadDescriptor(const QString& root, QString* error) {
     const auto defaultModel =
         parseModelType(rootObject.value(QStringLiteral("default_model")).toString());
     if (rootObject.value(QStringLiteral("schema")).toInt() != (result.bundled ? 3 : 2) ||
-        result.runtimeVersion != QString::fromLatin1(kRuntimeVersion) ||
+        result.runtimeVersion != QString::fromLatin1(snow_shot::ocr::protocol::kRuntimeVersion) ||
         result.platform != QString::fromLatin1(kPlatform) || !defaultModel.has_value() ||
         *defaultModel != ScreenshotOcrModelType::Small) {
         if (error != nullptr)
@@ -272,9 +280,10 @@ std::optional<Descriptor> loadDescriptor(const QString& root, QString* error) {
     result.defaultModel = *defaultModel;
     if (result.bundled) {
         if (runtime.value(QStringLiteral("delivery")).toString() != QStringLiteral("bundled") ||
-            runtime.value(QStringLiteral("protocol")).toInt() != 3 ||
+            runtime.value(QStringLiteral("protocol")).toInt() !=
+                snow_shot::ocr::protocol::kProtocolVersion ||
             runtime.value(QStringLiteral("executable")).toString() != result.executable ||
-            runtime.contains(QStringLiteral("archive"))) {
+            staticRuntime != expectedStaticRuntime || runtime.contains(QStringLiteral("archive"))) {
             if (error != nullptr)
                 *error = QStringLiteral("incompatible bundled OCR runtime");
             return std::nullopt;
@@ -304,7 +313,7 @@ std::optional<Descriptor> loadDescriptor(const QString& root, QString* error) {
     };
     if (!parseFiles(runtime.value(QStringLiteral("files")).toArray(), false,
                     &result.runtimeFiles) ||
-        result.runtimeFiles.size() != (result.bundled ? 2 : 3)) {
+        result.runtimeFiles.size() != (result.bundled ? (staticRuntime ? 1 : 2) : 3)) {
         if (error != nullptr && error->isEmpty())
             *error = QStringLiteral("incomplete OCR asset manifest");
         return std::nullopt;
@@ -315,7 +324,9 @@ std::optional<Descriptor> loadDescriptor(const QString& root, QString* error) {
     };
     if (!contains(result.runtimeFiles, result.executable) ||
         (result.bundled
-             ? !contains(result.runtimeFiles, QStringLiteral("libonnxruntime.dylib"))
+             ? (staticRuntime
+                    ? contains(result.runtimeFiles, QStringLiteral("libonnxruntime.dylib"))
+                    : !contains(result.runtimeFiles, QStringLiteral("libonnxruntime.dylib")))
              : (!contains(result.runtimeFiles, QStringLiteral("DirectML.dll")) ||
                 !contains(result.runtimeFiles, QStringLiteral("runtime-manifest.json"))))) {
         if (error != nullptr)
@@ -679,7 +690,7 @@ bool download(QNetworkAccessManager* manager, const FileDescriptor& descriptor,
 bool extractRuntime(const QString& archive, const QString& staging,
                     const QList<FileDescriptor>& allowlist, QString* error) {
     void* reader = mz_zip_reader_create();
-    const QByteArray archivePath = QFile::encodeName(archive);
+    const QByteArray archivePath = snow_shot::platform::minizipPath(archive);
     if (reader == nullptr || mz_zip_reader_open_file(reader, archivePath.constData()) != MZ_OK) {
         if (error != nullptr)
             *error = QStringLiteral("could not open OCR runtime archive");
@@ -881,6 +892,7 @@ class ScreenshotOcrAssets::Impl final {
             if (m_prepareRequested)
                 prepare();
         });
+        snow_shot::platform::configureApplicationQoSThread(m_thread);
         m_thread->start();
     }
 

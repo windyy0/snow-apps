@@ -1,3 +1,4 @@
+#include "snow_shot/platform/applicationqos.h"
 #include "globalmousebackend_p.h"
 
 #import <AppKit/AppKit.h>
@@ -17,6 +18,7 @@
 namespace snow_shot::presentation {
 namespace {
 using Status = GlobalMousePermissionState::Status;
+constexpr auto sessionInputState = kCGEventSourceStateCombinedSessionState;
 constexpr CGEventMask eventMask =
     CGEventMaskBit(kCGEventLeftMouseDown) | CGEventMaskBit(kCGEventLeftMouseUp) |
     CGEventMaskBit(kCGEventLeftMouseDragged) | CGEventMaskBit(kCGEventRightMouseDown) |
@@ -27,64 +29,67 @@ constexpr CGEventMask eventMask =
     CGEventMaskBit(kCGEventKeyUp) | CGEventMaskBit(kCGEventScrollWheel);
 
 detail::MacGlobalMouseApi nativeApi() {
-    return {[] { return CGPreflightListenEventAccess(); },
-            [] { return AXIsProcessTrusted(); },
-            [](CGEventMask mask, CGEventTapCallBack callback, void* context) {
-                return CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap,
-                                        kCGEventTapOptionDefault, mask, callback, context);
-            },
-            [](CFMachPortRef tap, bool enabled) { CGEventTapEnable(tap, enabled); },
-            [](CFMachPortRef tap) { return CGEventTapIsEnabled(tap); },
-            [] {
-                Qt::MouseButtons buttons;
-                for (unsigned i = 0; i < 27; ++i) {
-                    if (CGEventSourceButtonState(kCGEventSourceStateHIDSystemState,
-                                                 static_cast<CGMouseButton>(i)))
-                        buttons |= static_cast<Qt::MouseButton>(quint32{1} << i);
+    return {
+        [] { return CGPreflightListenEventAccess(); },
+        [] { return AXIsProcessTrusted(); },
+        [](CGEventMask mask, CGEventTapCallBack callback, void* context) {
+            return CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap,
+                                    kCGEventTapOptionDefault, mask, callback, context);
+        },
+        [](CFMachPortRef tap, bool enabled) { CGEventTapEnable(tap, enabled); },
+        [](CFMachPortRef tap) { return CGEventTapIsEnabled(tap); },
+        [] {
+            // Keep recovery in the same input domain as the session tap. This
+            // includes HID devices and input posted by remote/accessibility tools.
+            detail::MacGlobalMouseInputState state;
+            for (unsigned i = 0; i < 27; ++i) {
+                if (CGEventSourceButtonState(sessionInputState, static_cast<CGMouseButton>(i))) {
+                    state.buttons |= static_cast<Qt::MouseButton>(quint32{1} << i);
                 }
-                return buttons;
-            },
-            []() -> std::optional<QPointF> {
-                CGEventRef event = CGEventCreate(nullptr);
-                if (!event)
-                    return std::nullopt;
-                const CGPoint point = CGEventGetLocation(event);
-                CFRelease(event);
-                return QPointF(point.x, point.y);
-            },
-            [] {
-                // Request one missing permission at a time, only after a user action.
-                if (!CGPreflightListenEventAccess()) {
-                    static_cast<void>(CGRequestListenEventAccess());
-                } else if (!AXIsProcessTrusted()) {
-                    const void* keys[] = {kAXTrustedCheckOptionPrompt};
-                    const void* values[] = {kCFBooleanTrue};
-                    CFDictionaryRef options = CFDictionaryCreate(kCFAllocatorDefault, keys, values,
-                                                                 1, &kCFTypeDictionaryKeyCallBacks,
-                                                                 &kCFTypeDictionaryValueCallBacks);
-                    static_cast<void>(AXIsProcessTrustedWithOptions(options));
-                    if (options)
-                        CFRelease(options);
-                }
-            },
-            [](bool listen) {
-                QDesktopServices::openUrl(
-                    QUrl(listen ? QStringLiteral("x-apple.systempreferences:com.apple.preference."
-                                                 "security?Privacy_ListenEvent")
-                                : QStringLiteral("x-apple.systempreferences:com.apple.preference."
-                                                 "security?Privacy_Accessibility")));
-            },
-            [] {
-                CFDictionaryRef session = CGSessionCopyCurrentDictionary();
-                if (!session)
-                    return false;
-                const bool active =
-                    CFDictionaryGetValue(session, kCGSessionOnConsoleKey) == kCFBooleanTrue;
-                CFRelease(session);
-                return active;
-            },
-            [] { return CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState); },
-            [] { return CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, 53); }};
+            }
+            state.modifierFlags = CGEventSourceFlagsState(sessionInputState);
+            state.escapeDown = CGEventSourceKeyState(sessionInputState, 53);
+            return state;
+        },
+        []() -> std::optional<QPointF> {
+            CGEventRef event = CGEventCreate(nullptr);
+            if (!event)
+                return std::nullopt;
+            const CGPoint point = CGEventGetLocation(event);
+            CFRelease(event);
+            return QPointF(point.x, point.y);
+        },
+        [] {
+            // Request one missing permission at a time, only after a user action.
+            if (!CGPreflightListenEventAccess()) {
+                static_cast<void>(CGRequestListenEventAccess());
+            } else if (!AXIsProcessTrusted()) {
+                const void* keys[] = {kAXTrustedCheckOptionPrompt};
+                const void* values[] = {kCFBooleanTrue};
+                CFDictionaryRef options = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1,
+                                                             &kCFTypeDictionaryKeyCallBacks,
+                                                             &kCFTypeDictionaryValueCallBacks);
+                static_cast<void>(AXIsProcessTrustedWithOptions(options));
+                if (options)
+                    CFRelease(options);
+            }
+        },
+        [](bool listen) {
+            QDesktopServices::openUrl(
+                QUrl(listen ? QStringLiteral("x-apple.systempreferences:com.apple.preference."
+                                             "security?Privacy_ListenEvent")
+                            : QStringLiteral("x-apple.systempreferences:com.apple.preference."
+                                             "security?Privacy_Accessibility")));
+        },
+        [] {
+            CFDictionaryRef session = CGSessionCopyCurrentDictionary();
+            if (!session)
+                return false;
+            const bool active =
+                CFDictionaryGetValue(session, kCGSessionOnConsoleKey) == kCFBooleanTrue;
+            CFRelease(session);
+            return active;
+        }};
 }
 
 class MacOSGlobalMouseBackend final : public QObject, public GlobalMouseBackend {
@@ -164,6 +169,7 @@ class MacOSGlobalMouseBackend final : public QObject, public GlobalMouseBackend 
         }
         stopping = false;
         thread.reset(QThread::create([this] { run(); }));
+        snow_shot::platform::configureApplicationQoSThread(thread.get());
         thread->start();
     }
     void stop() override {
@@ -188,24 +194,31 @@ class MacOSGlobalMouseBackend final : public QObject, public GlobalMouseBackend 
         }
     }
     void cancel(quint64 id) override {
-        submit([this, id] { input.gesture.cancel(id); });
+        submit([this, id] {
+            input.gesture.cancel(id);
+            retireIdleTap();
+        });
     }
     void beginButtonDrag(settings::SettingsGlobalMouseAction action) override {
         // Sample at the GUI press, not after queued work may see a release.
-        if (!thread || !thread->isRunning() || !api.buttons().testFlag(Qt::LeftButton))
+        if (!thread || !thread->isRunning() || !api.inputState().buttons.testFlag(Qt::LeftButton)) {
             return;
+        }
         const auto startPosition = api.cursor();
         if (!startPosition)
             return;
         submit([this, action, startPosition] {
-            if (!tap || !configuration.captureAvailable || input.gesture.pending())
+            if (!configuration.captureAvailable || input.gesture.pending())
+                return;
+            reconcile(true);
+            if (!tap)
                 return;
             const auto result = input.gesture.beginButtonDrag(action, *startPosition);
             if (!result.event)
                 return;
             input.lastPosition = *startPosition;
             emitEvent(result.event);
-            if (!api.buttons().testFlag(Qt::LeftButton)) {
+            if (!api.inputState().buttons.testFlag(Qt::LeftButton)) {
                 const auto end = api.cursor().value_or(*startPosition);
                 emitEvent(input.gesture
                               .handle({GlobalMouseInput::Kind::Release, end, Qt::LeftButton},
@@ -254,8 +267,8 @@ class MacOSGlobalMouseBackend final : public QObject, public GlobalMouseBackend 
     }
     void recoverInputState() {
         // Sampling is restricted to transport recovery, never the event hot path.
-        input.resynchronize(api.buttons(), api.modifierFlags ? api.modifierFlags() : 0,
-                            api.escapeDown && api.escapeDown());
+        const auto snapshot = api.inputState();
+        input.resynchronize(snapshot);
     }
     void publish(GlobalMousePermissionState value) {
         StateHandler handler;
@@ -300,7 +313,21 @@ class MacOSGlobalMouseBackend final : public QObject, public GlobalMouseBackend 
         }
         input.reset();
     }
-    void reconcile() {
+    bool needsListening() const {
+        // An explicit button drag needs temporary input, and claimed presses must
+        // drain their releases even if the last configured binding is removed.
+        return !configuration.bindings.isEmpty() || input.gesture.pending() ||
+               input.gesture.needsMouseInput() || input.escapeConsumed || input.maskedFlags != 0;
+    }
+    void retireIdleTap() {
+        if (tap && !needsListening()) {
+            retireTap();
+            auto idle = permissionState();
+            idle.tapAvailable = false;
+            publish(idle);
+        }
+    }
+    void reconcile(bool buttonDrag = false) {
         const int cached = sharedPermissions.load();
         const bool listen = cached >= 0 ? (cached & 1) != 0 : api.listenAccess();
         const bool accessibility = cached >= 0 ? (cached & 2) != 0 : api.accessibilityAccess();
@@ -314,6 +341,11 @@ class MacOSGlobalMouseBackend final : public QObject, public GlobalMouseBackend 
                      listen, accessibility, false});
             return;
         }
+        if (!buttonDrag && !needsListening()) {
+            retireTap();
+            publish({Status::Ready, listen, accessibility, false});
+            return;
+        }
         if (!tap) {
             tap = api.createTap(eventMask, callback, this);
             if (tap)
@@ -323,7 +355,7 @@ class MacOSGlobalMouseBackend final : public QObject, public GlobalMouseBackend 
                 publish({Status::Unavailable, listen, accessibility, false});
                 return;
             }
-            input.heldButtons = api.buttons();
+            input.heldButtons = api.inputState().buttons;
             if (const auto cursor = api.cursor())
                 input.lastPosition = *cursor;
             CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
@@ -343,9 +375,9 @@ class MacOSGlobalMouseBackend final : public QObject, public GlobalMouseBackend 
     }
     void run() {
         @autoreleasepool {
-            // A source keeps the run loop asleep even when permission prevents
-            // tap creation. The application supplies cached grants and wakes this loop
-            // on changes. Standalone backends retain their native recovery checks.
+            // A source keeps the run loop asleep when bindings are empty or
+            // permission prevents tap creation. The application supplies cached grants and wakes
+            // this loop on changes. Standalone backends retain their native recovery checks.
             CFRunLoopSourceContext context{};
             context.perform = [](void*) {};
             CFRunLoopSourceRef commandSource = CFRunLoopSourceCreate(nullptr, 0, &context);
@@ -361,23 +393,29 @@ class MacOSGlobalMouseBackend final : public QObject, public GlobalMouseBackend 
             auto nextCheck = CFAbsoluteTimeGetCurrent() + 1.0;
             while (!stopping) {
                 std::deque<std::function<void()>> batch;
+                bool bindingsChanged = false;
                 {
                     QMutexLocker lock(&mutex);
+                    bindingsChanged =
+                        configuration.bindings.isEmpty() != desired.bindings.isEmpty();
                     configuration = desired;
                     batch.swap(commands);
                 }
+                if (bindingsChanged)
+                    reconcile();
                 for (auto& command : batch) {
                     if (stopping)
                         break;
                     command();
                 }
                 const auto now = CFAbsoluteTimeGetCurrent();
-                if (sharedPermissions < 0 && now >= nextCheck) {
+                if (sharedPermissions < 0 && needsListening() && now >= nextCheck) {
                     reconcile();
                     nextCheck = now + 1.0;
                 }
                 if (!stopping)
-                    CFRunLoopRunInMode(kCFRunLoopDefaultMode, sharedPermissions >= 0 ? 3600.0 : 1.0,
+                    CFRunLoopRunInMode(kCFRunLoopDefaultMode,
+                                       sharedPermissions >= 0 || !needsListening() ? 3600.0 : 1.0,
                                        true);
             }
             interrupt();
@@ -411,6 +449,7 @@ class MacOSGlobalMouseBackend final : public QObject, public GlobalMouseBackend 
             return event;
         const auto result = self.input.handle(type, event, self.configuration);
         self.emitEvent(result.event);
+        self.retireIdleTap();
         return result.consumed ? nullptr : event;
     }
 

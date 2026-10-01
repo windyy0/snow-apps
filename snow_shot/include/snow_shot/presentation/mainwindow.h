@@ -36,9 +36,11 @@ class MainWindow : public QMainWindow {
     void showAndActivate();
     void showInterfaceSettings();
     void showFunctionSettings();
+    void showSettingsLocation(const QString& pageId, const QString& sectionId = {});
     void showAbout();
     void showAppPermissions(const QString& permissionId = {});
     void showScreenshotHistory();
+    void showPinToScreenManagement();
     void showTranslation(const QString& text);
 
   signals:
@@ -47,6 +49,7 @@ class MainWindow : public QMainWindow {
     void
     globalMouseDragRequested(snow_shot::presentation::settings::SettingsGlobalMouseAction action);
     void screenshotHistoryEditRequested(const QString& recordId);
+    void screenshotHistoryPinRequested(const QString& recordId);
 
   protected:
     bool event(QEvent* event) override;

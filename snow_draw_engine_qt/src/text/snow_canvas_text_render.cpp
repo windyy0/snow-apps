@@ -48,7 +48,7 @@ void drawContents(QPainter& painter, const SnowSceneDisplayItem& item, const QFo
     painter.save();
     painter.translate(localRect.left(), localRect.top() + layout.topOffset);
     painter.scale(layout.resolution.scale, layout.resolution.scale);
-    document.drawContents(&painter, text_layout::documentContentsRect(layout));
+    text_layout::drawDocument(painter, layout);
     painter.restore();
 }
 
@@ -92,8 +92,11 @@ void drawBackground(QPainter& painter, const SnowSceneDisplayItem& item, const Q
             if (!line.isValid()) {
                 continue;
             }
-            QRectF lineRect(blockRect.left() + line.x(), blockRect.top() + line.y(),
-                            qMax(1.0, line.naturalTextWidth()), qMax(1.0, line.height()));
+            // x() is the layout box origin; naturalTextRect() also includes
+            // Qt's horizontal alignment offset within that box.
+            QRectF lineRect = line.naturalTextRect().translated(blockRect.topLeft());
+            lineRect.setWidth(qMax(1.0, lineRect.width()));
+            lineRect.setHeight(qMax(1.0, lineRect.height()));
             lineRect.adjust(-horizontalPadding, -verticalPadding, horizontalPadding,
                             verticalPadding);
             const double clampedRadius =
@@ -138,7 +141,7 @@ void drawStroke(QPainter& painter, const SnowSceneDisplayItem& item, const QFont
     painter.save();
     painter.translate(localRect.left(), localRect.top() + layout.topOffset);
     painter.scale(layout.resolution.scale, layout.resolution.scale);
-    document.drawContents(&painter, text_layout::documentContentsRect(layout));
+    text_layout::drawDocument(painter, layout);
     painter.restore();
 }
 
@@ -170,13 +173,14 @@ void drawHoverUnderlines(QPainter& painter, const SnowSceneDisplayItem& item, co
         const QRectF blockRect = document.documentLayout()->blockBoundingRect(block);
         for (int index = 0; index < blockLayout->lineCount(); ++index) {
             const QTextLine line = blockLayout->lineAt(index);
-            const qreal width = line.isValid() ? line.naturalTextWidth() : 0.0;
-            if (width <= 0.0) {
+            if (!line.isValid()) {
                 continue;
             }
-            const qreal left = blockRect.left() + line.x();
-            const qreal bottom = blockRect.top() + line.y() + line.height();
-            painter.drawLine(QPointF(left, bottom), QPointF(left + width, bottom));
+            const QRectF lineRect = line.naturalTextRect().translated(blockRect.topLeft());
+            if (lineRect.width() <= 0.0) {
+                continue;
+            }
+            painter.drawLine(lineRect.bottomLeft(), lineRect.bottomRight());
         }
     }
     painter.restore();

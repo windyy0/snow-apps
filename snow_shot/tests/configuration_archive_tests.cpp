@@ -1,10 +1,13 @@
 #include "snow_shot/storage/configurationarchive.h"
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/configurationstore.h"
+#include "snow_shot/platform/minizippath.h"
+#include "snow_shot/customaimodelconfiguration.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStringList>
@@ -30,7 +33,8 @@ void require(bool condition, const char* message) {
 void writeZip(const QString& path, const QMap<QString, QByteArray>& entries) {
     void* writer = mz_zip_writer_create();
     require(writer != nullptr, "test zip writer could not be created");
-    require(mz_zip_writer_open_file(writer, QFile::encodeName(path).constData(), 0, 0) == MZ_OK,
+    require(mz_zip_writer_open_file(writer, snow_shot::platform::minizipPath(path).constData(), 0,
+                                    0) == MZ_OK,
             "test zip could not be opened");
     for (auto it = entries.cbegin(); it != entries.cend(); ++it) {
         const QByteArray name = it.key().toUtf8();
@@ -41,7 +45,7 @@ void writeZip(const QString& path, const QMap<QString, QByteArray>& entries) {
                                          static_cast<int32_t>(it.value().size()), &info) == MZ_OK,
                 "test zip entry could not be written");
     }
-    mz_zip_writer_close(writer);
+    require(mz_zip_writer_close(writer) == MZ_OK, "test zip must finalize successfully");
     mz_zip_writer_delete(&writer);
 }
 
@@ -223,6 +227,52 @@ void writeRejectsUnwritableTargets(const QTemporaryDir& temporary) {
             "writing under a regular file must fail");
     require(!storage::ConfigurationArchive::write(QString(), {}, 1).isEmpty(),
             "writing without a target path must fail");
+
+    const QString directoryTarget = temporary.filePath(QStringLiteral("directory.zip"));
+    require(QDir().mkpath(directoryTarget), "a directory target must be available");
+    require(!storage::ConfigurationArchive::write(directoryTarget, {}, 1).isEmpty(),
+            "publishing an archive over a directory must fail");
+    require(QFileInfo(directoryTarget).isDir(), "failed publication must preserve the directory");
+    require(QDir(temporary.path())
+                .entryList({QStringLiteral("*.part")}, QDir::Files | QDir::Hidden)
+                .isEmpty(),
+            "failed publication must remove temporary archives");
+}
+
+void unicodePathRoundTrip(const QString& name) {
+    QTemporaryDir unicodeDirectory(QDir::tempPath() + QStringLiteral("/snow-%1-XXXXXX").arg(name));
+    require(unicodeDirectory.isValid(), "a unicode temporary directory must be available");
+    const QJsonObject configuration = sampleConfiguration();
+    QMap<QString, QJsonValue> values;
+    for (auto it = configuration.begin(); it != configuration.end(); ++it) {
+        values.insert(it.key(), it.value());
+    }
+
+    const QString path = QDir(unicodeDirectory.path()).filePath(name + QStringLiteral(".zip"));
+    require(storage::ConfigurationArchive::write(
+                path, values, storage::ConfigurationStore::currentSchemaVersion())
+                .isEmpty(),
+            "writing a configuration archive under a unicode path must succeed");
+    require(QFileInfo::exists(path), "the archive must exist at the exact requested Unicode path");
+    const storage::ConfigurationArchiveReadResult read = storage::ConfigurationArchive::read(path);
+    require(read.isValid(), "reading a configuration archive from a unicode path must succeed");
+    require(read.schemaVersion == storage::ConfigurationStore::currentSchemaVersion(),
+            "unicode-path archives must preserve the schema version");
+    for (auto it = values.cbegin(); it != values.cend(); ++it) {
+        if (it.key() == QStringLiteral("storage/schema_version")) {
+            continue;
+        }
+        require(read.values.value(it.key()) == it.value(),
+                "unicode-path archives must preserve values");
+    }
+}
+
+void unicodePathsRoundTrip() {
+    // Test both ANSI-representable characters whose bytes differ from UTF-8 and
+    // characters outside legacy code pages, in both directory and archive names.
+    unicodePathRoundTrip(QStringLiteral("caf\u00e9"));
+    unicodePathRoundTrip(QStringLiteral("配置归档-\U0001F9CA"));
+    unicodePathRoundTrip(QStringLiteral("cafe\u0301"));
 }
 
 void applySnapshotReplacesConfiguration(const QTemporaryDir& temporary) {
@@ -314,6 +364,64 @@ void applySnapshotReplacesConfiguration(const QTemporaryDir& temporary) {
 }
 } // namespace
 
+void mcpCredentialRedactionAndRevision(const QTemporaryDir& temporary) {
+    const QString key = QStringLiteral("api_configuration/custom_models");
+    const snow_shot::CustomAiModelConfiguration model{
+        QStringLiteral("11111111-1111-4111-8111-111111111111"),
+        QStringLiteral("Example"),
+        QStringLiteral("https://example.invalid/v1"),
+        QStringLiteral("private-test-secret"),
+        QStringLiteral("model"),
+        false};
+    const QMap<QString, QJsonValue> original{{key, snow_shot::customAiModelsToJson({model})}};
+    const auto path = temporary.filePath(QStringLiteral("mcp-redacted.zip"));
+    require(storage::ConfigurationArchive::write(
+                path, original, storage::ConfigurationStore::currentSchemaVersion(), true)
+                .isEmpty(),
+            "MCP archive export must succeed with redacted credentials");
+    auto imported = storage::ConfigurationArchive::read(path);
+    require(imported.isValid() && imported.redactedCredentialIds.contains(model.id),
+            "redacted archives identify omitted credentials");
+    require(snow_shot::customAiModelsFromJson(imported.values.value(key)).first().apiKey.isEmpty(),
+            "an MCP archive must not contain the stored credential");
+    imported.preserveOmittedCredentials(original);
+    require(snow_shot::customAiModelsFromJson(imported.values.value(key)).first().apiKey ==
+                model.apiKey,
+            "redacted import must preserve matching existing credentials");
+    auto unrelated = model;
+    unrelated.baseUrl = QStringLiteral("https://other.invalid/v1");
+    imported = storage::ConfigurationArchive::read(path);
+    imported.preserveOmittedCredentials({{key, snow_shot::customAiModelsToJson({unrelated})}});
+    require(snow_shot::customAiModelsFromJson(imported.values.value(key)).first().apiKey.isEmpty(),
+            "redacted imports must not copy credentials to a different provider URL");
+
+    storage::ConfigurationStore store(temporary.filePath(QStringLiteral("mcp-cas.json")), true,
+                                      true);
+    const auto revision = store.revision();
+    bool conflict = true;
+    require(store.mutateIfRevision(
+                revision, [&] { return store.setValue(QStringLiteral("mcp/enabled"), true); },
+                &conflict) &&
+                !conflict,
+            "revision transaction permits nested runtime backend writes");
+    require(store.revision() > revision, "semantic configuration writes advance the revision");
+    bool called = false;
+    require(!store.mutateIfRevision(
+                revision,
+                [&] {
+                    called = true;
+                    return true;
+                },
+                &conflict) &&
+                conflict && !called,
+            "stale revisions must reject before any runtime side effect");
+    const auto current = store.revision();
+    require(store.mutateIfRevision(
+                current, [&] { return store.setValue(QStringLiteral("mcp/enabled"), true); }) &&
+                store.revision() == current,
+            "no-op writes preserve revision");
+}
+
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("SnowShotTests"));
@@ -327,6 +435,8 @@ int main(int argc, char** argv) {
     roundTripPreservesValuesAndSchemaVersion(temporary);
     readRejectsInvalidArchives(temporary);
     writeRejectsUnwritableTargets(temporary);
+    unicodePathsRoundTrip();
     applySnapshotReplacesConfiguration(temporary);
+    mcpCredentialRedactionAndRevision(temporary);
     return 0;
 }

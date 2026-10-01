@@ -1,4 +1,6 @@
+#include "snow_shot/app/edition.h"
 #include "snow_shot/presentation/components/aboutpagewidget.h"
+#include "widgets/detail/pointer_region.h"
 
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/components/pagecontainerwidget.h"
@@ -28,6 +30,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QRegularExpression>
+#include <QStackedLayout>
 #include <QSvgRenderer>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -143,7 +146,10 @@ class AboutArtwork final : public QWidget {
         const auto translated = [](const char* source) {
             return QCoreApplication::translate("AboutPageWidget", source).toHtmlEscaped().toUtf8();
         };
-        svg.replace("{{product}}", translated(QT_TRANSLATE_NOOP("AboutPageWidget", "Snow Shot")));
+        svg.replace("{{product}}",
+                    snow_shot::app::edition::isMini
+                        ? snow_shot::app::edition::productName().toHtmlEscaped().toUtf8()
+                        : translated(QT_TRANSLATE_NOOP("AboutPageWidget", "Snow Shot")));
         svg.replace("{{moment}}",
                     translated(QT_TRANSLATE_NOOP("AboutPageWidget", "Make every moment clear.")));
         svg.replace("{{ocr}}",
@@ -258,18 +264,8 @@ class AboutResourceButton final : public AdButton {
     }
 
   protected:
-    void enterEvent(QEnterEvent* event) override {
-        m_hovered = true;
-        AdButton::enterEvent(event);
-    }
-
-    void leaveEvent(QEvent* event) override {
-        m_hovered = false;
-        AdButton::leaveEvent(event);
-    }
-
     void hideEvent(QHideEvent* event) override {
-        m_hovered = false;
+
         AdButton::hideEvent(event);
     }
 
@@ -283,10 +279,10 @@ class AboutResourceButton final : public AdButton {
         input.baseFont = font();
         const auto visual = adqt::widgets::detail::resolveButtonVisualStyle(
             input, adqt::theme::ThemeManager::instance().resolve(this));
-        const auto& state = !isEnabled() ? visual.disabled
-                            : isDown()   ? visual.active
-                            : m_hovered  ? visual.hover
-                                         : visual.normal;
+        const auto& state = !isEnabled()                                 ? visual.disabled
+                            : isDown()                                   ? visual.active
+                            : adqt::widgets::detail::widgetHovered(this) ? visual.hover
+                                                                         : visual.normal;
         if (m_contentColor != state.text || m_contentDpr != devicePixelRatioF()) {
             m_contentColor = state.text;
             m_contentDpr = devicePixelRatioF();
@@ -308,7 +304,6 @@ class AboutResourceButton final : public AdButton {
     styles::ThemeColorScheme m_scheme;
     QColor m_contentColor;
     qreal m_contentDpr = 0;
-    bool m_hovered = false;
 };
 
 QUrl aboutProjectUrl(const QString& suffix = {}) {
@@ -343,9 +338,9 @@ struct AboutPageWidget::Ui {
     std::array<QLabel*, 6> featureLabels{};
     std::array<AdDivider*, 6> featureSeparators{};
     std::array<adqt::icons::IconRef, 6> featureRefs{
-        custom::twotone::ScreenshotFeature(),  custom::outlined::ToolFreeDraw(),
-        custom::outlined::ToolRecognizeText(), custom::outlined::RecordScreen(),
-        custom::outlined::PinToScreen(),       outlined::History()};
+        custom::twotone::ScreenshotFeature(), custom::outlined::ToolFreeDraw(),
+        custom::outlined::TextRecognition(),  custom::outlined::RecordScreen(),
+        custom::outlined::PinToScreen(),      outlined::History()};
     AdDivider* featureDivider = nullptr;
     QFrame* versionPanel = nullptr;
     QVBoxLayout* versionPanelLayout = nullptr;
@@ -361,13 +356,16 @@ struct AboutPageWidget::Ui {
     QLabel* updateStatus = nullptr;
     QLabel* updateIcon = nullptr;
     AdDivider* updateDivider = nullptr;
+    QStackedLayout* updateRail = nullptr;
     QBoxLayout* updateLayout = nullptr;
     QProgressBar* updateProgress = nullptr;
+    QWidget* updateProgressWrap = nullptr;
     AdButton* updateAction = nullptr;
     AdButton* updateCancel = nullptr;
-    QBoxLayout* updateActions = nullptr;
+    QWidget* updateActionBlank = nullptr;
+    QStackedLayout* updateActions = nullptr;
     QGridLayout* resourceLayout = nullptr;
-    std::array<AboutResourceButton*, 3> resources{};
+    std::array<AboutResourceButton*, 5> resources{};
     QLabel* linkError = nullptr;
     AdDivider* footerDivider = nullptr;
     QBoxLayout* footerLayout = nullptr;
@@ -513,7 +511,20 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
         m_ui->updateDivider = new AdDivider(m_ui->versionPanel);
         m_ui->updateDivider->setObjectName(QStringLiteral("aboutUpdateDivider"));
         m_ui->updateDivider->setDividerSize(AdDivider::Size::Small);
-        m_ui->versionPanelLayout->addWidget(m_ui->updateDivider);
+        m_ui->updateProgress = new QProgressBar(m_ui->versionPanel);
+        m_ui->updateProgress->setObjectName(QStringLiteral("aboutUpdateProgress"));
+        m_ui->updateProgress->setRange(0, 1000);
+        m_ui->updateProgress->setTextVisible(false);
+        // While downloading, the slim progress track takes the divider's place so the
+        // updates module keeps the same height in every state.
+        m_ui->updateRail = new QStackedLayout;
+        m_ui->updateRail->addWidget(m_ui->updateDivider);
+        m_ui->updateProgressWrap = new QWidget(m_ui->versionPanel);
+        auto* progressWrapLayout = new QHBoxLayout(m_ui->updateProgressWrap);
+        progressWrapLayout->setContentsMargins(0, 0, 0, 0);
+        progressWrapLayout->addWidget(m_ui->updateProgress, 0, Qt::AlignVCenter);
+        m_ui->updateRail->addWidget(m_ui->updateProgressWrap);
+        m_ui->versionPanelLayout->addLayout(m_ui->updateRail);
         m_ui->updateLayout = new QBoxLayout(QBoxLayout::LeftToRight);
         auto* statusRow = new QHBoxLayout;
         m_ui->updateIcon = new QLabel(m_ui->versionPanel);
@@ -523,25 +534,24 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
         statusRow->addWidget(m_ui->updateStatus, 1);
         m_ui->updateLayout->addLayout(statusRow, 1);
         m_ui->versionPanelLayout->addLayout(m_ui->updateLayout);
-        m_ui->updateProgress = new QProgressBar(m_ui->versionPanel);
-        m_ui->updateProgress->setObjectName(QStringLiteral("aboutUpdateProgress"));
-        m_ui->updateProgress->setRange(0, 1000);
-        m_ui->updateProgress->setTextVisible(false);
-        m_ui->versionPanelLayout->addWidget(m_ui->updateProgress);
-        m_ui->updateActions = new QBoxLayout(QBoxLayout::LeftToRight);
-        auto* actions = m_ui->updateActions;
+        // The action and cancel buttons never appear together; the stack reserves the larger
+        // of the two so switching states never changes the card's size.
+        m_ui->updateActions = new QStackedLayout;
         m_ui->updateAction = new AdButton(m_ui->versionPanel);
         m_ui->updateAction->setObjectName(QStringLiteral("aboutUpdateAction"));
         m_ui->updateCancel = new AdButton(m_ui->versionPanel);
         m_ui->updateCancel->setObjectName(QStringLiteral("aboutUpdateCancel"));
-        actions->addWidget(m_ui->updateAction);
-        actions->addWidget(m_ui->updateCancel);
+        m_ui->updateActionBlank = new QWidget(m_ui->versionPanel);
+        m_ui->updateActions->addWidget(m_ui->updateAction);
+        m_ui->updateActions->addWidget(m_ui->updateCancel);
+        m_ui->updateActions->addWidget(m_ui->updateActionBlank);
         for (auto* button : {m_ui->updateAction, m_ui->updateCancel}) {
             button->setButtonStyle(AdButton::ButtonStyle::Outline);
             button->setSizeClass(AdButton::SizeClass::Small);
             button->setFocusPolicy(Qt::StrongFocus);
+            m_ui->updateActions->setAlignment(button, Qt::AlignLeft | Qt::AlignVCenter);
         }
-        m_ui->updateLayout->addLayout(actions);
+        m_ui->updateLayout->addLayout(m_ui->updateActions);
         connect(m_ui->updates, &snow_shot::update::UpdateService::statusChanged, this,
                 &AboutPageWidget::refreshUpdateStatus);
         connect(m_ui->updateCancel, &adqt::widgets::AdButton::clicked, m_ui->updates,
@@ -550,7 +560,11 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
             using snow_shot::update::UpdateState;
             switch (m_ui->updates->status().state) {
             case UpdateState::Available:
+#ifdef Q_OS_MACOS
+                openProjectLink(m_ui->updates->status().downloadUrl);
+#else
                 m_ui->updates->download();
+#endif
                 break;
             case UpdateState::Ready:
                 m_ui->updates->requestRestart();
@@ -566,7 +580,9 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
     m_ui->resources = {
         new AboutResourceButton(QStringLiteral("aboutWebsite"), outlined::Global(), m_ui->body),
         new AboutResourceButton(QStringLiteral("aboutSourceCode"), outlined::Code(), m_ui->body),
-        new AboutResourceButton(QStringLiteral("aboutFeedback"), outlined::Comment(), m_ui->body)};
+        new AboutResourceButton(QStringLiteral("aboutFeedback"), outlined::Comment(), m_ui->body),
+        new AboutResourceButton(QStringLiteral("aboutQqGroup2"), outlined::Qq(), m_ui->body),
+        new AboutResourceButton(QStringLiteral("aboutQqGroup3"), outlined::Qq(), m_ui->body)};
     m_ui->bodyLayout->addLayout(m_ui->resourceLayout);
     m_ui->linkError = aboutLabel(QStringLiteral("aboutLinkError"), m_ui->body);
     m_ui->linkError->setTextInteractionFlags(Qt::TextSelectableByMouse |
@@ -624,6 +640,10 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
             [this]() { openProjectLink(aboutProjectUrl()); });
     connect(m_ui->resources[2], &QAbstractButton::clicked, this,
             [this]() { openProjectLink(aboutProjectUrl(QStringLiteral("/issues"))); });
+    connect(m_ui->resources[3], &QAbstractButton::clicked, this,
+            [this]() { openProjectLink(QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_2_URL))); });
+    connect(m_ui->resources[4], &QAbstractButton::clicked, this,
+            [this]() { openProjectLink(QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_3_URL))); });
     connect(&themeManager, &styles::ThemeManager::themeChanged, this, &AboutPageWidget::applyTheme);
     applyTheme(m_ui->scheme);
     content->installEventFilter(this);
@@ -746,9 +766,13 @@ void AboutPageWidget::applyTheme(const styles::ThemeColorScheme& scheme) {
 void AboutPageWidget::retranslateUi() {
     refreshUpdateStatus();
     const bool hasVersion = !m_version.trimmed().isEmpty();
-    setAccessibleName(tr("About Snow Shot"));
-    m_ui->productName->setText(tr("Snow Shot"));
-    m_ui->logo->setAccessibleName(tr("Snow Shot logo"));
+    setAccessibleName(snow_shot::app::edition::isMini
+                          ? tr("About %1").arg(snow_shot::app::edition::productName())
+                          : tr("About Snow Shot"));
+    m_ui->productName->setText(snow_shot::app::edition::productName());
+    m_ui->logo->setAccessibleName(snow_shot::app::edition::isMini
+                                      ? tr("%1 logo").arg(snow_shot::app::edition::productName())
+                                      : tr("Snow Shot logo"));
     m_ui->openSource->setText(tr("Free · Open source"));
     const QColor violet(m_ui->scheme.appearance == styles::ThemeAppearance::Dark ? "#b58aec"
                                                                                  : "#7052d8");
@@ -790,13 +814,24 @@ void AboutPageWidget::retranslateUi() {
     m_ui->resources[2]->setCopy(tr("Feedback and suggestions"),
                                 tr("Make the next experience better"),
                                 aboutProjectUrl(QStringLiteral("/issues")));
+    m_ui->resources[3]->setCopy(
+        tr("QQ Group 2"),
+        tr("Discussion and support · Group No. %1").arg(QStringLiteral("895818102")),
+        QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_2_URL)));
+    m_ui->resources[4]->setCopy(
+        tr("QQ Group 3"),
+        tr("Discussion and support · Group No. %1").arg(QStringLiteral("1037819112")),
+        QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_3_URL)));
     m_ui->community->setText(tr("Built for daily work, and growing with the community."));
     m_ui->license->setText(
         tr("%1 · %2").arg(tr("GNU General Public License v3.0 or later"),
                           tr("Free and open-source software. Distributed without any warranty.")));
     m_ui->copyright->setText(
         tr("Copyright © %1 %2").arg(QStringLiteral("2025–2026"), QStringLiteral("mg-chao")));
-    m_ui->slogan->setText(tr("Snow Shot · Make expression clearer"));
+    m_ui->slogan->setText(
+        snow_shot::app::edition::isMini
+            ? tr("%1 · Make expression clearer").arg(snow_shot::app::edition::productName())
+            : tr("Snow Shot · Make expression clearer"));
     m_ui->linkError->setText(m_failedUrl.isEmpty()
                                  ? QString()
                                  : tr("Could not open the link. Open %1 in your browser.")
@@ -837,7 +872,6 @@ void AboutPageWidget::updateLayout() {
             tiny || versionWidth < m_ui->updateActions->sizeHint().width() + qRound(220 * scale);
         m_ui->updateLayout->setDirection(stackUpdate ? QBoxLayout::TopToBottom
                                                      : QBoxLayout::LeftToRight);
-        m_ui->updateActions->setDirection(tiny ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     }
     m_ui->footerLayout->setDirection(wide ? QBoxLayout::LeftToRight : QBoxLayout::TopToBottom);
     m_ui->copyright->setWordWrap(!wide);
@@ -862,12 +896,27 @@ void AboutPageWidget::updateLayout() {
         separator->setVisible(!lastInRow);
         separator->setFixedHeight(separatorHeight);
     }
-    const int resourceColumns = wide ? 3 : 1;
+    // Wide layouts share a six-column grid: the three project links span two columns each
+    // and the two QQ group cards split the second row evenly. Narrow layouts stack.
+    const int resourceColumns = wide ? 6 : 1;
     if (m_ui->resourceColumns != resourceColumns) {
-        for (int i = 0; i < 3; ++i) {
+        for (auto* resource : m_ui->resources) {
+            m_ui->resourceLayout->removeWidget(resource);
+        }
+        for (int i = 0; i < 6; ++i) {
             m_ui->resourceLayout->setColumnStretch(i, i < resourceColumns ? 1 : 0);
-            m_ui->resourceLayout->addWidget(m_ui->resources[static_cast<size_t>(i)],
-                                            i / resourceColumns, i % resourceColumns);
+        }
+        if (wide) {
+            for (int i = 0; i < 3; ++i) {
+                m_ui->resourceLayout->addWidget(m_ui->resources[static_cast<size_t>(i)], 0, i * 2,
+                                                1, 2);
+            }
+            m_ui->resourceLayout->addWidget(m_ui->resources[3], 1, 0, 1, 3);
+            m_ui->resourceLayout->addWidget(m_ui->resources[4], 1, 3, 1, 3);
+        } else {
+            for (int i = 0; i < 5; ++i) {
+                m_ui->resourceLayout->addWidget(m_ui->resources[static_cast<size_t>(i)], i, 0);
+            }
         }
         m_ui->resourceColumns = resourceColumns;
     }
@@ -920,7 +969,10 @@ void AboutPageWidget::refreshUpdateStatus() {
         text = tr("Automatic updates are unavailable for this copy.");
         break;
     case UpdateState::Idle:
-        text = status.version.isEmpty() ? tr("Check for a newer version of Snow Shot.")
+        text = status.version.isEmpty() ? (snow_shot::app::edition::isMini
+                                               ? tr("Check for a newer version of %1.")
+                                                     .arg(snow_shot::app::edition::productName())
+                                               : tr("Check for a newer version of Snow Shot."))
                                         : tr("You are up to date.");
         if (!status.version.isEmpty()) {
             statusIcon = outlined::CheckCircle();
@@ -933,7 +985,12 @@ void AboutPageWidget::refreshUpdateStatus() {
         break;
     case UpdateState::Available:
         text = tr("Update available: %1").arg(status.version);
+#ifdef Q_OS_MACOS
+        action = status.downloadUrl.host() == u"gitee.com" ? tr("Download from Gitee")
+                                                           : tr("Download from GitHub");
+#else
         action = tr("Download update");
+#endif
         statusIcon = outlined::CloudDownload();
         actionIcon = outlined::Download();
         statusColor = colors.colorInfoText;
@@ -991,10 +1048,17 @@ void AboutPageWidget::refreshUpdateStatus() {
     m_ui->updateAction->setEnabled(
         status.state == UpdateState::Idle || status.state == UpdateState::Failed ||
         status.state == UpdateState::Available || status.state == UpdateState::Ready);
-    m_ui->updateAction->setVisible(m_ui->updateAction->isEnabled());
     m_ui->updateCancel->setText(tr("Cancel download"));
-    m_ui->updateCancel->setVisible(status.state == UpdateState::Downloading);
-    m_ui->updateProgress->setVisible(status.state == UpdateState::Downloading);
+    const bool downloading = status.state == UpdateState::Downloading;
+    QWidget* currentAction = m_ui->updateActionBlank;
+    if (downloading) {
+        currentAction = m_ui->updateCancel;
+    } else if (m_ui->updateAction->isEnabled()) {
+        currentAction = m_ui->updateAction;
+    }
+    m_ui->updateActions->setCurrentWidget(currentAction);
+    m_ui->updateRail->setCurrentWidget(downloading ? m_ui->updateProgressWrap
+                                                   : m_ui->updateDivider);
     m_ui->updateProgress->setRange(0, status.total > 0 ? 1000 : 0);
     m_ui->updateProgress->setValue(status.total > 0
                                        ? qRound(std::clamp(static_cast<double>(status.received) /

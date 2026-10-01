@@ -2,7 +2,9 @@
 
 #include "snow_canvas_changed_viewports.h"
 #include "snow_canvas_ffi_handles.h"
+#include "snow_canvas_fill_render.h"
 #include "snow_canvas_type_conversions.h"
+#include "snow_canvas_watermark_renderer.h"
 
 #include <future>
 #include <limits>
@@ -10,6 +12,12 @@
 
 namespace snow_canvas_runtime {
 namespace {
+
+void clearDrawingCachesForCurrentThread() {
+    // Export sessions have no canvas clients, and their threads outlive the document.
+    snow_canvas_fill_render::resetHatchTextureCacheForCurrentThread();
+    snow_canvas_renderer::resetWatermarkRenderCacheForCurrentThread();
+}
 
 bool toEngineRuntimeConfig(const SnowCanvasRuntimeConfig& config, SnowStyleDefaults& styleDefaults,
                            SnowRuntimeConfig& engineConfig) {
@@ -143,6 +151,7 @@ RuntimeSession::RuntimeSession(const SnowCanvasRuntimeConfig& config)
 RuntimeSession::~RuntimeSession() {
     m_runtime.reset();
     waitForPendingDestroy();
+    clearDrawingCachesForCurrentThread();
 }
 
 bool RuntimeSession::isValid() const {
@@ -150,7 +159,11 @@ bool RuntimeSession::isValid() const {
 }
 
 bool RuntimeSession::reset() {
-    return replaceRuntime(createRuntime(m_config));
+    if (!replaceRuntime(createRuntime(m_config))) {
+        return false;
+    }
+    clearDrawingCachesForCurrentThread();
+    return true;
 }
 
 bool RuntimeSession::cloneDocumentSessionFrom(const RuntimeSession& source) {
@@ -175,6 +188,27 @@ QByteArray RuntimeSession::serializeDocumentSession() const {
     if (snow_runtime_serialize_document_session(m_runtime.get(),
                                                 reinterpret_cast<std::uint8_t*>(payload.data()),
                                                 size, &written) != SNOW_OK ||
+        written != size) {
+        return {};
+    }
+    return payload;
+}
+
+QByteArray RuntimeSession::serializeSelectedDrawTemplate() const {
+    if (m_runtime.get() == nullptr) {
+        return {};
+    }
+    std::size_t size = 0;
+    if (snow_runtime_serialize_selected_draw_template(m_runtime.get(), nullptr, 0, &size) !=
+            SNOW_OK ||
+        size == 0 || size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return {};
+    }
+    QByteArray payload(static_cast<int>(size), Qt::Uninitialized);
+    std::size_t written = 0;
+    if (snow_runtime_serialize_selected_draw_template(
+            m_runtime.get(), reinterpret_cast<std::uint8_t*>(payload.data()), size, &written) !=
+            SNOW_OK ||
         written != size) {
         return {};
     }
@@ -236,9 +270,16 @@ bool RuntimeSession::clearDocumentPreservingViewports() {
     }
 
     m_smartErase.reset();
-    m_clients.clearRenderState();
+    m_clients.resetDocumentRetainedState();
     syncChangedViewports(changedViewports.get());
+    clearDrawingCachesForCurrentThread();
     return true;
+}
+
+void RuntimeSession::clearRenderState() {
+    m_smartErase.clearCache();
+    m_clients.clearRenderState();
+    clearDrawingCachesForCurrentThread();
 }
 
 bool RuntimeSession::setQuickSelectionDisabledTools(const QSet<SnowCanvasTool>& tools) {
@@ -321,6 +362,7 @@ bool RuntimeSession::replaceRuntime(ScopedRuntimeHandle replacement) {
 void RuntimeSession::destroyRuntimeAsync() {
     waitForPendingDestroy();
     m_pendingDestroy = startAsyncDestroy(m_runtime.release());
+    clearDrawingCachesForCurrentThread();
 }
 
 void RuntimeSession::waitForPendingDestroy() {

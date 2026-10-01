@@ -1,22 +1,33 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARCOMMANDS_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARCOMMANDS_H
 
-#include "snow_draw_engine_qt/snow_canvas_types.h"
+#include "snow_shot/presentation/screenshotselectiondisplayunit.h"
+#include "snow_draw_engine_qt/snow_canvas_style_edit.h"
 #include "snow_shot/presentation/screenshotscrollingtypes.h"
 
 #include <QString>
+#include <QByteArray>
+#include <QPoint>
 
 namespace adqt::widgets {
 class AdColorPicker;
 }
 
+class SnowCanvasWidget;
+
 class ScreenshotToolbarCommandSink {
   public:
+    virtual void replicateStyleEdit(const SnowCanvasStyleEdit&, SnowCanvasWidget*) {}
     virtual ~ScreenshotToolbarCommandSink() = default;
 
     virtual void undoCanvasEdit() {}
     virtual void redoCanvasEdit() {}
+    virtual void setScreenshotRegionType(int) {}
+    virtual void addScreenshotRegion() {}
+    virtual void subtractScreenshotRegion() {}
     virtual void requestRecapture() {}
+    virtual void setSelectionDisplayUnit(ScreenshotSelectionDisplayUnit) {}
+    virtual void setSelectionToolbarHiddenForSession(bool) {}
     virtual void setMoveTool() = 0;
     virtual void setSelectTool() = 0;
     virtual void setShapeTool() = 0;
@@ -49,12 +60,14 @@ class ScreenshotToolbarCommandSink {
     }
     virtual void setTableTool() {}
     virtual void setQrTool() {}
+    virtual void setLatexTool() {}
     virtual void setMarkdownTool() {}
     virtual void setHtmlTool() {}
     virtual void openImageConversionSettings() {}
     virtual void mergeTableSelection() {}
     virtual void splitTableSelection() {}
     virtual void resetTable() {}
+    virtual void setShowOriginalImage(bool) {}
     virtual void beginTextEditing() {}
     virtual void toggleTextEditing() {
         beginTextEditing();
@@ -71,6 +84,10 @@ class ScreenshotToolbarCommandSink {
     virtual void startScrollingScreenshot() = 0;
     virtual void setScrollingScreenshotRecognitionMode(ScreenshotScrollingRecognitionMode) {}
     virtual void setScrollingScreenshotAutoScroll(bool) {}
+    virtual void setScrollingScreenshotAutoScrollIntervalMs(int) {}
+    virtual void beginScrollingSelectionMove(ScreenshotScrollingRecognitionMode, QPoint) {}
+    virtual void updateScrollingSelectionMove(QPoint) {}
+    virtual void endScrollingSelectionMove() {}
     virtual void pinSelectionToScreen() = 0;
     virtual void saveSelectionToFile() {}
     virtual void quickSaveSelection() {}
@@ -79,7 +96,7 @@ class ScreenshotToolbarCommandSink {
     virtual void startScreenRecording() = 0;
     virtual void setShapeStyleFromToolbar(const SnowCanvasShapeStyle& style, quint32 properties,
                                           SnowCanvasShapeKind kind) = 0;
-    virtual void setTextStyleFromToolbar(const SnowCanvasTextStyle& style) = 0;
+    virtual void setTextStyleFromToolbar(const SnowCanvasTextStyle& style, quint32 properties) = 0;
     virtual void setSerialNumberStyleFromToolbar(const SnowCanvasSerialNumberStyle& style) = 0;
     virtual void decrementSelectedSerialNumbers() = 0;
     virtual void incrementSelectedSerialNumbers() = 0;
@@ -88,6 +105,10 @@ class ScreenshotToolbarCommandSink {
     virtual void alignSelectedElements(SnowCanvasSelectionAlignment) {}
     virtual void setSelectedElementsOpacity(qreal) {}
     virtual void duplicateSelectedElements() {}
+    virtual QByteArray selectedDrawTemplatePayload() {
+        return {};
+    }
+    virtual void insertDrawTemplate(const QByteArray&) {}
     virtual void deleteSelectedElements() {}
     virtual void deleteAllElements() {}
     virtual void repositionToolbarForContentChange() = 0;

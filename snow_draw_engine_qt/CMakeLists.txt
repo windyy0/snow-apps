@@ -59,13 +59,20 @@ qt_add_library(snow_draw_engine_qt_canvas STATIC
 )
 
 if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-set_source_files_properties(
+    set_source_files_properties(
         src/rendering/snow_canvas_filter_avx2.cpp
         src/rendering/snow_canvas_pen_mask_avx2.cpp
         PROPERTIES
             COMPILE_OPTIONS "/arch:AVX2"
             SKIP_UNITY_BUILD_INCLUSION ON
     )
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        # Clang cannot load a baseline-CPU PCH in an AVX2 translation unit.
+        set_source_files_properties(
+            src/rendering/snow_canvas_filter_avx2.cpp
+            src/rendering/snow_canvas_pen_mask_avx2.cpp
+            PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    endif()
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i.86)$")
     set_source_files_properties(
         src/rendering/snow_canvas_filter_avx2.cpp
@@ -122,6 +129,23 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_DEMO)
 endif()
 
 if(SNOW_DRAW_ENGINE_QT_BUILD_BENCHMARKS)
+    add_executable(snow-canvas-reference-scene-benchmark
+        tests/snow_canvas_reference_scene_benchmark.cpp
+    )
+    target_include_directories(snow-canvas-reference-scene-benchmark PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
+    )
+    target_link_libraries(snow-canvas-reference-scene-benchmark PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-reference-scene-benchmark)
+
+    add_executable(snow-canvas-stroke-filter-benchmark tests/snow_canvas_stroke_filter_benchmark.cpp)
+    target_link_libraries(snow-canvas-stroke-filter-benchmark PRIVATE snow_draw_engine_qt_canvas)
+
+    add_executable(snow-canvas-arrow-text-benchmark tests/snow_canvas_arrow_text_benchmark.cpp)
+    target_link_libraries(snow-canvas-arrow-text-benchmark PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-arrow-text-benchmark)
+
     snow_add_rust_executable(snow-scene-order-benchmark
         PACKAGE snow-draw-engine-scene
         MANIFEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -204,6 +228,19 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     # exit code instead of blocking on modal dialogs.
     snow_link_test_cli_guard(qt)
 
+    add_executable(snow-canvas-fill-render-tests tests/snow_canvas_fill_render_tests.cpp)
+    target_include_directories(snow-canvas-fill-render-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
+    )
+    target_link_libraries(snow-canvas-fill-render-tests PRIVATE snow_draw_engine_qt_canvas)
+    qt_import_plugins(snow-canvas-fill-render-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    add_test(NAME snow-canvas-fill-render-tests COMMAND snow-canvas-fill-render-tests)
+    set_tests_properties(snow-canvas-fill-render-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        LABELS "unit"
+    )
+
     add_executable(snow-canvas-text-draft-tests
         tests/snow_canvas_text_draft_tests.cpp
     )
@@ -222,6 +259,19 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
             "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
+
+    add_executable(snow-canvas-text-overlay-tests tests/snow_canvas_text_overlay_tests.cpp)
+    target_include_directories(snow-canvas-text-overlay-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
+    )
+    target_link_libraries(snow-canvas-text-overlay-tests PRIVATE snow_draw_engine_qt_canvas)
+    qt_import_plugins(snow-canvas-text-overlay-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    add_test(NAME snow-canvas-text-overlay-tests COMMAND snow-canvas-text-overlay-tests)
+    set_tests_properties(snow-canvas-text-overlay-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        LABELS "unit"
     )
 
     add_executable(snow-canvas-arrow-text-tests tests/snow_canvas_arrow_text_tests.cpp)
@@ -296,9 +346,13 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
         NAME snow-canvas-document-reset-tests
         COMMAND snow-canvas-custom-renderer-tests --document-reset-only
     )
+    add_test(
+        NAME snow-canvas-render-state-tests
+        COMMAND snow-canvas-custom-renderer-tests --render-state-only
+    )
     snow_shot_import_offscreen_platform(snow-canvas-custom-renderer-tests)
     snow_shot_offscreen_qpa_environment(_snow_canvas_reset_qpa_environment)
-    set_tests_properties(snow-canvas-document-reset-tests PROPERTIES
+    set_tests_properties(snow-canvas-document-reset-tests snow-canvas-render-state-tests PROPERTIES
         ENVIRONMENT "${_snow_canvas_reset_qpa_environment}"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
@@ -380,6 +434,19 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     add_test(NAME snow-canvas-smart-erase-quality-tests COMMAND snow-canvas-smart-erase-quality-tests)
     set_tests_properties(snow-canvas-smart-erase-quality-tests PROPERTIES TIMEOUT 180 LABELS unit
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>")
+
+    add_executable(snow-canvas-reference-scene-tests tests/snow_canvas_reference_scene_tests.cpp)
+    target_include_directories(snow-canvas-reference-scene-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
+    )
+    target_link_libraries(snow-canvas-reference-scene-tests PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-reference-scene-tests)
+    add_test(NAME snow-canvas-reference-scene-tests COMMAND snow-canvas-reference-scene-tests)
+    set_tests_properties(snow-canvas-reference-scene-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
 
     add_executable(snow-canvas-filter-render-tests
         tests/snow_canvas_filter_render_tests.cpp

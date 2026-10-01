@@ -17,6 +17,8 @@ struct ScreenshotRecognitionImageSnapshot final {
     QFont font;
     QColor textColor;
     ScreenshotResultStyle resultStyle;
+    qreal outputOpacity = 1.0;
+    QPainterPath bakedSelectionPath;
 };
 
 [[nodiscard]] QImage

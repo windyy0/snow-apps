@@ -2,8 +2,9 @@
 
 Snow Shot uses ScreenCaptureKit on macOS 15+, including when a migrated settings
 file selects DXGI, WGC or GDI. Windows capture API and color-filter restoration
-controls are hidden without changing their stored values. Pin-to-screen and
-recording are outside this screenshot implementation.
+controls are hidden without changing their stored values. Screenshot selections
+can be pinned through the shared export pipeline; screen recording remains
+unavailable on macOS.
 
 ## Workflows and sizing
 
@@ -44,6 +45,39 @@ moving the pointer. The isolated macOS input adapter resolves CoreGraphics'
 do not populate AppKit's local position. This symbol is exported but not in the
 public SDK; if unavailable on a future macOS release, automatic scrolling fails
 recoverably instead of moving the pointer. Requalify it when upgrading macOS.
+
+## Color handling
+
+SDR screenshot buffers use sRGB. The application declares sRGB in the default Qt
+surface format before creating `QApplication`, so Cocoa tags raster windows with
+sRGB rather than the monitor's ICC profile. QPainter copies image samples without
+color conversion; using a monitor profile for those sRGB samples introduces a color
+cast. Tagged imported pins are converted to sRGB before composition.
+
+Capture leases, selection exports and scrolling snapshots retain their sRGB tag.
+The codec bridge declares the same color description for packed and streamed
+encoding, and screenshot encoding retains it. PNG exports carry the standard sRGB
+chunk; source EXIF and other imported metadata do not cross the row-source bridge.
+
+Image imports carry the decoded frame's ICC profile or standard primaries and
+transfer function through the versioned codec ABI. The Qt adapter attaches that
+declaration while wrapping the owned RGBA/BGRA buffer, without copying the raster.
+Clipboard images and file-pin batches use the same decoder. Profiles remain
+attached to the original pixels until the compositor or encoder converts them to
+sRGB. Untagged imports retain their existing interpretation.
+
+Focused color regression checks:
+
+```sh
+ctest --test-dir build/snow-shot-macos-arm64-debug --output-on-failure \
+  -R '^snow-shot-(raster-color-space|macos-raster-color-space|direct-capture-frame|selection-render|screenshot-export-service|scrolling-image-replay|image-codec-backend-smoke|clipboard-mime-data|file-pin-batch|macos-clipboard-roundtrip)-tests$'
+```
+
+The raster test runs offscreen, and its Cocoa variant checks hidden opaque,
+translucent, tool and popup windows, including native surface recreation, without
+requiring Screen Recording permission. Requalify the native profile checks when
+upgrading Qt. On a profiled display, also check the live selection, a pin, saved
+PNG and a pasted image against the source, including repeated capture of a pin.
 
 ## Permission recovery
 
@@ -123,3 +157,42 @@ The ancillary non-Windows updater build cleanup passed its service tests and
 Clippy. Its transaction fixtures require a canonical temporary directory on
 macOS (`TMPDIR=/private/tmp`); the default `/var` alias is intentionally rejected
 by the updater's symlink protection.
+
+## Recapture cursor ownership
+
+Recapture excludes only its editing surfaces. Its cursor owner can be another
+Snow Shot window or a foreign floating panel. Scrolling's normal-window and
+foreign-process filters must not be reused for this selection.
+
+The recapture transaction uses AppKit's native mouse hit test and steps below
+explicitly excluded window IDs. WindowServer bounds alone are insufficient:
+click-through windows and decorative system surfaces can cover the pointer
+without receiving input. The selected native ID is used to resolve process
+metadata, and the same hit test runs again before cursor refresh. Windows owned
+by Snow Shot are activated through their retained `NSWindow`; external windows
+use Accessibility. A local mouse refresh is dispatched to the verified window,
+then its actual view handles a cursor update, including when the stationary
+pointer remains inside an existing tracking area. Both Qt and native input
+transparency last through capture and are restored when the transaction ends.
+
+Run the focused checks with:
+
+```sh
+ctest --test-dir build/snow-shot-macos-arm64-debug \
+  -R '^snow-shot-macos-(screenshot-window-target|recapture-(focus|native|floating|local|local-floating))-tests$' \
+  --output-on-failure
+```
+
+The target-policy tests need no live desktop or permissions. Native cases cover
+normal and floating cursor owners in both processes, a separate click-through
+surface, repeated keyboard recapture, input/focus restoration, and actual captured
+I-beam pixels. Native cases skip without Accessibility or Screen Recording access.
+
+Validation on 2026-09-21: the Debug application build and all ten related
+capture-worker, capture-workflow, target-policy, recapture, and overlay checks
+passed. Repeated same-process native cases also passed five runs each. A temporary
+binary using the old scrolling target policy failed both the foreign floating
+and same-process regressions; the floating fixture explicitly verifies that its
+WindowServer layer remains nonzero while inactive. Changed C++/Objective-C++
+files passed clang-format, and `git diff --check` passed. No full suite was run;
+clang-tidy is disabled in this build.

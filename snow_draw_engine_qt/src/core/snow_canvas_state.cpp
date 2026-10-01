@@ -26,6 +26,7 @@ bool shapeStylesEqual(const SnowShapeStyle& lhs, const SnowShapeStyle& rhs) {
            cornerRadiiEqual(lhs.corner_radii, rhs.corner_radii) &&
            lhs.start_arrowhead == rhs.start_arrowhead && lhs.end_arrowhead == rhs.end_arrowhead &&
            lhs.stroke_style == rhs.stroke_style && lhs.arrow_type == rhs.arrow_type &&
+           lhs.arrow_ratio == rhs.arrow_ratio && lhs.arrow_shaft_type == rhs.arrow_shaft_type &&
            lhs.opacity == rhs.opacity && lhs.highlight_shape == rhs.highlight_shape &&
            lhs.shape == rhs.shape;
 }

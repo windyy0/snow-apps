@@ -1,4 +1,5 @@
 #include "slider.h"
+#include "detail/pointer_region.h"
 
 #include "detail/overlay_accessibility.h"
 #include "slider_style.h"
@@ -124,6 +125,9 @@ QString formatNumber(double value) {
 int maxMarkLabelHeight(const AdMultiSlider::MarkMap& marks, const QFont& fallbackFont) {
   int maxHeight = 0;
   for (auto it = marks.cbegin(); it != marks.cend(); ++it) {
+    if (!it->labelVisible) {
+      continue;
+    }
     const QFont markFont = it->font.has_value() ? it->font.value() : fallbackFont;
     maxHeight = std::max(maxHeight, QFontMetrics(markFont).height());
   }
@@ -133,6 +137,9 @@ int maxMarkLabelHeight(const AdMultiSlider::MarkMap& marks, const QFont& fallbac
 int maxMarkLabelWidth(const AdMultiSlider::MarkMap& marks, const QFont& fallbackFont) {
   int maxWidth = 0;
   for (auto it = marks.cbegin(); it != marks.cend(); ++it) {
+    if (!it->labelVisible) {
+      continue;
+    }
     const QFont markFont = it->font.has_value() ? it->font.value() : fallbackFont;
     maxWidth = std::max(maxWidth, QFontMetrics(markFont).horizontalAdvance(it->label));
   }
@@ -725,6 +732,28 @@ void AdMultiSlider::setSelectionHighlightVisible(bool value) {
   update();
 }
 
+void AdMultiSlider::setTrackFillRatio(double ratio) {
+  if (!std::isfinite(ratio)) {
+    return;
+  }
+  const double normalized = std::clamp(ratio, 0.0, 1.0);
+  if (fuzzyEq(trackFillRatio_, normalized)) {
+    return;
+  }
+  trackFillRatio_ = normalized;
+  emit trackFillRatioChanged(trackFillRatio_);
+  update();
+}
+
+void AdMultiSlider::resetTrackFillRatio() {
+  if (trackFillRatio_ < 0.0) {
+    return;
+  }
+  trackFillRatio_ = -1.0;
+  emit trackFillRatioChanged(trackFillRatio_);
+  update();
+}
+
 Qt::Orientation AdMultiSlider::orientation() const { return orientation_; }
 
 void AdMultiSlider::setOrientation(Qt::Orientation value) {
@@ -745,7 +774,7 @@ void AdMultiSlider::setDisabled(bool value) {
     return;
   }
   setEnabled(!value);
-  hovered_ = false;
+
   setHoverHandleIndex(-1);
   dragMode_ = DragMode::None;
   dragging_ = false;
@@ -1121,13 +1150,13 @@ QSize AdMultiSlider::sizeHint() const {
     const int height =
         std::max(std::max(34, sliderThickness),
                  layout.style.metrics.controlSize + layout.style.metrics.marginCross * 2 +
-                     (hasMarks ? layout.style.metrics.markGap + markLabelHeight : 0));
+                     (markLabelHeight > 0 ? layout.style.metrics.markGap + markLabelHeight : 0));
     return scaled(QSize(std::max(260, sliderLength * 6), height));
   }
   const int width =
       std::max(std::max(52, sliderThickness),
                layout.style.metrics.controlSize + layout.style.metrics.marginCross * 2 +
-                   (hasMarks ? layout.style.metrics.markGap + markLabelWidth : 0));
+                   (markLabelWidth > 0 ? layout.style.metrics.markGap + markLabelWidth : 0));
   return scaled(QSize(width, std::max(260, sliderLength * 6)));
 }
 
@@ -1156,13 +1185,7 @@ void AdMultiSlider::commitControlScale(const AdControlScaleContext& context) {
     referenceFontCaptured_ = true;
   }
   controlScale_ = context;
-  QFont scaledFont = referenceFont_;
-  if (scaledFont.pixelSize() > 0) {
-    scaledFont.setPixelSize(qMax(1, qRound(scaledFont.pixelSize() * context.logicalScale)));
-  } else if (scaledFont.pointSizeF() > 0.0) {
-    scaledFont.setPointSizeF(scaledFont.pointSizeF() * context.logicalScale);
-  }
-  setFont(scaledFont);
+  setFont(scaleControlFont(referenceFont_, context.logicalScale));
   invalidateLayoutCache();
   requestTooltipSync();
 }
@@ -1170,7 +1193,7 @@ void AdMultiSlider::commitControlScale(const AdControlScaleContext& context) {
 AdMultiSlider::MarkMap AdMultiSlider::effectiveMarks() const {
   MarkMap out = marks_;
   for (auto it = out.begin(); it != out.end(); ++it) {
-    if (it->label.trimmed().isEmpty()) {
+    if (it->labelVisible && it->label.trimmed().isEmpty()) {
       it->label = formatNumber(it.key());
     }
   }
@@ -1189,7 +1212,7 @@ AdMultiSlider::SemanticStyles AdMultiSlider::resolvedSemanticStyles() const {
   ctx.reverse = invertedAppearance_;
   ctx.disabled = disabled();
   ctx.dragging = sliderDown_;
-  ctx.hovered = hovered_;
+  ctx.hovered = detail::widgetHovered(this);
   ctx.focused = hasFocus() && focusVisible_;
   ctx.values = handles_;
   const SemanticStyles resolved = semanticStyleResolver_(ctx);
@@ -1299,6 +1322,16 @@ void AdMultiSlider::emitSliderPositionChangedIfNeeded(double previousPosition) {
   if (!fuzzyEq(previousPosition, currentPosition)) {
     emit sliderPositionChanged(currentPosition);
   }
+}
+
+void AdMultiSlider::setFocusVisible(bool visible) {
+  if (focusVisible_ == visible) {
+    return;
+  }
+  focusVisible_ = visible;
+  invalidateLayoutCache();
+  requestTooltipSync();
+  update();
 }
 
 void AdMultiSlider::setFocusHandleIndex(int index) {
@@ -1792,7 +1825,7 @@ void AdMultiSlider::initStyleOption(QStyleOptionSlider* option, int handleIndex)
   option->upsideDown = invertedAppearance_ ^
                        (orientation_ == Qt::Horizontal && layoutDirection() == Qt::RightToLeft);
   option->state.setFlag(QStyle::State_Sunken, sliderDown_);
-  option->state.setFlag(QStyle::State_MouseOver, hovered_);
+  option->state.setFlag(QStyle::State_MouseOver, detail::widgetHovered(this));
   option->state.setFlag(QStyle::State_HasFocus, hasFocus() && focusVisible_);
   option->subControls = QStyle::SC_SliderGroove | QStyle::SC_SliderHandle;
   option->activeSubControls = sliderDown_ ? QStyle::SC_SliderHandle : QStyle::SC_None;
@@ -1821,7 +1854,7 @@ AdMultiSlider::LayoutInfo AdMultiSlider::buildLayout() const {
     detail::SliderStyleInput input;
     input.mode = mode_;
     input.orientation = orientation_;
-    input.hovered = hovered_;
+    input.hovered = detail::widgetHovered(this);
     input.dragging = sliderDown_;
     input.focused = hasFocus() && focusVisible_;
     input.disabled = disabled();
@@ -1862,9 +1895,8 @@ AdMultiSlider::LayoutInfo AdMultiSlider::buildLayout() const {
                       : !((layoutDirection() == Qt::RightToLeft) ^ invertedAppearance_);
   const qreal minimumThumbRadius =
       std::min(layout.style.metrics.handleSize, layout.style.metrics.handleSizeHover) / 2.0;
-  const int markSpan =
-      hasMarks ? layout.style.metrics.markGap + (layout.vertical ? maxMarkWidth : maxMarkHeight)
-               : 0;
+  const int markLabelSpan = layout.vertical ? maxMarkWidth : maxMarkHeight;
+  const int markSpan = markLabelSpan > 0 ? layout.style.metrics.markGap + markLabelSpan : 0;
   // Keep the handle on the clipping-safe axis. The minimum thumb diameter is
   // added back only as a visual rail extension around that logical span.
   if (!layout.vertical) {
@@ -2203,10 +2235,11 @@ void AdMultiSlider::paintEvent(QPaintEvent* event) {
 
   const bool isDisabled = disabled();
   const QColor railColor =
-      (!isDisabled && hovered_) ? layout.style.railHoverBg : layout.style.railBg;
+      (!isDisabled && detail::widgetHovered(this)) ? layout.style.railHoverBg : layout.style.railBg;
   const QColor trackColor =
       isDisabled ? layout.style.trackBgDisabled
-                 : ((hovered_ || sliderDown_) ? layout.style.trackHoverBg : layout.style.trackBg);
+                 : ((detail::widgetHovered(this) || sliderDown_) ? layout.style.trackHoverBg
+                                                                 : layout.style.trackBg);
 
   painter.setPen(Qt::NoPen);
   painter.setBrush(layout.style.useRailBrush ? layout.style.railBrush : QBrush(railColor));
@@ -2251,7 +2284,12 @@ void AdMultiSlider::paintEvent(QPaintEvent* event) {
     }
   };
 
-  if (mode_ == Mode::Single) {
+  if (trackFillRatio_ >= 0.0) {
+    const double trackValue = minimum_ + (maximum_ - minimum_) * trackFillRatio_;
+    const TrackEndpoint endpoint =
+        trackFillRatio_ >= 1.0 ? TrackEndpoint::VisualMaximum : TrackEndpoint::HandleCenter;
+    drawTrackSegment(minimum_, trackValue, TrackEndpoint::VisualMinimum, endpoint);
+  } else if (mode_ == Mode::Single) {
     if (included_ && !handles_.isEmpty()) {
       const double handleValue = handles_.constFirst();
       const TrackEndpoint handleEndpoint = fuzzyEq(handleValue, maximum_)
@@ -2290,7 +2328,7 @@ void AdMultiSlider::paintEvent(QPaintEvent* event) {
       const bool active = isMarkActive(markValue);
 
       QColor dotBorder = active ? layout.style.dotActiveBorderColor : layout.style.dotBorderColor;
-      if (!active && hovered_ && !isDisabled) {
+      if (!active && detail::widgetHovered(this) && !isDisabled) {
         dotBorder = layout.style.dotHoverBorderColor;
       }
 
@@ -2301,6 +2339,10 @@ void AdMultiSlider::paintEvent(QPaintEvent* event) {
         painter.setBrush(layout.style.surfaceBg);
         painter.setPen(QPen(dotBorder, std::max<qreal>(1.0, layout.style.metrics.handleLineWidth)));
         painter.drawEllipse(dotRect);
+      }
+
+      if (!it->labelVisible) {
+        continue;
       }
 
       QFont markFont = layout.style.metrics.font;
@@ -2353,7 +2395,7 @@ void AdMultiSlider::paintEvent(QPaintEvent* event) {
       borderColor = layout.style.handleColorDisabled;
     } else if (active) {
       borderColor = layout.style.handleActiveColor;
-    } else if (hovered_) {
+    } else if (detail::widgetHovered(this)) {
       borderColor = layout.style.handleHoverColor;
     }
     QColor outlineColor = isDisabled ? QColor(0, 0, 0, 0) : layout.style.handleActiveOutlineColor;
@@ -2408,8 +2450,12 @@ void AdMultiSlider::paintEvent(QPaintEvent* event) {
   }
 }
 
+bool AdMultiSlider::event(QEvent* event) {
+  detail::resetWidgetHoverOnLifecycle(this, event);
+  return QWidget::event(event);
+}
+
 void AdMultiSlider::enterEvent(QEnterEvent* event) {
-  hovered_ = true;
   invalidateLayoutCache();
   requestTooltipSync();
   update();
@@ -2417,7 +2463,6 @@ void AdMultiSlider::enterEvent(QEnterEvent* event) {
 }
 
 void AdMultiSlider::leaveEvent(QEvent* event) {
-  hovered_ = false;
   if (dragMode_ == DragMode::None) {
     setHoverHandleIndex(-1);
   }
@@ -2434,6 +2479,8 @@ void AdMultiSlider::mousePressEvent(QMouseEvent* event) {
   }
 
   setFocus(Qt::MouseFocusReason);
+  // An already-focused widget receives no FocusIn when input switches to the mouse.
+  setFocusVisible(false);
   dragChanged_ = false;
   pendingPrimaryValueChange_ = false;
   pendingValuesChange_ = false;
@@ -2659,6 +2706,7 @@ void AdMultiSlider::keyPressEvent(QKeyEvent* event) {
   const int key = event->key();
   const int handleCount = static_cast<int>(handles_.size());
   if ((key == Qt::Key_Tab || key == Qt::Key_Backtab) && handleCount > 1) {
+    setFocusVisible(true);
     int index = focusHandleIndex_;
     if (index < 0 || index >= handleCount) {
       index = 0;
@@ -2674,6 +2722,7 @@ void AdMultiSlider::keyPressEvent(QKeyEvent* event) {
 
   if (mode_ == Mode::Range && editableHandles_ &&
       (key == Qt::Key_Delete || key == Qt::Key_Backspace)) {
+    setFocusVisible(true);
     pendingPrimaryValueChange_ = false;
     pendingValuesChange_ = false;
     dragChanged_ = false;
@@ -2727,6 +2776,7 @@ void AdMultiSlider::keyPressEvent(QKeyEvent* event) {
     return;
   }
 
+  setFocusVisible(true);
   nextValue = normalizeValue(nextValue);
   QList<double> next = handles_;
   next[index] = nextValue;
@@ -2809,7 +2859,7 @@ void AdMultiSlider::changeEvent(QEvent* event) {
 
   if (event->type() == QEvent::EnabledChange) {
     const bool disabledNow = disabled();
-    hovered_ = false;
+
     setHoverHandleIndex(-1);
     dragMode_ = DragMode::None;
     dragging_ = false;
@@ -2847,6 +2897,7 @@ void AdMultiSlider::changeEvent(QEvent* event) {
 }
 
 void AdMultiSlider::resizeEvent(QResizeEvent* event) {
+  if (dragMode_ == DragMode::None) setHoverHandleIndex(-1);
   QWidget::resizeEvent(event);
   invalidateLayoutCache();
   requestTooltipSync();
@@ -2860,6 +2911,9 @@ void AdMultiSlider::showEvent(QShowEvent* event) {
 }
 
 void AdMultiSlider::hideEvent(QHideEvent* event) {
+  setHoverHandleIndex(-1);
+  invalidateLayoutCache();
+  requestTooltipSync();
   QWidget::hideEvent(event);
   detail::notifyAccessibilityEvent(this, QAccessible::ObjectHide);
 }

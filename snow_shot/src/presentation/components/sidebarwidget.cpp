@@ -28,7 +28,19 @@ constexpr int SIDEBAR_COLLAPSED_WIDTH = 80;
 constexpr int FIRST_TOP_LEVEL_MENU_TOP_SPACING = 8;
 constexpr int COLLAPSE_TRIGGER_HEIGHT = 48;
 constexpr int COLLAPSE_TRIGGER_ICON_SIZE = 18;
-constexpr auto DARK_COLLAPSE_TRIGGER_BACKGROUND = "#00203F";
+
+void applyWindowSurface(QWidget* widget, const QColor& color, bool fillBase = false) {
+    if (widget == nullptr) {
+        return;
+    }
+
+    QPalette palette = widget->palette();
+    palette.setColor(QPalette::Window, color);
+    if (fillBase) {
+        palette.setColor(QPalette::Base, color);
+    }
+    widget->setPalette(palette);
+}
 
 QStandardItem* createActionItem(const QString& stableId, const QString& label,
                                 const adqt::icons::IconRef& icon = adqt::icons::IconRef(),
@@ -173,9 +185,12 @@ void SidebarWidget::rebuildNavigationModel() {
                const snow_shot::presentation::settings::SettingsNavigationPageDefinition&
                    navigationPage) {
             const auto* page = m_registry.catalog().page(navigationPage.pageId);
-            if (page == nullptr ||
-                (page->id == QStringLiteral("translation") &&
-                 !snow_shot::storage::ExtendedFeaturesSettings().translationPageEnabled())) {
+            if (page == nullptr
+#if SNOW_SHOT_ENABLE_EXTENDED_FEATURES
+                || (page->id == QStringLiteral("translation") &&
+                    !snow_shot::storage::ExtendedFeaturesSettings().translationPageEnabled())
+#endif
+            ) {
                 return;
             }
             m_leafRoutes.push_back(page->route);
@@ -242,29 +257,17 @@ void SidebarWidget::applyRouteSelection(const QString& routeKey, bool revealAnce
     m_currentRoute = resolvedRouteKey;
 }
 
-void SidebarWidget::applyTheme(const snow_shot::presentation::styles::ThemeColorScheme& scheme) {
-    const QColor background = scheme.map.colorBgContainer;
-    const QColor collapseTriggerBackground =
-        scheme.appearance == snow_shot::presentation::styles::ThemeAppearance::Dark
-            ? QColor(QString::fromLatin1(DARK_COLLAPSE_TRIGGER_BACKGROUND))
-            : background;
-
-    QPalette sidebarPalette = palette();
-    sidebarPalette.setColor(QPalette::Window, background);
-    setPalette(sidebarPalette);
-
-    if (m_menu != nullptr) {
-        QPalette palette = m_menu->palette();
-        palette.setColor(QPalette::Window, background);
-        m_menu->setPalette(palette);
+void SidebarWidget::applyTheme(const snow_shot::presentation::styles::ThemeColorScheme&) {
+    if (m_menu == nullptr) {
+        return;
     }
 
-    if (m_collapseTrigger != nullptr) {
-        QPalette palette = m_collapseTrigger->palette();
-        palette.setColor(QPalette::Window, collapseTriggerBackground);
-        m_collapseTrigger->setPalette(palette);
-        m_collapseTrigger->setAutoFillBackground(true);
-    }
+    // Keep the empty sidebar area and collapse trigger on the same surface as
+    // the top-level navigation items.
+    const QColor background = m_menu->resolvedColorTokens().itemBackground;
+    applyWindowSurface(this, background, true);
+    applyWindowSurface(m_menu, background);
+    applyWindowSurface(m_collapseTrigger, background);
 
     update();
 }
@@ -343,6 +346,7 @@ SidebarWidget::SidebarWidget(const snow_shot::presentation::settings::SettingsRe
     const auto* defaultPage = catalog.page(catalog.defaultLocation().pageId);
     setCurrentRoute(defaultPage != nullptr ? defaultPage->route : QStringLiteral("/"));
     setCollapsed(snow_shot::storage::InterfaceSettings().sidebarCollapsed());
+#if SNOW_SHOT_ENABLE_EXTENDED_FEATURES
     connect(&snow_shot::storage::ApplicationStorage::instance().configuration(),
             &snow_shot::storage::ConfigurationStore::valueChanged, this,
             [this](const QString& key, const QJsonValue&) {
@@ -357,6 +361,7 @@ SidebarWidget::SidebarWidget(const snow_shot::presentation::settings::SettingsRe
                 rebuildNavigationModel();
                 applyRouteSelection(route, route != m_currentRoute);
             });
+#endif
 }
 
 void SidebarWidget::changeEvent(QEvent* event) {

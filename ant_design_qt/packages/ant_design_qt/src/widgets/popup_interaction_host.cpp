@@ -1,6 +1,7 @@
 #include "popup_interaction_host.h"
 
 #include "detail/popup_geometry.h"
+#include "detail/pointer_region.h"
 #include "detail/timing_hub.h"
 
 #include <QAbstractScrollArea>
@@ -110,6 +111,23 @@ class PopupInteractionHost final : public QObject {
     return std::any_of(
         suspendedOwners_.cbegin(), suspendedOwners_.cend(),
         [owner](const SuspendedOwnerState& suspended) { return suspended.owner == owner; });
+  }
+
+  bool descendantContainsPointer(const PopupInteractionOwner* owner, const QWidget* target,
+                                 const QPoint& position) const {
+    bool afterOwner = false;
+    const auto contains = [&](const PopupInteractionOwner* candidate) {
+      return candidate && candidate->popupIsVisible() &&
+             (pointerTargetEligible(target, candidate->popupSurfaceWidget()) ||
+              pointerTargetEligible(target, candidate->popupAnchorWidget())) &&
+             candidate->popupContainsGlobalPos(position);
+    };
+    for (const auto& suspended : suspendedOwners_) {
+      if (!suspended.ownerObject) continue;
+      if (afterOwner && contains(suspended.owner)) return true;
+      if (suspended.owner == owner) afterOwner = true;
+    }
+    return afterOwner && activeOwnerObject_ && contains(activeOwner_);
   }
 
   void activateOwner(PopupInteractionOwner* owner) {
@@ -282,7 +300,7 @@ class PopupInteractionHost final : public QObject {
         return;
       }
       activeOwner_->popupRelayoutFromHost();
-      restackOwnerChain();
+      restackOwnerChain(false);
     });
   }
 
@@ -465,19 +483,19 @@ class PopupInteractionHost final : public QObject {
     }
   }
 
-  void restackOwnerChain() {
+  void restackOwnerChain(bool includeNativeWindows = true) {
     for (const SuspendedOwnerState& state : suspendedOwners_) {
-      raiseOwnerSurface(state.owner);
+      raiseOwnerSurface(state.owner, includeNativeWindows);
     }
-    raiseOwnerSurface(activeOwner_);
+    raiseOwnerSurface(activeOwner_, includeNativeWindows);
   }
 
-  void raiseOwnerSurface(PopupInteractionOwner* owner) {
+  void raiseOwnerSurface(PopupInteractionOwner* owner, bool includeNativeWindows) {
     if (!owner) {
       return;
     }
     QWidget* surface = owner->popupSurfaceWidget();
-    if (!surface || !surface->isVisible()) {
+    if (!surface || !surface->isVisible() || (!includeNativeWindows && surface->isWindow())) {
       return;
     }
     surface->raise();
@@ -680,6 +698,12 @@ PopupInteractionHost* hostForOwner(const PopupInteractionOwner* owner) {
 }
 
 }  // namespace
+
+bool popupDescendantContainsPointer(const PopupInteractionOwner* owner, const QWidget* target,
+                                    const QPoint& globalPosition) {
+  const auto* host = hostForOwner(owner);
+  return host && host->descendantContainsPointer(owner, target, globalPosition);
+}
 
 void setPopupInteractionHostOpen(PopupInteractionOwner* owner, bool open) {
   if (!owner) {

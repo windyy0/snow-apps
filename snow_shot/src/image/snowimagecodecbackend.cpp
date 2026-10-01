@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <utility>
 #include <filesystem>
 #include <thread>
 #include <chrono>
@@ -53,7 +54,9 @@ bool prepareBuffer(SnowShotImageCodecBuffer* buffer, char* error, uint64_t error
         return false;
     }
     if (buffer->data != nullptr || buffer->size != 0 || buffer->width != 0 || buffer->height != 0 ||
-        buffer->row_stride != 0) {
+        buffer->row_stride != 0 || buffer->color.icc_profile != nullptr ||
+        buffer->color.icc_profile_size != 0 || buffer->color.primaries != 0 ||
+        buffer->color.transfer != 0) {
         setError(error, errorCapacity, "The image output buffer must be released before reuse.");
         return false;
     }
@@ -353,6 +356,13 @@ snow::image::Status callbackError(snow::image::ErrorCode code, std::string_view 
     return snow::image::Status::error(code, std::string(message), "snow-shot codec bridge");
 }
 
+snow::image::ColorEncoding srgbEncoding() {
+    snow::image::ColorEncoding color;
+    color.primaries = snow::image::ColorPrimaries::srgb;
+    color.transfer = snow::image::TransferFunction::srgb;
+    return color;
+}
+
 class CallbackRasterSource final : public snow::image::RasterSource {
   public:
     CallbackRasterSource(const SnowShotImageCodecRgba8Source& source, snow::image::Format format)
@@ -360,7 +370,9 @@ class CallbackRasterSource final : public snow::image::RasterSource {
         descriptor_.format = format;
         descriptor_.canvas_width = source.width;
         descriptor_.canvas_height = source.height;
+        descriptor_.color = srgbEncoding();
         snow::image::RasterFrameDescriptor frame;
+        frame.color = descriptor_.color;
         frame.width = source.width;
         frame.height = source.height;
         frame.layout.color_model = snow::image::ColorModel::rgb;
@@ -477,6 +489,51 @@ class CallbackByteSink final : public snow::image::ByteSink {
     SnowShotImageCodecByteSink sink_{};
 };
 
+SnowShotImageCodecColorEncoding bridgeColorEncoding(const snow::image::ColorEncoding& color) {
+    SnowShotImageCodecColorEncoding result{};
+    switch (color.primaries) {
+    case snow::image::ColorPrimaries::unknown:
+        result.primaries = SNOW_SHOT_IMAGE_CODEC_PRIMARIES_UNKNOWN;
+        break;
+    case snow::image::ColorPrimaries::srgb:
+        result.primaries = SNOW_SHOT_IMAGE_CODEC_PRIMARIES_SRGB;
+        break;
+    case snow::image::ColorPrimaries::display_p3:
+        result.primaries = SNOW_SHOT_IMAGE_CODEC_PRIMARIES_DISPLAY_P3;
+        break;
+    case snow::image::ColorPrimaries::adobe_rgb:
+        result.primaries = SNOW_SHOT_IMAGE_CODEC_PRIMARIES_ADOBE_RGB;
+        break;
+    case snow::image::ColorPrimaries::rec2020:
+        result.primaries = SNOW_SHOT_IMAGE_CODEC_PRIMARIES_REC2020;
+        break;
+    case snow::image::ColorPrimaries::custom:
+        result.primaries = SNOW_SHOT_IMAGE_CODEC_PRIMARIES_CUSTOM;
+        break;
+    }
+    switch (color.transfer) {
+    case snow::image::TransferFunction::unknown:
+        result.transfer = SNOW_SHOT_IMAGE_CODEC_TRANSFER_UNKNOWN;
+        break;
+    case snow::image::TransferFunction::linear:
+        result.transfer = SNOW_SHOT_IMAGE_CODEC_TRANSFER_LINEAR;
+        break;
+    case snow::image::TransferFunction::srgb:
+        result.transfer = SNOW_SHOT_IMAGE_CODEC_TRANSFER_SRGB;
+        break;
+    case snow::image::TransferFunction::gamma:
+        result.transfer = SNOW_SHOT_IMAGE_CODEC_TRANSFER_GAMMA;
+        break;
+    case snow::image::TransferFunction::pq:
+        result.transfer = SNOW_SHOT_IMAGE_CODEC_TRANSFER_PQ;
+        break;
+    case snow::image::TransferFunction::hlg:
+        result.transfer = SNOW_SHOT_IMAGE_CODEC_TRANSFER_HLG;
+        break;
+    }
+    return result;
+}
+
 class PackedDecodeSink final : public snow::image::PixelSink {
   public:
     PackedDecodeSink(snow::image::Format expectedDocumentFormat,
@@ -535,6 +592,18 @@ class PackedDecodeSink final : public snow::image::PixelSink {
         }
         width_ = frame.width;
         height_ = frame.height;
+        color_ = bridgeColorEncoding(frame.color);
+        if (!frame.color.icc_profile.empty()) {
+            const std::size_t size = frame.color.icc_profile.size();
+            iccProfile_.reset(new (std::nothrow) std::uint8_t[size]);
+            if (!iccProfile_) {
+                return snow::image::Status::error(
+                    snow::image::ErrorCode::out_of_memory,
+                    "The decoded color profile could not be allocated.");
+            }
+            std::memcpy(iccProfile_.get(), frame.color.icc_profile.data(), size);
+            color_.icc_profile_size = static_cast<std::uint64_t>(size);
+        }
         return {};
     }
 
@@ -616,6 +685,11 @@ class PackedDecodeSink final : public snow::image::PixelSink {
         return pixels_.release();
     }
 
+    [[nodiscard]] SnowShotImageCodecColorEncoding releaseColor() noexcept {
+        color_.icc_profile = iccProfile_.release();
+        return std::exchange(color_, {});
+    }
+
     [[nodiscard]] std::uint32_t width() const noexcept {
         return width_;
     }
@@ -634,6 +708,8 @@ class PackedDecodeSink final : public snow::image::PixelSink {
     snow::image::Format expectedDocumentFormat_;
     snow::image::PixelFormat expectedPixelFormat_;
     std::unique_ptr<std::uint8_t[]> pixels_;
+    std::unique_ptr<std::uint8_t[]> iccProfile_;
+    SnowShotImageCodecColorEncoding color_{};
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
     std::size_t rowStride_ = 0;
@@ -647,6 +723,39 @@ class PackedDecodeSink final : public snow::image::PixelSink {
 
 uint32_t snow_shot_image_codec_abi_version(void) {
     return SNOW_SHOT_IMAGE_CODEC_ABI_VERSION;
+}
+
+int32_t snow_shot_image_codec_encoder_info(uint32_t bridgeFormat,
+                                           SnowShotImageCodecEncoderInfo* output) {
+    try {
+        snow::image::Format format;
+        if (output == nullptr || output->struct_size != sizeof(*output) ||
+            output->abi_version != SNOW_SHOT_IMAGE_CODEC_ABI_VERSION ||
+            !formatFromBridge(bridgeFormat, &format)) {
+            return 0;
+        }
+        const auto* info = service().encoder_info(format);
+        if (info == nullptr)
+            return 0;
+        const auto range = [](const snow::image::EncoderOptionRange& source) {
+            return SnowShotImageCodecEncoderOptionRange{source.minimum, source.maximum,
+                                                        source.default_value};
+        };
+        const uint32_t structSize = output->struct_size;
+        const uint32_t abiVersion = output->abi_version;
+        *output = {};
+        output->struct_size = structSize;
+        output->abi_version = abiVersion;
+        output->format = formatToBridge(info->format);
+        output->features = static_cast<uint32_t>(info->features);
+        output->quality = range(info->quality);
+        output->effort = range(info->effort);
+        output->lossless_effort = range(info->lossless_effort);
+        output->compression_level = range(info->compression_level);
+        return 1;
+    } catch (...) {
+        return 0;
+    }
 }
 
 int32_t snow_shot_image_codec_encode_rgba8(const uint8_t* pixels, uint64_t pixelsSize,
@@ -698,7 +807,9 @@ int32_t snow_shot_image_codec_encode_rgba8(const uint8_t* pixels, uint64_t pixel
         document.format = options.format;
         document.canvas_width = width;
         document.canvas_height = height;
+        document.color = srgbEncoding();
         snow::image::Frame frame;
+        frame.color = document.color;
         frame.image = std::move(image).freeze();
         document.frames.push_back(std::move(frame));
 
@@ -766,7 +877,8 @@ int32_t snow_shot_image_codec_encode_rgba8_stream(
 
 int32_t decodePacked8(const uint8_t* encoded, uint64_t encodedSize, uint32_t expectedFormat,
                       snow::image::PixelFormat outputFormat, const char* pixelDescription,
-                      SnowShotImageCodecBuffer* output, char* error, uint64_t errorCapacity) {
+                      SnowShotImageCodecBuffer* output, char* error, uint64_t errorCapacity,
+                      uint32_t preferredIconExtent = 0) {
     clearError(error, errorCapacity);
     if (!prepareBuffer(output, error, errorCapacity)) {
         return 0;
@@ -783,6 +895,32 @@ int32_t decodePacked8(const uint8_t* encoded, uint64_t encodedSize, uint32_t exp
         snow::image::DecodeOptions options;
         options.output_format = outputFormat;
         options.raster_layout = snow::image::RasterLayoutPolicy::packed;
+        if (preferredIconExtent != 0) {
+            const auto information =
+                service().inspect(snow::image::memory_input(bytes, nameHint(format)));
+            if (!information || information.value().format != snow::image::Format::ico ||
+                information.value().frames.empty()) {
+                setError(error, errorCapacity, "The icon directory is invalid.");
+                return 0;
+            }
+            uint64_t bestScore = std::numeric_limits<uint64_t>::max();
+            const auto& frames = information.value().frames;
+            for (std::size_t index = 0; index < frames.size(); ++index) {
+                const auto& frame = frames[index];
+                const auto distance = [preferredIconExtent](uint32_t extent) -> uint64_t {
+                    return extent > preferredIconExtent ? extent - preferredIconExtent
+                                                        : preferredIconExtent - extent;
+                };
+                const uint64_t score = distance(frame.width) + distance(frame.height);
+                if (score < bestScore) {
+                    bestScore = score;
+                    options.frame_index = static_cast<uint32_t>(index);
+                }
+            }
+            options.limits.maximum_width = 16384;
+            options.limits.maximum_height = 16384;
+            options.limits.maximum_pixels = 64ULL * 1024 * 1024;
+        }
         PackedDecodeSink sink(format, outputFormat);
         snow::image::Result<void> decoded = service().decode_to_sink(
             snow::image::memory_input(bytes, nameHint(format)), sink, options);
@@ -794,6 +932,7 @@ int32_t decodePacked8(const uint8_t* encoded, uint64_t encodedSize, uint32_t exp
             setError(error, errorCapacity, pixelDescription);
             return 0;
         }
+        output->color = sink.releaseColor();
         output->data = sink.releasePixels();
         output->width = sink.width();
         output->height = sink.height();
@@ -815,6 +954,15 @@ int32_t snow_shot_image_codec_decode_rgba8(const uint8_t* encoded, uint64_t enco
     return decodePacked8(encoded, encodedSize, expectedFormat, snow::image::kRgba8,
                          "The decoded image does not contain RGBA pixels.", output, error,
                          errorCapacity);
+}
+
+int32_t snow_shot_image_codec_decode_icon_rgba8(const uint8_t* encoded, uint64_t encodedSize,
+                                                uint32_t preferredExtent,
+                                                SnowShotImageCodecBuffer* output, char* error,
+                                                uint64_t errorCapacity) {
+    return decodePacked8(encoded, encodedSize, SNOW_SHOT_IMAGE_CODEC_FORMAT_ICO,
+                         snow::image::kRgba8, "The decoded icon does not contain RGBA pixels.",
+                         output, error, errorCapacity, preferredExtent);
 }
 
 int32_t snow_shot_image_codec_decode_bgra8(const uint8_t* encoded, uint64_t encodedSize,
@@ -871,6 +1019,7 @@ void snow_shot_image_codec_release_buffer(SnowShotImageCodecBuffer* buffer) {
         return;
     }
     delete[] buffer->data;
+    delete[] buffer->color.icc_profile;
     *buffer = {};
 }
 

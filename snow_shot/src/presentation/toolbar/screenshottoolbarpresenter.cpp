@@ -9,7 +9,6 @@
 #include "snow_shot/presentation/screenshotselectiontoolbarwidget.h"
 #include "snow_shot/presentation/screenshottoolbarwindow.h"
 
-#include <QSize>
 #include <QTimer>
 
 namespace {
@@ -21,9 +20,7 @@ constexpr int kSelectionToolbarGap = 4;
 
 void updateOcrAvailability(ScreenshotOverlayCoordinator& overlayCoordinator, bool available) {
     if (ScreenshotToolbarWindow* toolbar = overlayCoordinator.toolbar()) {
-        toolbar->setOcrEnabled(available);
-        toolbar->setTableEnabled(available);
-        toolbar->setQrEnabled(available);
+        toolbar->setRecognitionEnabled(available);
     }
 }
 } // namespace
@@ -85,6 +82,10 @@ void ScreenshotToolbarPresenter::repositionForContentChange(
 
 void ScreenshotToolbarPresenter::updateSelectionToolbarState(
     const ScreenshotToolbarPresentationState& state, bool reposition) {
+    if (auto* toolbar = m_overlayCoordinator.toolbar()) {
+        toolbar->setScreenshotRegionType(state.regionType);
+        toolbar->setSelectionDisplayUnit(state.selectionDisplayUnit);
+    }
     updateOcrAvailability(m_overlayCoordinator, state.ocrAvailable);
     if (!state.selectionToolbarMode || !hasValidSelection(state.selectionPixels)) {
         m_overlayCoordinator.hideSelectionToolbar();
@@ -98,21 +99,16 @@ void ScreenshotToolbarPresenter::updateSelectionToolbarState(
 
     {
         SNOW_SHOT_CAPTURE_PERF_SCOPE("toolbar.set_selection_state");
-        QSize outputPixels;
-#ifdef Q_OS_MACOS
-        bool points = false;
-        m_displaySession.forEachImageSource([&](qsizetype, const CapturedDisplayModel& display) {
-            points |= display.canvasUsesPoints;
-        });
-        if (points)
-            outputPixels =
-                screenshotSelectionRenderSpec(m_displaySession, state.selectionPixels).pixelSize;
-#endif
+        const auto conversion = screenshotSelectionDisplayConversion(
+            m_geometry, m_displaySession, state.selectionPixels, state.selectionDisplayUnit);
+        toolbarWidget->setPointerInteractionEnabled(!state.selectionDragging);
+        toolbarWidget->setSelectionResizable(state.selectionResizable);
+        toolbarWidget->setCornerRadiusApplicable(state.cornerRadiusApplicable);
         toolbarWidget->setSelectionState(
             state.selectionPixels, state.aspectRatioLocked, state.cornerRadius, state.shadowWidth,
             state.intelligentSelecting ? ScreenshotSelectionToolbarWidget::DisplayMode::SizeOnly
                                        : ScreenshotSelectionToolbarWidget::DisplayMode::Full,
-            outputPixels);
+            conversion.canvasUsesPoints, conversion.selection);
     }
 
     if (reposition) {
@@ -158,7 +154,7 @@ void ScreenshotToolbarPresenter::moveToolbar(const ScreenshotToolbarPresentation
     ScreenshotOverlayWindow* overlay = m_displaySession.overlayForDisplay(display);
     const ScreenshotDisplayPlacementGeometry placementGeometry =
         ScreenshotGeometryMapper::displayPlacementGeometry(
-            display, overlay != nullptr ? overlay->geometry() : QRect());
+            display, overlay != nullptr ? overlay->captureGeometry() : QRect());
     if (!placementGeometry.valid) {
         return;
     }
@@ -195,7 +191,6 @@ void ScreenshotToolbarPresenter::moveSelectionToolbar(
     }
 
     const QSize toolbarSize = toolbarWidget->contentSizeHint();
-    const QRect toolbarRect(QPoint(0, 0), toolbarSize);
     const CapturedDisplayModel* display = displayForCanvasRect(selection);
     ScreenshotOverlayWindow* overlay = m_displaySession.overlayForDisplay(display);
     if (display == nullptr || overlay == nullptr) {
@@ -208,17 +203,18 @@ void ScreenshotToolbarPresenter::moveSelectionToolbar(
         m_overlayCoordinator.attachSelectionToolbarToOverlay(overlay);
     }
     const ScreenshotDisplayPlacementGeometry placementGeometry =
-        ScreenshotGeometryMapper::displayPlacementGeometry(display, overlay->geometry());
+        ScreenshotGeometryMapper::displayPlacementGeometry(display, overlay->captureGeometry());
     if (!placementGeometry.valid) {
         m_overlayCoordinator.hideSelectionToolbar();
         return;
     }
 
-    const QPoint topLeftAnchor = logicalPositionForCanvasPoint(*display, selection.topLeft());
-    QPoint pos(topLeftAnchor.x(), topLeftAnchor.y() - toolbarSize.height() - kSelectionToolbarGap);
-
-    pos = ScreenshotGeometryMapper::clampContentPositionToRect(pos, toolbarRect,
-                                                               placementGeometry.logicalBounds);
+    const QPoint logicalTopLeft = logicalPositionForCanvasPoint(*display, selection.topLeft());
+    const QPoint logicalBottomRight =
+        logicalPositionForCanvasPoint(*display, selection.bottomRight());
+    const QPoint pos = ScreenshotGeometryMapper::selectionToolbarContentPosition(
+        QRectF(logicalTopLeft, logicalBottomRight).normalized(), toolbarSize,
+        placementGeometry.logicalBounds, kSelectionToolbarGap);
 
     const QPoint overlayOrigin = overlay->geometry().topLeft();
     toolbarWidget->moveContentTo(pos - overlayOrigin);

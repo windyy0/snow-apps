@@ -95,7 +95,8 @@ int incrementCounter(const QString& path) {
 }
 
 int fakeSidecar(int argc, char** argv) {
-    const QString scenario = QUrl(argument(argc, argv, "--base-url")).path().mid(1);
+    const QString scenario = QUrl(argument(argc, argv, "--github-api-url")).path().mid(1);
+    require(!argument(argc, argv, "--gitee-api-url").isEmpty(), "Gitee endpoint supplied");
     const QString cache = argument(argc, argv, "--cache");
     incrementCounter(QDir(cache).filePath(QStringLiteral("launch-count")));
     if (scenario == u"unsupported-handshake") {
@@ -135,6 +136,13 @@ int fakeSidecar(int argc, char** argv) {
                 return 0;
             }
             if (operation == u"apply") {
+                if (scenario == u"apply-newer-release") {
+                    status("Checking");
+                    status("Available");
+                    complete(operation, "success", "Available");
+                    incrementCounter(completionCounter);
+                    return 0;
+                }
                 status("Applying");
                 frame({{QStringLiteral("protocol"), 2},
                        {QStringLiteral("type"), QStringLiteral("handoff_ready")}});
@@ -298,7 +306,8 @@ int main(int argc, char** argv) {
         value.applicationDirectory = QDir(root).filePath(QStringLiteral("bin"));
         value.root = root;
         value.cacheDirectory = directory.filePath(QStringLiteral("cache-%1").arg(++cacheIndex));
-        value.baseUrl = QUrl(QStringLiteral("https://updates.example.test/") + scenario);
+        value.githubApiUrl = QUrl(QStringLiteral("https://updates.example.test/") + scenario);
+        value.giteeApiUrl = QUrl(QStringLiteral("https://updates.example.test/") + scenario);
         return value;
     };
 
@@ -306,6 +315,11 @@ int main(int argc, char** argv) {
         UpdateService service(options(QStringLiteral("default")));
         bool updateReady = false;
         bool handoff = false;
+        QList<QPair<QString, QString>> operations;
+        QObject::connect(&service, &UpdateService::operationFinished, &app,
+                         [&](const QString& operation, const QString& outcome) {
+                             operations.append({operation, outcome});
+                         });
         QObject::connect(&service, &UpdateService::updateReady, &app, [&] { updateReady = true; });
         QObject::connect(&service, &UpdateService::handoffReady, &app, [&] {
             handoff = true;
@@ -315,9 +329,12 @@ int main(int argc, char** argv) {
         require(waitUntil([&] { return service.status().state == UpdateState::Idle; }),
                 "sidecar handshake reaches idle");
         service.check();
+        require(service.busy(), "accepted update work owns the updater lifecycle immediately");
         require(
             waitUntil([&] { return updateReady && service.status().state == UpdateState::Ready; }),
             "status and update-ready mapping");
+        require(operations.contains({QStringLiteral("check"), QStringLiteral("success")}),
+                "service completion reports exact operation and outcome without polling");
         service.beginApply();
         require(waitUntil([&] { return handoff && service.status().state == UpdateState::Ready; }),
                 "reentrant handoff cancellation");
@@ -354,12 +371,20 @@ int main(int argc, char** argv) {
 
     for (const auto& scenario : {QStringLiteral("malformed"), QStringLiteral("oversized")}) {
         UpdateService service(options(scenario));
+        int failedChecks = 0;
+        QObject::connect(&service, &UpdateService::operationFinished, &service,
+                         [&](const QString& operation, const QString& outcome) {
+                             if (operation == u"check" && outcome == u"failed")
+                                 ++failedChecks;
+                         });
         service.start();
         require(waitUntil([&] { return service.status().state == UpdateState::Idle; }),
                 "protocol-failure handshake");
         service.check();
         require(waitUntil([&] { return service.status().state == UpdateState::Failed; }),
                 "terminate malformed protocol peer");
+        require(waitUntil([&] { return !service.busy(); }) && failedChecks == 1,
+                "protocol failure completes the owned operation exactly once");
     }
 
     {
@@ -378,12 +403,37 @@ int main(int argc, char** argv) {
 
     {
         UpdateService service(options(QStringLiteral("unexpected-exit")));
+        int failedChecks = 0;
+        QObject::connect(&service, &UpdateService::operationFinished, &service,
+                         [&](const QString& operation, const QString& outcome) {
+                             if (operation == u"check" && outcome == u"failed")
+                                 ++failedChecks;
+                         });
         service.start();
         require(waitUntil([&] { return service.status().state == UpdateState::Idle; }),
                 "unexpected-exit handshake");
         service.check();
         require(waitUntil([&] { return service.status().state == UpdateState::Failed; }),
                 "unexpected active exit exposes failed");
+        require(failedChecks == 1, "unexpected exit completes the owned operation exactly once");
+    }
+
+    {
+        auto missingOptions = options(QStringLiteral("missing-helper"));
+        missingOptions.applicationDirectory = directory.filePath(QStringLiteral("missing"));
+        UpdateService service(std::move(missingOptions));
+        int failedChecks = 0;
+        QObject::connect(&service, &UpdateService::operationFinished, &service,
+                         [&](const QString& operation, const QString& outcome) {
+                             if (operation == u"check" && outcome == u"failed")
+                                 ++failedChecks;
+                         });
+        service.check();
+        require(waitUntil([&] { return failedChecks == 1 && !service.busy(); }),
+                "failed helper launch completes the owned operation");
+        service.check();
+        require(waitUntil([&] { return failedChecks == 2 && !service.busy(); }),
+                "retry failure receives its own completion");
     }
 
     {
@@ -450,6 +500,11 @@ int main(int argc, char** argv) {
         const QString download =
             QDir(cache).filePath(QStringLiteral("download-policyChange-count"));
         UpdateService service(std::move(policyOptions));
+        QStringList announced;
+        int readyCount = 0;
+        QObject::connect(&service, &UpdateService::automaticUpdateAvailable, &app,
+                         [&](const QString& version) { announced.append(version); });
+        QObject::connect(&service, &UpdateService::updateReady, &app, [&] { ++readyCount; });
         service.start();
         require(waitUntil([&] { return service.status().state == UpdateState::Idle; }),
                 "download-policy probe");
@@ -461,6 +516,68 @@ int main(int argc, char** argv) {
                            service.status().state == UpdateState::Ready;
                 }),
                 "adapter schedules a distinct download from current policy");
+        require(announced.isEmpty() && readyCount == 1,
+                "automatic download keeps its update-ready notification without an early notice");
+    }
+
+    {
+        auto applyOptions = options(QStringLiteral("apply-newer-release"));
+        const QString cache = applyOptions.cacheDirectory;
+        const QString check = QDir(cache).filePath(QStringLiteral("check-user-complete"));
+        const QString apply = QDir(cache).filePath(QStringLiteral("apply-user-complete"));
+        const QString download =
+            QDir(cache).filePath(QStringLiteral("download-policyChange-count"));
+        UpdateService service(std::move(applyOptions));
+        service.start();
+        require(waitUntil([&] { return service.status().state == UpdateState::Idle; }),
+                "newer-release probe completes");
+        service.check();
+        require(waitUntil([&] {
+                    return counterValue(check) == 1 && service.status().state == UpdateState::Ready;
+                }),
+                "the first check makes the cached release ready");
+        service.beginApply();
+        require(waitUntil([&] {
+                    return counterValue(apply) == 1 && counterValue(download) == 1 &&
+                           service.status().state == UpdateState::Ready;
+                }),
+                "a newer release found before apply is downloaded automatically");
+    }
+
+    {
+        auto checkOptions = options(QStringLiteral("adapter-download-policy"));
+        const QString cache = checkOptions.cacheDirectory;
+        checkOptions.startupCheckDelay = std::chrono::hours(1);
+        checkOptions.automaticCheckInterval = std::chrono::hours(1);
+        const QString automaticChecks =
+            QDir(cache).filePath(QStringLiteral("check-periodic-complete"));
+        const QString manualChecks = QDir(cache).filePath(QStringLiteral("check-user-complete"));
+        const QString downloads =
+            QDir(cache).filePath(QStringLiteral("download-policyChange-count"));
+        UpdateService service(std::move(checkOptions));
+        service.setMode(QStringLiteral("check"));
+        QStringList announced;
+        QObject::connect(&service, &UpdateService::automaticUpdateAvailable, &app,
+                         [&](const QString& version) { announced.append(version); });
+        service.start();
+        require(waitUntil([&] { return service.status().state == UpdateState::Idle; }),
+                "notification-only probe completes");
+        service.check(false);
+        require(waitUntil([&] {
+                    return counterValue(automaticChecks) == 1 &&
+                           service.status().state == UpdateState::Available;
+                }),
+                "notification-only check finds an update");
+        require(announced == QStringList{QStringLiteral("2.0.0")} && counterValue(downloads) == 0,
+                "check mode announces the available version without downloading");
+        service.check(false);
+        require(waitUntil([&] { return counterValue(automaticChecks) == 2; }),
+                "repeat automatic check completes");
+        service.check(true);
+        require(waitUntil([&] { return counterValue(manualChecks) == 1; }),
+                "manual check completes");
+        require(announced.size() == 1,
+                "repeat and manual checks do not duplicate the system notification");
     }
 
     {
@@ -530,15 +647,23 @@ int main(int argc, char** argv) {
             QDir(availableOptions.cacheDirectory).filePath(QStringLiteral("launch-count"));
         UpdateService service(std::move(availableOptions));
         service.setMode(QStringLiteral("manual"));
+        QStringList announced;
+        int readyCount = 0;
+        QObject::connect(&service, &UpdateService::automaticUpdateAvailable, &app,
+                         [&](const QString& version) { announced.append(version); });
+        QObject::connect(&service, &UpdateService::updateReady, &app, [&] { ++readyCount; });
         service.start();
         require(waitUntil([&] { return service.status().state == UpdateState::Available; }),
                 "probe restores an available update");
+        require(announced.isEmpty(), "manual mode keeps cached discovery in About");
         service.setMode(QStringLiteral("download"));
         require(waitUntil([&] {
                     return counterValue(launches) >= 2 &&
                            service.status().state == UpdateState::Ready;
                 }),
                 "enabling automatic download launches an immediate short-lived download");
+        require(announced.isEmpty() && readyCount == 1,
+                "switching to automatic download preserves the ready notification");
     }
 
     {

@@ -5,6 +5,12 @@ Apache-2.0; Windows 10/11 x64 and macOS 15+ on Apple Silicon or Intel are suppor
 platforms compile and return `UnsupportedPlatform`. There is no translation service, global hook,
 UI, permission prompt, or network access.
 
+When linked as a separate application FFI archive, enable `host-application-qos`
+and provide the C ABI `int32_t snow_application_qos_apply_current_thread(void)`.
+The worker calls that host policy before creating its platform backend, so it
+shares the application's launch-scoped QoS state. Standalone builds use
+`snow-core` directly by default.
+
 ```rust,no_run
 use snow_selected_text::{CaptureOptions, SelectedTextService, SelectionOutcome};
 
@@ -38,13 +44,16 @@ provider reports a known transient failure. Explicit provider errors remain term
 The platform orders are:
 
 1. Windows: UI Automation `TextPattern`, standard native `EDIT`, then guarded Ctrl+C.
-2. macOS: Accessibility `AXSelectedTextRange(s)`/`AXStringForRange`, then guarded Command-C.
+2. macOS: Accessibility `AXSelectedTextRange(s)`/`AXStringForRange` and `AXSelectedText`, then guarded Command-C.
 
 The Windows Accessibility provider checks the focused element and relevant ancestors, then performs
 a bounded search for one document beneath a focused container. The native-control provider uses
 system-marshalled `EM_GETSEL`, bounded `WM_GETTEXT`, and a second selection-offset check. The macOS
 provider checks the frontmost process and focused AX element before and after reading, rejects
 `AXSecureTextField`, retains noncontiguous range order, and retrieves optional `AXBoundsForRange`.
+On macOS, an empty range list is not proof of an empty selection: the provider also checks the
+single range and direct selected-text attributes before deciding whether Copy is needed. A zero-length
+range or an empty direct selected-text value confirms no selection when no other attribute supplies text.
 
 Set `CaptureOptions::strategy` to `CaptureStrategy::Accessibility`, `NativeControl`, or `Clipboard`
 to attempt only that acquisition method. `NativeControl` is Windows-only. Explicit strategies never
@@ -138,6 +147,11 @@ the library cannot prove that an application's Copy handler copied a selection r
 Capture requires the host to already be trusted for Accessibility. Clipboard fallback additionally
 requires `CGPreflightPostEventAccess`. Missing permission returns `AccessDenied` before the general
 pasteboard is read or changed; the crate deliberately provides no implicit prompt or prompt helper.
+
+Applications that expose no focused AX element can still use Command-C. The worker continues to
+validate the frontmost process and requires AX focus to remain unavailable throughout Copy; if a
+focused element is exposed, its identity and secure-field status are checked as usual. Actual AX
+errors and permission failures are not treated as absent focus.
 
 Before Command-C, the worker materializes ordered pasteboard items and types within the documented
 limits. A complete snapshot is replaced by a request-unique private marker, allowing a no-op Copy to

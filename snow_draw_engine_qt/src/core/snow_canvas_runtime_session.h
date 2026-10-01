@@ -29,11 +29,13 @@ class RuntimeSession final {
     bool reset();
     bool cloneDocumentSessionFrom(const RuntimeSession& source);
     QByteArray serializeDocumentSession() const;
+    QByteArray serializeSelectedDrawTemplate() const;
     bool restoreDocumentSession(const QByteArray& payload);
     QByteArray serializeDocumentHistory() const;
     bool restoreDocumentHistory(const QByteArray& payload);
     bool restoreDocumentHistoryPreservingEditorStyles(const QByteArray& payload);
     bool clearDocumentPreservingViewports();
+    void clearRenderState();
     bool setQuickSelectionDisabledTools(const QSet<SnowCanvasTool>& tools);
     void destroyAsync(SnowCanvasRuntime& owner);
     void destroyForOwnerDestruction(SnowCanvasRuntime& owner, OwnerDestructionPolicy policy);

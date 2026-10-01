@@ -12,6 +12,14 @@
             <translation>Add</translation>
         </message>
         <message>
+            <source>Add Template</source>
+            <translation>Add Template</translation>
+        </message>
+        <message>
+            <source>Add screenshot region</source>
+            <translation>Add screenshot region</translation>
+        </message>
+        <message>
             <source>Add template</source>
             <translation>Add template</translation>
         </message>
@@ -60,6 +68,14 @@
             <translation>Arrow</translation>
         </message>
         <message>
+            <source>Arrow ratio (scroll to adjust)</source>
+            <translation>Arrow ratio (scroll to adjust)</translation>
+        </message>
+        <message>
+            <source>Arrow shaft type</source>
+            <translation>Arrow shaft type</translation>
+        </message>
+        <message>
             <source>Arrow stroke color</source>
             <translation>Arrow stroke color</translation>
         </message>
@@ -80,6 +96,10 @@
             <translation>Auto-scroll</translation>
         </message>
         <message>
+            <source>Auto-scroll interval (scroll to adjust; click to reset to 200 ms)</source>
+            <translation>Auto-scroll interval (scroll to adjust; click to reset to 200 ms)</translation>
+        </message>
+        <message>
             <source>Avatar</source>
             <translation>Avatar</translation>
         </message>
@@ -90,6 +110,10 @@
         <message>
             <source>Blue</source>
             <translation>Blue</translation>
+        </message>
+        <message>
+            <source>Brightness</source>
+            <translation>Brightness</translation>
         </message>
         <message>
             <source>Bring forward</source>
@@ -124,6 +148,10 @@
             <translation>Circle</translation>
         </message>
         <message>
+            <source>Click-through</source>
+            <translation>Click-through</translation>
+        </message>
+        <message>
             <source>Close recording</source>
             <translation>Close recording</translation>
         </message>
@@ -154,6 +182,18 @@
         <message>
             <source>Corner radius (scroll to adjust)</source>
             <translation>Corner radius (scroll to adjust)</translation>
+        </message>
+        <message>
+            <source>Could not capture selected elements</source>
+            <translation>Could not capture selected elements</translation>
+        </message>
+        <message>
+            <source>Could not delete the draw template</source>
+            <translation>Could not delete the draw template</translation>
+        </message>
+        <message>
+            <source>Could not save the draw template</source>
+            <translation>Could not save the draw template</translation>
         </message>
         <message>
             <source>Cross-line fill</source>
@@ -196,6 +236,10 @@
             <translation>Current watermark font size</translation>
         </message>
         <message>
+            <source>Curve region</source>
+            <translation>Curve region</translation>
+        </message>
+        <message>
             <source>Curved arrow</source>
             <translation>Curved arrow</translation>
         </message>
@@ -222,6 +266,14 @@
         <message>
             <source>Delete</source>
             <translation>Delete</translation>
+        </message>
+        <message>
+            <source>Delete Draw Template</source>
+            <translation>Delete Draw Template</translation>
+        </message>
+        <message>
+            <source>Delete draw template "%1"? This action cannot be undone.</source>
+            <translation>Delete draw template "%1"? This action cannot be undone.</translation>
         </message>
         <message>
             <source>Delete selected elements</source>
@@ -260,12 +312,20 @@
             <translation>Drag toolbar</translation>
         </message>
         <message>
+            <source>Draw Template</source>
+            <translation>Draw Template</translation>
+        </message>
+        <message>
             <source>Edit</source>
             <translation>Edit</translation>
         </message>
         <message>
             <source>Edit selection</source>
             <translation>Edit selection</translation>
+        </message>
+        <message>
+            <source>Effect Settings</source>
+            <translation>Effect Settings</translation>
         </message>
         <message>
             <source>Elbow arrow</source>
@@ -320,6 +380,10 @@
             <translation>End arrowhead dot</translation>
         </message>
         <message>
+            <source>End arrowhead indented triangle</source>
+            <translation>End arrowhead indented triangle</translation>
+        </message>
+        <message>
             <source>End arrowhead none</source>
             <translation>End arrowhead none</translation>
         </message>
@@ -338,6 +402,10 @@
         <message>
             <source>Eraser</source>
             <translation>Eraser</translation>
+        </message>
+        <message>
+            <source>Exit</source>
+            <translation>Exit</translation>
         </message>
         <message>
             <source>Export Settings</source>
@@ -380,6 +448,10 @@
             <translation>Formatting</translation>
         </message>
         <message>
+            <source>Freehand region</source>
+            <translation>Freehand region</translation>
+        </message>
+        <message>
             <source>Full-width</source>
             <translation>Full-width</translation>
         </message>
@@ -398,6 +470,10 @@
         <message>
             <source>Half-width</source>
             <translation>Half-width</translation>
+        </message>
+        <message>
+            <source>Hide selection toolbar</source>
+            <translation>Hide selection toolbar</translation>
         </message>
         <message>
             <source>Highlight</source>
@@ -460,6 +536,10 @@
             <translation>Keyboard Size</translation>
         </message>
         <message>
+            <source>LaTeX Formula Recognition</source>
+            <translation>LaTeX Formula Recognition</translation>
+        </message>
+        <message>
             <source>Line</source>
             <translation>Line</translation>
         </message>
@@ -474,6 +554,10 @@
         <message>
             <source>Line text fill</source>
             <translation>Line text fill</translation>
+        </message>
+        <message>
+            <source>Logical Pixel Selection</source>
+            <translation>Logical Pixel Selection</translation>
         </message>
         <message>
             <source>Mask color</source>
@@ -516,6 +600,18 @@
             <translation>Mouse click color transparent</translation>
         </message>
         <message>
+            <source>Mouse highlight</source>
+            <translation>Mouse highlight</translation>
+        </message>
+        <message>
+            <source>Mouse highlight color</source>
+            <translation>Mouse highlight color</translation>
+        </message>
+        <message>
+            <source>Mouse highlight preview</source>
+            <translation>Mouse highlight preview</translation>
+        </message>
+        <message>
             <source>Mouse trail color</source>
             <translation>Mouse trail color</translation>
         </message>
@@ -526,6 +622,18 @@
         <message>
             <source>Mouse trail color transparent</source>
             <translation>Mouse trail color transparent</translation>
+        </message>
+        <message>
+            <source>Move selection horizontally (press and hold to drag)</source>
+            <translation>Move selection horizontally (press and hold to drag)</translation>
+        </message>
+        <message>
+            <source>Move selection vertically (press and hold to drag)</source>
+            <translation>Move selection vertically (press and hold to drag)</translation>
+        </message>
+        <message>
+            <source>No matching templates</source>
+            <translation>No matching templates</translation>
         </message>
         <message>
             <source>No templates yet</source>
@@ -580,6 +688,10 @@
             <translation>Pen highlight stroke width %1 (%2px)</translation>
         </message>
         <message>
+            <source>Physical Pixel Selection</source>
+            <translation>Physical Pixel Selection</translation>
+        </message>
+        <message>
             <source>Pick color from canvas</source>
             <translation>Pick color from canvas</translation>
         </message>
@@ -588,12 +700,28 @@
             <translation>Pin to screen</translation>
         </message>
         <message>
+            <source>Plain shaft</source>
+            <translation>Plain shaft</translation>
+        </message>
+        <message>
             <source>Please enter a template name</source>
             <translation>Please enter a template name</translation>
         </message>
         <message>
             <source>Please enter a template value</source>
             <translation>Please enter a template value</translation>
+        </message>
+        <message>
+            <source>Polyline region</source>
+            <translation>Polyline region</translation>
+        </message>
+        <message>
+            <source>Post-processing effects</source>
+            <translation>Post-processing effects</translation>
+        </message>
+        <message>
+            <source>Progress Bar Color</source>
+            <translation>Progress Bar Color</translation>
         </message>
         <message>
             <source>Punctuation</source>
@@ -612,6 +740,10 @@
             <translation>Record microphone</translation>
         </message>
         <message>
+            <source>Record mouse clicks</source>
+            <translation>Record mouse clicks</translation>
+        </message>
+        <message>
             <source>Record screen</source>
             <translation>Record screen</translation>
         </message>
@@ -628,6 +760,10 @@
             <translation>Recording format</translation>
         </message>
         <message>
+            <source>Recording settings</source>
+            <translation>Recording settings</translation>
+        </message>
+        <message>
             <source>Rectangle</source>
             <translation>Rectangle</translation>
         </message>
@@ -638,6 +774,10 @@
         <message>
             <source>Rectangle highlight</source>
             <translation>Rectangle highlight</translation>
+        </message>
+        <message>
+            <source>Rectangle region</source>
+            <translation>Rectangle region</translation>
         </message>
         <message>
             <source>Red</source>
@@ -732,12 +872,28 @@
             <translation>Shape</translation>
         </message>
         <message>
+            <source>Show Playback Time</source>
+            <translation>Show Playback Time</translation>
+        </message>
+        <message>
+            <source>Show Progress Bar</source>
+            <translation>Show Progress Bar</translation>
+        </message>
+        <message>
+            <source>Show QR Code</source>
+            <translation>Show QR Code</translation>
+        </message>
+        <message>
             <source>Show cursor in recording</source>
             <translation>Show cursor in recording</translation>
         </message>
         <message>
             <source>Show keystrokes in recording</source>
             <translation>Show keystrokes in recording</translation>
+        </message>
+        <message>
+            <source>Show original image</source>
+            <translation>Show original image</translation>
         </message>
         <message>
             <source>Smart Erase</source>
@@ -820,6 +976,10 @@
             <translation>Start arrowhead dot</translation>
         </message>
         <message>
+            <source>Start arrowhead indented triangle</source>
+            <translation>Start arrowhead indented triangle</translation>
+        </message>
+        <message>
             <source>Start arrowhead none</source>
             <translation>Start arrowhead none</translation>
         </message>
@@ -864,8 +1024,20 @@
             <translation>Stroke width %1</translation>
         </message>
         <message>
+            <source>Subtract screenshot region</source>
+            <translation>Subtract screenshot region</translation>
+        </message>
+        <message>
             <source>Table recognition</source>
             <translation>Table recognition</translation>
+        </message>
+        <message>
+            <source>Tapered shaft</source>
+            <translation>Tapered shaft</translation>
+        </message>
+        <message>
+            <source>Tapered shafts support standard, triangle, triangle outline, and indented triangle arrowheads.</source>
+            <translation>Tapered shafts support standard, triangle, triangle outline, and indented triangle arrowheads.</translation>
         </message>
         <message>
             <source>Template</source>
@@ -964,10 +1136,6 @@
             <translation>Transparent</translation>
         </message>
         <message>
-            <source>Unavailable while recording</source>
-            <translation>Unavailable while recording</translation>
-        </message>
-        <message>
             <source>Undo</source>
             <translation>Undo</translation>
         </message>
@@ -1016,12 +1184,24 @@
             <translation>ms</translation>
         </message>
         <message>
+            <source>ms</source>
+            <comment>Auto-scroll interval unit</comment>
+            <translation>ms</translation>
+        </message>
+        <message>
             <source>px</source>
             <translation>px</translation>
         </message>
         <message>
             <source>{text} represents the current watermark text; timestamp formats such as {YYYY-MM-DD_HH-mm-ss} are supported</source>
             <translation>{text} represents the current watermark text; timestamp formats such as {YYYY-MM-DD_HH-mm-ss} are supported</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::presentation::GlobalCanvasController</name>
+        <message>
+            <source>Could not change canvas click-through.</source>
+            <translation>Could not change canvas click-through.</translation>
         </message>
     </context>
 </TS>

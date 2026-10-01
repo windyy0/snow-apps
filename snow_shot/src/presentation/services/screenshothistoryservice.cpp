@@ -1,6 +1,9 @@
+#include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/presentation/screenshothistoryservice.h"
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
+#include "snow_shot/presentation/screenshotimagefileservice.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/settingsadapters.h"
 
 #include "snow_shot/presentation/screenshotdisplaysession.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
@@ -78,6 +81,7 @@ persistedSelection(const ScreenshotSelectionParams& selection) {
     return {
         selection.selection,   selection.radius,          selection.shadowWidth,
         selection.shadowColor, selection.lockAspectRatio, selection.lockDragAspectRatio,
+        selection.region,
     };
 }
 
@@ -85,6 +89,7 @@ ScreenshotSelectionParams
 presentationSelection(const snow_shot::storage::PersistedSelection& selection) {
     ScreenshotSelectionParams result;
     result.selection = selection.rectangle;
+    result.region = selection.region;
     result.radius = selection.cornerRadius;
     result.shadowWidth = selection.shadowWidth;
     result.shadowColor = selection.shadowColor;
@@ -110,6 +115,25 @@ snow_shot::storage::CaptureHistoryDraft storageDraft(const ScreenshotHistoryEntr
     }
     draft.resultImage = entry.resultImage;
     draft.preparedResultImage = entry.preparedResultImage;
+    const snow_shot::storage::ScreenshotSettings settings;
+    draft.pngCompressionLevel =
+        ScreenshotImageFileService::encodeOptions(
+            ScreenshotImageFileFormat::Png,
+            ScreenshotImageEncodingOptions{100, ScreenshotImageFileService::compressionLevelForKey(
+                                                    settings.compressionLevel())})
+            .compression_level;
+    draft.displayPngCompressionLevel =
+        ScreenshotImageFileService::encodeOptions(
+            ScreenshotImageFileFormat::Png,
+            ScreenshotImageEncodingOptions{
+                100, ScreenshotImageFileService::compressionLevelForKey(
+                         snow_shot::storage::ApplicationStorage::instance()
+                             .configuration()
+                             .value(QStringLiteral("capture_history/compression_level"))
+                             .toString())})
+            .compression_level;
+    draft.scrolling = entry.scrolling;
+    draft.desktopGeometry = entry.desktopGeometry;
     return draft;
 }
 
@@ -122,6 +146,8 @@ placeholderRecord(const snow_shot::storage::CaptureHistoryDraft& draft) {
     record.canvasBounds = draft.canvasBounds;
     record.selection = draft.selection;
     record.source = draft.source;
+    record.scrolling = draft.scrolling;
+    record.desktopGeometry = draft.desktopGeometry;
     record.canvasBytes = draft.canvasHistory.size();
     if (draft.resultImage.has_value() || draft.preparedResultImage.has_value()) {
         const QSize resultSize = draft.preparedResultImage.has_value()
@@ -153,6 +179,8 @@ presentationEntry(const snow_shot::storage::CaptureHistoryRecord& record,
     entry.selection = presentationSelection(record.selection);
     entry.canvasHistory = payload.canvasHistory;
     entry.source = record.source;
+    entry.scrolling = record.scrolling;
+    entry.desktopGeometry = record.desktopGeometry;
     entry.persistent = true;
     for (qsizetype index = 0; index < record.displays.size(); ++index) {
         entry.displays.push_back(
@@ -219,10 +247,18 @@ class ScreenshotHistoryValidationQueue final {
                                     {}});
                 return result;
             }
-            if (!m_thread.joinable()) {
+            if (!m_running) {
+                if (m_thread.joinable()) {
+                    m_thread.join();
+                }
                 try {
-                    m_thread = std::thread([this]() { run(); });
+                    m_running = true;
+                    m_thread = std::thread([this]() {
+                        snow_shot::platform::applyApplicationQoSToCurrentThread();
+                        run();
+                    });
                 } catch (...) {
+                    m_running = false;
                     promise->set_value({snow_shot::storage::StorageResult::failure(
                                             QStringLiteral("Unable to start history validation")),
                                         {}});
@@ -237,6 +273,7 @@ class ScreenshotHistoryValidationQueue final {
 
   private:
     static constexpr std::size_t kMaximumPendingJobs = 2;
+    static constexpr auto kIdleTimeout = std::chrono::seconds(5);
 
     struct Job {
         snow_shot::storage::CaptureHistoryDraft draft;
@@ -248,9 +285,15 @@ class ScreenshotHistoryValidationQueue final {
             Job job;
             {
                 std::unique_lock lock(m_mutex);
-                m_condition.wait(lock, [this]() { return m_stopping || !m_jobs.empty(); });
+                const bool ready = m_condition.wait_for(
+                    lock, kIdleTimeout, [this]() { return m_stopping || !m_jobs.empty(); });
+                if (!ready) {
+                    m_running = false;
+                    return;
+                }
                 if (m_jobs.empty()) {
                     if (m_stopping) {
+                        m_running = false;
                         return;
                     }
                     continue;
@@ -292,6 +335,8 @@ class ScreenshotHistoryValidationQueue final {
     std::condition_variable m_condition;
     std::deque<Job> m_jobs;
     bool m_stopping = false;
+    // A retired thread remains joinable until the next submission reaps it.
+    bool m_running = false;
     std::thread m_thread;
 };
 
@@ -345,6 +390,17 @@ ScreenshotHistoryService::snapshotCurrent(bool persistent) const {
     entry.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     entry.createdUtc = m_clock().toUTC();
     entry.recordedCanvasBounds = bounds;
+    // Active displays define the editor canvas even when history supplies different image
+    // sources. Re-exporting a restored item must record its position in this live canvas.
+    m_context.displays.forEachActiveDisplay(
+        [&entry](qsizetype, const CapturedDisplayModel& display) {
+            if (!entry.desktopGeometry && !display.physicalRect.isEmpty() &&
+                !display.canvasRect.isEmpty()) {
+                entry.desktopGeometry = snow_shot::storage::CaptureHistoryDesktopGeometry{
+                    display.physicalRect.topLeft() - display.canvasRect.topLeft(),
+                    display.canvasUsesPoints};
+            }
+        });
     entry.selection = m_context.selection.params(bounds);
     entry.canvasHistory = m_context.runtime.serializeDocumentHistory();
     entry.intelligentSelectionMode = m_context.interaction.intelligentSelecting();
@@ -477,6 +533,7 @@ bool ScreenshotHistoryService::navigateTo(int index) {
         m_pendingLoads.push_back(std::async(std::launch::async, [this, generation, index, entryId,
                                                                  metadata = std::move(metadata),
                                                                  pendingWrite]() mutable {
+            snow_shot::platform::applyApplicationQoSToCurrentThread();
             std::optional<ScreenshotHistoryEntry> loadedEntry;
             try {
                 if (pendingWrite.valid()) {
@@ -546,6 +603,16 @@ void ScreenshotHistoryService::finishPersistentNavigation(
     reapCompletedLoads();
 }
 
+bool ScreenshotHistoryService::presentTransientEntry(const ScreenshotHistoryEntry& entry) {
+    if (entry.displays.isEmpty() || entry.canvasHistory.isEmpty())
+        return false;
+    resetCaptureNavigation();
+    auto imported = entry;
+    imported.persistent = false;
+    imported.intelligentSelectionMode = false;
+    return applyEntry(imported);
+}
+
 bool ScreenshotHistoryService::applyEntry(const ScreenshotHistoryEntry& entry) {
     const bool pointSources =
         std::any_of(entry.displays.cbegin(), entry.displays.cend(),
@@ -569,8 +636,10 @@ bool ScreenshotHistoryService::applyEntry(const ScreenshotHistoryEntry& entry) {
             imageCanvasOffset = bounds.topLeft();
         }
         selectionParams.selection.translate(imageCanvasOffset);
+        if (selectionParams.region)
+            selectionParams.region->translate(imageCanvasOffset);
     }
-    if (!restoredSelection.applyParams(selectionParams, bounds)) {
+    if (!restoredSelection.applyParams(selectionParams, bounds) && !selectionParams.region) {
         return false;
     }
 
@@ -665,7 +734,7 @@ bool ScreenshotHistoryService::applyEntry(const ScreenshotHistoryEntry& entry) {
     m_context.selection = restoredSelection;
     m_context.interaction.cancelDrag();
     bool requestIntelligentSelection = false;
-    if (entry.persistent) {
+    if (entry.persistent || !m_context.selection.hasPixelSelection()) {
         m_context.intelligentSelection.clearTransientState();
         m_context.interaction.returnToSelectionMode(false);
     } else if (entry.intelligentSelectionMode) {

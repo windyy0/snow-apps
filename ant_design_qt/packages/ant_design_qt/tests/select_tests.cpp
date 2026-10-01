@@ -4,6 +4,7 @@
 #include <QListView>
 #include <QLineEdit>
 #include <QLayout>
+#include <QStandardItemModel>
 #include <QToolButton>
 #include <QStringList>
 #include <QTest>
@@ -12,6 +13,7 @@
 #include "widgets/select.h"
 #include "widgets/control_scale.h"
 
+using adqt::widgets::AdControlScaleContext;
 using adqt::widgets::AdSelect;
 
 namespace {
@@ -56,6 +58,61 @@ class SelectTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void emptyStringValuesSelectTheirLabel() {
+    const QString label = QStringLiteral("System default");
+    const QStringList emptyValues{QString(), QStringLiteral(""), QStringLiteral(" \t ")};
+    for (const bool externalModel : {false, true}) {
+      for (const QString& optionValue : emptyValues) {
+        for (const QString& selectedValue : emptyValues) {
+          QStandardItemModel model;
+          AdSelect select;
+          select.setSearchEnabled(true);
+          if (externalModel) {
+            auto* row = new QStandardItem(label);
+            row->setData(optionValue, AdSelect::DefaultValueRole);
+            model.appendRow(row);
+            select.setModel(&model);
+          } else {
+            select.setOptions({makeOption(optionValue, label)});
+          }
+          select.setCurrentValue(selectedValue);
+          QVERIFY(select.currentValue().isValid());
+          QVERIFY(select.currentValue().toString().isEmpty());
+          QCOMPARE(select.currentModelIndex().row(), 0);
+          QCOMPARE(select.currentText(), label);
+          QCOMPARE(select.lineEdit()->text(), label);
+
+          select.setCurrentValue(QVariant());
+          QVERIFY(!select.currentValue().isValid());
+          QVERIFY(!select.currentModelIndex().isValid());
+          QVERIFY(select.currentText().isEmpty());
+        }
+      }
+    }
+  }
+
+  void controlHeightTokenSurvivesVisualRefreshAndScaling() {
+    AdSelect select;
+    select.setControlSize(AdSelect::ControlSize::Small);
+    AdSelect::ComponentTokens tokens;
+    tokens.metrics.controlHeight = 28;
+    select.setComponentTokens(tokens);
+    QCOMPARE(select.height(), 28);
+    QCOMPARE(select.sizeHint().height(), 28);
+    select.setVariant(AdSelect::Variant::Borderless);
+    QCOMPARE(select.height(), 28);
+    select.commitControlScale(AdControlScaleContext::fromDprsAndContentScale(1.0, 1.0, 1.5));
+    QCOMPARE(select.height(), 42);
+    QCOMPARE(select.sizeHint().height(), 42);
+    select.setVariant(AdSelect::Variant::Outlined);
+    QCOMPARE(select.height(), 42);
+    select.commitControlScale(AdControlScaleContext::fromDprsAndContentScale(1.0, 1.0, 1.0));
+    QCOMPARE(select.height(), 28);
+    select.resetComponentTokens();
+    QCOMPARE(select.height(), select.sizeHint().height());
+    QVERIFY(select.height() != 28);
+  }
+
   void popupCanBeDestroyedBeforeItsSelectDuringHostTeardown() {
     auto* host = new QWidget;
     auto* toolbar = new QWidget(host);

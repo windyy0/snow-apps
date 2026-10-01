@@ -15,6 +15,7 @@ struct ScreenshotSaveExportOptions {
     QSize size;
     ScreenshotImageFileFormat format = ScreenshotImageFileFormat::Png;
     int quality = 100;
+    ScreenshotCompressionLevel compressionLevel = ScreenshotCompressionLevel::Medium;
     ScreenshotPdfPageSize pdfPageSize = ScreenshotPdfPageSize::PortraitA4;
     QString pdfTitle;
     friend bool operator==(const ScreenshotSaveExportOptions&,

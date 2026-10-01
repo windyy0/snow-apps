@@ -1,7 +1,12 @@
 #include "snow_shot/platform/physicalcursor.h"
 
 #include <QtGlobal>
+#include <QGuiApplication>
+#include <qpa/qwindowsysteminterface.h>
+#include <private/qhighdpiscaling_p.h>
+#include <QWindow>
 
+#include <cmath>
 #include <limits>
 #include <utility>
 
@@ -9,11 +14,9 @@
 #include <qt_windows.h>
 #elif defined(Q_OS_MACOS)
 #include <CoreGraphics/CoreGraphics.h>
-#include <QGuiApplication>
 #include <QScreen>
 #include <QPointer>
 #include <memory>
-#include <cmath>
 #endif
 
 namespace snow_shot::platform {
@@ -81,6 +84,12 @@ PhysicalCursorAccess nativeAccess() {
             const CGPoint point = CGEventGetLocation(event);
             CFRelease(event);
             return QPointF(point.x, point.y);
+        },
+        false,
+        [display] {
+            // CoreGraphics warps floor desktop coordinates to whole points. A Retina
+            // half-point request otherwise moves up/left but stalls down/right.
+            return *display ? qRound((*display)->devicePixelRatio()) : 1;
         }};
 #else
     return {};
@@ -101,10 +110,13 @@ QPoint offsetForDirection(PhysicalCursorDirection direction) {
     Q_UNREACHABLE_RETURN(QPoint());
 }
 
-std::optional<QPoint> targetPosition(const QPoint& current, PhysicalCursorDirection direction) {
+std::optional<QPoint> targetPosition(const QPoint& current, PhysicalCursorDirection direction,
+                                     qint64 distance) {
+    if (distance <= 0)
+        return std::nullopt;
     const QPoint offset = offsetForDirection(direction);
-    const qint64 x = static_cast<qint64>(current.x()) + offset.x();
-    const qint64 y = static_cast<qint64>(current.y()) + offset.y();
+    const qint64 x = static_cast<qint64>(current.x()) + static_cast<qint64>(offset.x()) * distance;
+    const qint64 y = static_cast<qint64>(current.y()) + static_cast<qint64>(offset.y()) * distance;
     if (x < std::numeric_limits<int>::min() || x > std::numeric_limits<int>::max() ||
         y < std::numeric_limits<int>::min() || y > std::numeric_limits<int>::max()) {
         return std::nullopt;
@@ -139,6 +151,11 @@ std::optional<QPointF> PhysicalCursor::logicalPosition() const {
 }
 
 PhysicalCursorMoveResult PhysicalCursor::moveOnePixel(PhysicalCursorDirection direction) const {
+    return movePixels(direction, 1);
+}
+
+PhysicalCursorMoveResult PhysicalCursor::movePixels(PhysicalCursorDirection direction,
+                                                    int distance) const {
     if (!isSupported()) {
         return {PhysicalCursorMoveStatus::Unsupported, std::nullopt};
     }
@@ -148,7 +165,12 @@ PhysicalCursorMoveResult PhysicalCursor::moveOnePixel(PhysicalCursorDirection di
         return {PhysicalCursorMoveStatus::ReadFailed, std::nullopt};
     }
 
-    const std::optional<QPoint> target = targetPosition(current.value(), direction);
+    const int quantum = m_access.movementQuantum ? m_access.movementQuantum() : 1;
+    if (distance <= 0 || quantum <= 0)
+        return {PhysicalCursorMoveStatus::InvalidTarget, std::nullopt};
+    const qint64 nativeDistance =
+        ((static_cast<qint64>(distance) + quantum - 1) / quantum) * quantum;
+    const std::optional<QPoint> target = targetPosition(current.value(), direction, nativeDistance);
     if (!target.has_value()) {
         return {PhysicalCursorMoveStatus::InvalidTarget, std::nullopt};
     }
@@ -157,10 +179,35 @@ PhysicalCursorMoveResult PhysicalCursor::moveOnePixel(PhysicalCursorDirection di
     }
 
     const std::optional<QPoint> actual = m_access.readPosition();
-    if (!actual.has_value()) {
-        return {PhysicalCursorMoveStatus::AppliedPositionUnavailable, std::nullopt};
+    bool mouseMoveDispatched = false;
+    if (!m_access.generatesMouseMoveEvents && qGuiApp) {
+        if (const auto global = logicalPosition()) {
+            // Route through the native QWidget window so Qt retains implicit/explicit
+            // mouse grabs and child hit testing. Sending directly to the widget under
+            // the cursor would lose an in-progress drag when it crosses a child/window.
+            QWindow* window =
+                QGuiApplication::topLevelAt(QPoint(static_cast<int>(std::floor(global->x())),
+                                                   static_cast<int>(std::floor(global->y()))));
+            if (!window && QGuiApplication::mouseButtons() != Qt::NoButton)
+                window = QGuiApplication::focusWindow();
+            if (window) {
+                const QPointF local = window->mapFromGlobal(*global);
+                // Enter through QPA, not sendEvent(): Qt must also update its global
+                // pointer position or it can discard the next real move back to the
+                // pre-warp position as an unchanged-position event.
+                QWindowSystemInterface::handleMouseEvent<
+                    QWindowSystemInterface::SynchronousDelivery>(
+                    window, QHighDpi::toNativeLocalPosition(local, window),
+                    QHighDpi::toNativePixels(*global, window), QGuiApplication::mouseButtons(),
+                    Qt::NoButton, QEvent::MouseMove, QGuiApplication::keyboardModifiers(),
+                    Qt::MouseEventSynthesizedByApplication);
+                mouseMoveDispatched = true;
+            }
+        }
     }
-    return {PhysicalCursorMoveStatus::Applied, actual};
+    return {actual ? PhysicalCursorMoveStatus::Applied
+                   : PhysicalCursorMoveStatus::AppliedPositionUnavailable,
+            actual, mouseMoveDispatched};
 }
 
 } // namespace snow_shot::platform

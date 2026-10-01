@@ -344,8 +344,10 @@ class IconNumericValuePreviewButton final : public adqt::widgets::AdButton {
   public:
     explicit IconNumericValuePreviewButton(QWidget* parent = nullptr);
 
-    void setValue(int value);
-    [[nodiscard]] int value() const;
+    void setValue(double value);
+    void setDecimalPlaces(int places);
+    [[nodiscard]] QString valueText() const;
+    [[nodiscard]] double value() const;
     void setCornerRadius(int cornerRadius);
     void setMixed(bool mixed);
     void setIconRef(const adqt::icons::IconRef& iconRef);
@@ -359,11 +361,11 @@ class IconNumericValuePreviewButton final : public adqt::widgets::AdButton {
     void paintEvent(QPaintEvent* event) override;
 
   private:
-    int m_value = 0;
+    double m_value = 0.0;
+    int m_decimalPlaces = 0;
     adqt::icons::IconRef m_iconRef;
     QString m_valueWidthReference = QStringLiteral("88");
     QString m_valueSuffix;
-    QFont m_baseFont;
     qreal m_physicalScale = 1.0;
     bool m_mixed = false;
 };
@@ -473,6 +475,9 @@ IconNumericValuePreviewButton*
 createScreenshotToolPaletteRecordingDelayEditor(QWidget* parent, const char* tooltip,
                                                 const adqt::icons::IconRef& iconRef, int seconds,
                                                 const ScreenshotToolPaletteButtonMetrics& metrics);
+
+void configureScreenshotToolPaletteScrollingIntervalEditor(
+    IconNumericValuePreviewButton* button, const ScreenshotToolPaletteButtonMetrics& metrics);
 
 void configureScreenshotToolPaletteRecordingDelayEditor(
     IconNumericValuePreviewButton* button, const ScreenshotToolPaletteButtonMetrics& metrics);

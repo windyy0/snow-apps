@@ -44,7 +44,7 @@ QString translateToolbarText(const char* source) {
     return QCoreApplication::translate("ScreenshotSelectionToolbarWidget", source);
 }
 
-QString pxText(int value) {
+QString valueText(int value) {
     return QStringLiteral("%1").arg(value);
 }
 
@@ -138,10 +138,8 @@ ScreenshotSelectionToolbarWidget::ScreenshotSelectionToolbarWidget(
     : QWidget(parent), m_commands(commands) {
     setAttribute(Qt::WA_TranslucentBackground, true);
     setAttribute(Qt::WA_NoSystemBackground, true);
-    setAttribute(Qt::WA_Hover, true);
     setFocusPolicy(Qt::NoFocus);
     setAutoFillBackground(false);
-    setMouseTracking(true);
 
     auto* rootLayout = new QHBoxLayout(this);
     rootLayout->setContentsMargins(toolbar_widgets::ShadowMargin, toolbar_widgets::ShadowMargin,
@@ -170,9 +168,9 @@ ScreenshotSelectionToolbarWidget::ScreenshotSelectionToolbarWidget(
     auto* positionCommaLabel = addStaticLabel(QStringLiteral(","), QString(),
                                               QMargins(toolbar_widgets::SymbolHorizontalMargin, 0,
                                                        toolbar_widgets::SymbolHorizontalMargin, 0));
-    auto* positionUnitLabel = addStaticLabel(QStringLiteral("px"), tr("Pixels"),
-                                             QMargins(toolbar_widgets::UnitLeftMargin, 0, 0, 0));
-    setTranslationSource(positionUnitLabel, "Pixels");
+    auto* positionUnitLabel =
+        addStaticLabel(tr("px"), tr("Pixels"), QMargins(toolbar_widgets::UnitLeftMargin, 0, 0, 0));
+    m_positionUnitLabel = positionUnitLabel;
     panelLayout->addWidget(m_xLabel);
     panelLayout->addWidget(positionCommaLabel);
     panelLayout->addWidget(m_yLabel);
@@ -192,28 +190,23 @@ ScreenshotSelectionToolbarWidget::ScreenshotSelectionToolbarWidget(
     auto* sizeSeparatorLabel = addStaticLabel(QStringLiteral("x"), QString(),
                                               QMargins(toolbar_widgets::SymbolHorizontalMargin, 0,
                                                        toolbar_widgets::SymbolHorizontalMargin, 0));
-    auto* sizeUnitLabel = addStaticLabel(QStringLiteral("px"), tr("Pixels"),
-                                         QMargins(toolbar_widgets::UnitLeftMargin, 0, 0, 0));
-    setTranslationSource(sizeUnitLabel, "Pixels");
+    auto* sizeUnitLabel =
+        addStaticLabel(tr("px"), tr("Pixels"), QMargins(toolbar_widgets::UnitLeftMargin, 0, 0, 0));
     m_sizeUnitLabel = sizeUnitLabel;
     panelLayout->addWidget(m_widthLabel);
     panelLayout->addWidget(sizeSeparatorLabel);
     panelLayout->addWidget(m_heightLabel);
     panelLayout->addWidget(sizeUnitLabel);
     m_sizeWidgets << m_widthLabel << sizeSeparatorLabel << m_heightLabel << sizeUnitLabel;
-    m_outputLabel = addStaticLabel(QString(), tr("Output image dimensions"));
-    setTranslationSource(m_outputLabel, "Output image dimensions");
-    panelLayout->addWidget(m_outputLabel);
-    m_outputLabel->hide();
 
     QWidget* selectionSettingsSeparator = addSeparator();
     panelLayout->addWidget(selectionSettingsSeparator);
 
     m_radiusLabel = addValueLabel(tr("Corner radius"), Field::Radius);
     setTranslationSource(m_radiusLabel, "Corner radius");
-    auto* radiusUnitLabel = addStaticLabel(QStringLiteral("px"), tr("Pixels"),
-                                           QMargins(toolbar_widgets::UnitLeftMargin, 0, 0, 0));
-    setTranslationSource(radiusUnitLabel, "Pixels");
+    auto* radiusUnitLabel =
+        addStaticLabel(tr("px"), tr("Pixels"), QMargins(toolbar_widgets::UnitLeftMargin, 0, 0, 0));
+    m_canvasUnitLabels << radiusUnitLabel;
     panelLayout->addWidget(m_radiusLabel);
     panelLayout->addWidget(radiusUnitLabel);
     auto* radiusShadowSpacer = new QWidget(m_panel);
@@ -225,9 +218,9 @@ ScreenshotSelectionToolbarWidget::ScreenshotSelectionToolbarWidget(
 
     m_shadowLabel = addValueLabel(tr("Shadow width"), Field::Shadow);
     setTranslationSource(m_shadowLabel, "Shadow width");
-    auto* shadowUnitLabel = addStaticLabel(QStringLiteral("px"), tr("Pixels"),
-                                           QMargins(toolbar_widgets::UnitLeftMargin, 0, 0, 0));
-    setTranslationSource(shadowUnitLabel, "Pixels");
+    auto* shadowUnitLabel =
+        addStaticLabel(tr("px"), tr("Pixels"), QMargins(toolbar_widgets::UnitLeftMargin, 0, 0, 0));
+    m_canvasUnitLabels << shadowUnitLabel;
     panelLayout->addWidget(m_shadowLabel);
     panelLayout->addWidget(shadowUnitLabel);
     m_editingWidgets << m_lockIconLabel << selectionSettingsSeparator << m_radiusLabel
@@ -243,11 +236,13 @@ ScreenshotSelectionToolbarWidget::ScreenshotSelectionToolbarWidget(
 
 void ScreenshotSelectionToolbarWidget::resetForNewCapture() {
     m_selection = QRect();
+    m_displayValues = {};
     m_aspectRatioLocked = false;
     m_displayMode = DisplayMode::Full;
+    m_pointerInteractionEnabled = true;
     m_cornerRadius = 0;
     m_shadowWidth = 0;
-    m_outputPixels = {};
+    m_canvasUsesPoints = false;
     updateLabels();
     updateDisplayMode();
 }
@@ -283,32 +278,40 @@ void ScreenshotSelectionToolbarWidget::prewarm() {
     resetForNewCapture();
 }
 
-void ScreenshotSelectionToolbarWidget::setSelectionState(const QRect& selection,
-                                                         bool aspectRatioLocked, int cornerRadius,
-                                                         int shadowWidth, DisplayMode displayMode,
-                                                         QSize outputPixels) {
+void ScreenshotSelectionToolbarWidget::setSelectionState(
+    const QRect& selection, bool aspectRatioLocked, int cornerRadius, int shadowWidth,
+    DisplayMode displayMode, bool canvasUsesPoints,
+    std::optional<ScreenshotSelectionDisplayValues> displayValues) {
     const QRect normalized = selection.normalized();
     const int clampedRadius = std::clamp(cornerRadius, 0, kScreenshotSelectionCornerRadiusMax);
     const int clampedShadowWidth = std::clamp(shadowWidth, 0, kScreenshotSelectionShadowWidthMax);
-    const bool selectionChanged = m_selection != normalized || m_outputPixels != outputPixels;
-    m_outputPixels = outputPixels;
+    const bool selectionChanged = m_selection != normalized;
+    const auto values = displayValues.value_or(ScreenshotSelectionDisplayValues{
+        QPointF(normalized.topLeft()), QSizeF(normalized.size()),
+        canvasUsesPoints ? ScreenshotSelectionDisplayUnit::LogicalPixels
+                         : ScreenshotSelectionDisplayUnit::PhysicalPixels,
+        canvasUsesPoints});
+    const bool unitsChanged = m_canvasUsesPoints != canvasUsesPoints || m_displayValues != values;
     const bool aspectRatioChanged = m_aspectRatioLocked != aspectRatioLocked;
     const bool cornerRadiusChanged = m_cornerRadius != clampedRadius;
     const bool shadowWidthChanged = m_shadowWidth != clampedShadowWidth;
     const bool displayModeChanged = m_displayMode != displayMode;
-    if (!selectionChanged && !aspectRatioChanged && !cornerRadiusChanged && !shadowWidthChanged &&
-        !displayModeChanged) {
+    if (!selectionChanged && !unitsChanged && !aspectRatioChanged && !cornerRadiusChanged &&
+        !shadowWidthChanged && !displayModeChanged) {
         return;
     }
 
     m_selection = normalized;
+    m_displayValues = values;
+    m_canvasUsesPoints = canvasUsesPoints;
     m_aspectRatioLocked = aspectRatioLocked;
     m_cornerRadius = clampedRadius;
     m_shadowWidth = clampedShadowWidth;
     m_displayMode = displayMode;
 
     bool labelGeometryChanged = false;
-    if (selectionChanged || cornerRadiusChanged || shadowWidthChanged) {
+    if (selectionChanged || unitsChanged || cornerRadiusChanged || shadowWidthChanged ||
+        displayModeChanged) {
         labelGeometryChanged = updateLabels();
     }
     if (aspectRatioChanged) {
@@ -336,6 +339,9 @@ void ScreenshotSelectionToolbarWidget::moveContentTo(const QPoint& position) {
 }
 
 bool ScreenshotSelectionToolbarWidget::eventFilter(QObject* watched, QEvent* event) {
+    if (!pointerInteractionEnabled()) {
+        return QWidget::eventFilter(watched, event);
+    }
     if (watched == m_lockIconLabel && event != nullptr) {
         if (event->type() == QEvent::MouseButtonPress) {
             auto* mouseEvent = static_cast<QMouseEvent*>(event);
@@ -376,6 +382,7 @@ bool ScreenshotSelectionToolbarWidget::eventFilter(QObject* watched, QEvent* eve
 void ScreenshotSelectionToolbarWidget::changeEvent(QEvent* event) {
     if (event != nullptr && event->type() == QEvent::LanguageChange) {
         retranslateUi();
+        setCornerRadiusApplicable(m_cornerRadiusApplicable);
     }
     QWidget::changeEvent(event);
 }
@@ -482,7 +489,7 @@ QWidget* ScreenshotSelectionToolbarWidget::addSeparator() {
 }
 
 void ScreenshotSelectionToolbarWidget::setToolbarHovered(bool hovered) {
-    hovered = hovered && m_displayMode == DisplayMode::Full;
+    hovered = hovered && pointerInteractionEnabled();
     if (m_toolbarHovered == hovered) {
         return;
     }
@@ -490,7 +497,7 @@ void ScreenshotSelectionToolbarWidget::setToolbarHovered(bool hovered) {
     m_toolbarHovered = hovered;
     updateInputRegion();
     m_commands.setSelectionToolbarHovered(hovered);
-    refreshHoverVisuals();
+    update();
     if (hovered) {
         m_commands.hideColorPickersForScreenshotUi();
     }
@@ -499,18 +506,14 @@ void ScreenshotSelectionToolbarWidget::setToolbarHovered(bool hovered) {
 void ScreenshotSelectionToolbarWidget::scheduleToolbarHoverSync() {
     QTimer::singleShot(0, this, [this]() {
         if (isVisible()) {
-            setToolbarHovered(m_panel != nullptr && m_panel->underMouse());
+            if (auto* panel = qobject_cast<SelectionToolbarPanel*>(m_panel)) {
+                panel->synchronizePointerHover();
+                setToolbarHovered(panel->pointerHovered());
+            } else {
+                setToolbarHovered(false);
+            }
         }
     });
-}
-
-void ScreenshotSelectionToolbarWidget::refreshHoverVisuals() {
-    update();
-    if (m_panel == nullptr) {
-        return;
-    }
-
-    m_panel->update();
 }
 
 bool ScreenshotSelectionToolbarWidget::fieldForObject(QObject* object, Field* outField) const {
@@ -533,7 +536,33 @@ bool ScreenshotSelectionToolbarWidget::fieldForObject(QObject* object, Field* ou
     return true;
 }
 
+void ScreenshotSelectionToolbarWidget::setPointerInteractionEnabled(bool enabled) {
+    if (m_pointerInteractionEnabled == enabled) {
+        return;
+    }
+    m_pointerInteractionEnabled = enabled;
+    // A selection drag owns the pointer even when this moving toolbar passes
+    // underneath it. Clear preview hover before the next selection frame.
+    updateMouseEventTransparency();
+    if (!pointerInteractionEnabled()) {
+        setToolbarHovered(false);
+    } else if (isVisible()) {
+        scheduleToolbarHoverSync();
+    }
+}
+
+void ScreenshotSelectionToolbarWidget::setSelectionResizable(bool enabled) {
+    m_selectionResizable = enabled;
+    for (auto* label : {m_widthLabel, m_heightLabel, m_lockIconLabel}) {
+        label->setCursor(enabled ? Qt::SizeHorCursor : Qt::ArrowCursor);
+    }
+}
+
 void ScreenshotSelectionToolbarWidget::handleFieldWheel(Field field, int deltaY) {
+    if (field == Field::Radius && !m_cornerRadiusApplicable)
+        return;
+    if (!m_selectionResizable && (field == Field::Width || field == Field::Height))
+        return;
     const int direction = deltaY > 0 ? 1 : -1;
     switch (field) {
     case Field::PositionX:
@@ -589,25 +618,32 @@ void ScreenshotSelectionToolbarWidget::updateInputRegion() {
 
 bool ScreenshotSelectionToolbarWidget::updateLabels(bool refreshGeometry) {
     bool geometryChanged = false;
-    if (m_sizeUnitLabel && m_outputLabel) {
-        geometryChanged |= updateLabelText(
-            m_sizeUnitLabel, m_outputPixels.isEmpty() ? tr("px") : tr("pt"), refreshGeometry);
-        m_sizeUnitLabel->setToolTip(m_outputPixels.isEmpty() ? tr("Pixels") : tr("Points"));
-        geometryChanged |= updateLabelText(
-            m_outputLabel,
-            m_outputPixels.isEmpty()
-                ? QString()
-                : tr("%1 × %2 px").arg(m_outputPixels.width()).arg(m_outputPixels.height()),
-            refreshGeometry);
-        m_outputLabel->setVisible(!m_outputPixels.isEmpty());
+    const auto updateUnit = [&](QLabel* label, ScreenshotSelectionDisplayUnit unit) {
+        geometryChanged |=
+            updateLabelText(label, screenshotSelectionDisplayUnitText(unit), refreshGeometry);
+        const QString description = screenshotSelectionDisplayUnitDescription(unit);
+        label->setToolTip(description);
+        label->setAccessibleName(description);
+    };
+    for (QLabel* label : m_canvasUnitLabels) {
+        updateUnit(label, m_canvasUsesPoints ? ScreenshotSelectionDisplayUnit::LogicalPixels
+                                             : ScreenshotSelectionDisplayUnit::PhysicalPixels);
     }
-    geometryChanged |= updateLabelText(m_xLabel, pxText(m_selection.left()), refreshGeometry);
-    geometryChanged |= updateLabelText(m_yLabel, pxText(m_selection.top()), refreshGeometry);
-    geometryChanged |= updateLabelText(m_widthLabel, pxText(m_selection.width()), refreshGeometry);
+    for (auto* label : {m_positionUnitLabel, m_sizeUnitLabel}) {
+        updateUnit(label, m_displayValues.unit);
+    }
+    geometryChanged |= updateLabelText(
+        m_xLabel, screenshotSelectionDisplayValue(m_displayValues.position.x()), refreshGeometry);
+    geometryChanged |= updateLabelText(
+        m_yLabel, screenshotSelectionDisplayValue(m_displayValues.position.y()), refreshGeometry);
     geometryChanged |=
-        updateLabelText(m_heightLabel, pxText(m_selection.height()), refreshGeometry);
-    geometryChanged |= updateLabelText(m_radiusLabel, pxText(m_cornerRadius), refreshGeometry);
-    geometryChanged |= updateLabelText(m_shadowLabel, pxText(m_shadowWidth), refreshGeometry);
+        updateLabelText(m_widthLabel, screenshotSelectionDisplayValue(m_displayValues.size.width()),
+                        refreshGeometry);
+    geometryChanged |= updateLabelText(
+        m_heightLabel, screenshotSelectionDisplayValue(m_displayValues.size.height()),
+        refreshGeometry);
+    geometryChanged |= updateLabelText(m_radiusLabel, valueText(m_cornerRadius), refreshGeometry);
+    geometryChanged |= updateLabelText(m_shadowLabel, valueText(m_shadowWidth), refreshGeometry);
     return geometryChanged;
 }
 
@@ -676,8 +712,12 @@ void ScreenshotSelectionToolbarWidget::updateDisplayMode() {
     }
 }
 
+bool ScreenshotSelectionToolbarWidget::pointerInteractionEnabled() const {
+    return m_pointerInteractionEnabled && m_displayMode == DisplayMode::Full;
+}
+
 void ScreenshotSelectionToolbarWidget::updateMouseEventTransparency() {
-    const bool transparent = m_displayMode == DisplayMode::SizeOnly;
+    const bool transparent = !pointerInteractionEnabled();
     if (transparent) {
         // WA_TransparentForMouseEvents and the input mask only redirect Qt-internal
         // hit testing for alien widgets. A native child HWND always wins OS-level
@@ -736,4 +776,11 @@ void ScreenshotSelectionToolbarWidget::updateWindowSize() {
 
 QPoint ScreenshotSelectionToolbarWidget::contentOffset() const {
     return QPoint(toolbar_widgets::ShadowMargin, toolbar_widgets::ShadowMargin);
+}
+
+void ScreenshotSelectionToolbarWidget::setCornerRadiusApplicable(bool enabled) {
+    m_cornerRadiusApplicable = enabled;
+    m_radiusLabel->setEnabled(enabled);
+    m_radiusLabel->setToolTip(enabled ? tr("Corner radius")
+                                      : tr("Corner radius is unavailable for custom regions"));
 }

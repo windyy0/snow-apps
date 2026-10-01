@@ -468,4 +468,11 @@
             <translation>Update permission was declined or could not be obtained</translation>
         </message>
     </context>
+    <context>
+        <name>UpdateService</name>
+        <message>
+            <source>Could not check for updates. Please try again.</source>
+            <translation>Could not check for updates. Please try again.</translation>
+        </message>
+    </context>
 </TS>

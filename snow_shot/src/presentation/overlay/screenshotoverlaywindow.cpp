@@ -4,10 +4,15 @@
 #include "screenshotoverlayframepresenter.h"
 #include "snow_shot/presentation/screenshotmessageservice.h"
 #include "snow_shot/presentation/screenshotcanvasrenderer.h"
+#include "snow_shot/presentation/canvasstatusreadout.h"
 #include "snow_shot/presentation/screenshotoverlayeventsink.h"
 #include "snow_shot/presentation/screenshotscrollingthumbnailwidget.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include <QEvent>
+#include "snow_shot/platform/windows/windowchrome.h"
+#ifdef Q_OS_MACOS
+#include "snow_shot/platform/screenshotnative.h"
+#endif
 #include <QGuiApplication>
 #include "../capture/screenshotscrollingdiagnostics.h"
 #include <QKeyEvent>
@@ -15,9 +20,11 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRegion>
+#include "snow_shot/presentation/screenshotregiontypecontrol.h"
 #include <QResizeEvent>
 #include <QVBoxLayout>
 #include <QWheelEvent>
+#include <QWindow>
 
 #include <algorithm>
 #include <optional>
@@ -47,6 +54,9 @@ ScreenshotOverlayWindow::ScreenshotOverlayWindow(ScreenshotOverlayEventSink& eve
                                                  SnowCanvasWidget* canvas, QWidget* parent)
     : QWidget(parent), m_eventSink(eventSink), m_canvas(canvas) {
     setWindowFlags(Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint);
+#ifdef Q_OS_MACOS
+    setWindowFlag(Qt::NoDropShadowWindowHint);
+#endif
     setAttribute(Qt::WA_DeleteOnClose, false);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setAttribute(Qt::WA_NoSystemBackground, true);
@@ -60,8 +70,8 @@ ScreenshotOverlayWindow::ScreenshotOverlayWindow(ScreenshotOverlayEventSink& eve
     layout->setSpacing(0);
     layout->addWidget(m_canvas);
 
-    m_scrollingThumbnail = new ScreenshotScrollingThumbnailWidget(*this);
-    m_scrollingThumbnail->hide();
+    m_regionTypeControl = new ScreenshotRegionTypeControl(this, true);
+    m_regionTypeControl->hide();
     m_framePresenter = std::make_unique<ScreenshotOverlayFramePresenter>(*this);
 
     if (m_canvas != nullptr) {
@@ -97,6 +107,28 @@ ScreenshotOverlayWindow::~ScreenshotOverlayWindow() {
 
 SnowCanvasWidget* ScreenshotOverlayWindow::canvas() const {
     return m_canvas;
+}
+
+void ScreenshotOverlayWindow::setCaptureGeometry(const QRect& displayGeometry) {
+#ifdef Q_OS_MACOS
+    // Cocoa's upward Y axis excludes NSMaxY(frame) from WindowServer hit testing.
+    // Put the display's top row inside the native frame, while the canvas still
+    // covers exactly the captured display. This is a logical point, not a pixel.
+    m_captureFrameMargins = QMargins(0, 1, 0, 0);
+#endif
+    layout()->setContentsMargins(m_captureFrameMargins);
+    const QRect frame = displayGeometry.marginsAdded(m_captureFrameMargins);
+    if (geometry() != frame)
+        setGeometry(frame);
+    layout()->activate();
+}
+
+QRect ScreenshotOverlayWindow::captureGeometry() const {
+    return geometry().marginsRemoved(m_captureFrameMargins);
+}
+
+QPoint ScreenshotOverlayWindow::canvasLocalPosition(const QPoint& globalPosition) const {
+    return globalPosition - captureGeometry().topLeft();
 }
 
 void ScreenshotOverlayWindow::setScreenshotImage(QImage image, const QRectF& canvasRect) {
@@ -146,29 +178,43 @@ void ScreenshotOverlayWindow::setScreenshotSelection(const QRectF& selection, bo
                                                      int cornerRadius, int shadowWidth,
                                                      const QColor& shadowColor,
                                                      bool selectionToolbarHovered) {
+    const QRectF normalizedSelection = selection.normalized();
+    ScreenshotSelectionVisualState state;
+    state.bounds = normalizedSelection;
+    state.present = normalizedSelection.isValid() && !normalizedSelection.isEmpty();
+    state.handlesVisible = handlesVisible;
+    state.cornerRadius = cornerRadius;
+    state.shadowWidth = shadowWidth;
+    state.shadowColor = shadowColor;
+    state.toolbarHovered = selectionToolbarHovered;
+    setScreenshotSelectionState(state);
+}
+
+void ScreenshotOverlayWindow::setScreenshotSelectionState(
+    const ScreenshotSelectionVisualState& requestedState) {
     if (m_canvas != nullptr) {
-        const QRectF normalizedSelection = selection.normalized();
-        const QRectF configuredArea =
-            normalizedSelection.isValid() && !normalizedSelection.isEmpty() ? normalizedSelection
-                                                                            : QRectF();
+        const QRectF normalizedSelection = requestedState.bounds.normalized();
+        const QRectF configuredArea = requestedState.present && normalizedSelection.isValid() &&
+                                              !normalizedSelection.isEmpty()
+                                          ? normalizedSelection
+                                          : QRectF();
         m_canvas->setDecorationRenderAreas(SnowCanvasDecorationRenderAreas{
             std::optional<QRectF>(configuredArea),
             std::optional<QRectF>(configuredArea),
         });
     }
     if (m_screenshotRenderer != nullptr) {
-        const QRectF normalizedSelection = selection.normalized();
-        ScreenshotSelectionVisualState state;
-        state.bounds = normalizedSelection;
-        state.present = normalizedSelection.isValid() && !normalizedSelection.isEmpty();
-        state.handlesVisible = handlesVisible;
+        ScreenshotSelectionVisualState state = requestedState;
         state.borderVisible = m_screenshotRenderer->selectionBorderVisible();
-        state.cornerRadius = cornerRadius;
-        state.shadowWidth = shadowWidth;
-        state.shadowColor = shadowColor;
-        state.toolbarHovered = selectionToolbarHovered;
         m_screenshotRenderer->applySelectionState(state);
     }
+}
+
+void ScreenshotOverlayWindow::setScreenshotSelectionRegion(
+    const ScreenshotRegionGeometry& region, const ScreenshotRegionGeometry& confirmed,
+    const QRectF& marquee, bool subtracting, const QColor& danger) {
+    if (m_screenshotRenderer)
+        m_screenshotRenderer->setSelectionRegion(region, confirmed, marquee, subtracting, danger);
 }
 
 void ScreenshotOverlayWindow::clearScreenshotSelection() {
@@ -213,6 +259,12 @@ void ScreenshotOverlayWindow::setScreenshotOcrFilteredImage(QImage image,
                                                             const QRectF& canvasRect) {
     if (m_screenshotRenderer != nullptr) {
         m_screenshotRenderer->setOcrFilteredImage(std::move(image), canvasRect);
+    }
+}
+
+void ScreenshotOverlayWindow::setScreenshotOcrVisible(bool visible) {
+    if (m_screenshotRenderer != nullptr) {
+        m_screenshotRenderer->setOcrVisible(visible);
     }
 }
 
@@ -263,10 +315,13 @@ void ScreenshotOverlayWindow::setCanvasClearBackgroundEnabled(bool enabled) {
 
 QJsonObject ScreenshotOverlayWindow::scrollingDiagnostics() const {
     using snow_shot::capture_detail::scrollingRect;
-    const QRect hole = m_inputPassThroughRect.intersected(rect());
+    const QRect hole =
+        m_scrollingVisualHole.translated(m_captureFrameMargins.left(), m_captureFrameMargins.top())
+            .intersected(rect());
     QJsonObject fields{{QStringLiteral("overlay_rect"), scrollingRect(geometry())},
                        {QStringLiteral("hole_rect"), scrollingRect(hole)},
-                       {QStringLiteral("full_hole"), !hole.isEmpty() && hole == rect()},
+                       {QStringLiteral("full_hole"),
+                        !hole.isEmpty() && hole == rect().marginsRemoved(m_captureFrameMargins)},
                        {QStringLiteral("mask_empty"), mask().isEmpty()},
                        {QStringLiteral("dpr"), devicePixelRatioF()},
                        {QStringLiteral("thumbnail_visible"),
@@ -301,21 +356,22 @@ QJsonObject ScreenshotOverlayWindow::scrollingDiagnostics() const {
     return fields;
 }
 
-void ScreenshotOverlayWindow::setInputPassThroughRect(const QRect& localRect) {
-    m_inputPassThroughRect = localRect;
+void ScreenshotOverlayWindow::setScrollingVisualHole(const QRect& localRect) {
+    m_scrollingVisualHole = localRect;
     updateWindowMask();
 }
 
-void ScreenshotOverlayWindow::clearInputPassThroughRect() {
-    m_inputPassThroughRect = {};
+void ScreenshotOverlayWindow::clearScrollingVisualHole() {
+    m_scrollingVisualHole = {};
     updateWindowMask();
 }
 
 void ScreenshotOverlayWindow::setScrollingCaptureMode(bool enabled) {
     if (!enabled) {
-        // Standard rendering draws into the scrolling pass-through hole, so
+        // Standard rendering draws into the scrolling visual hole, so
         // restore the full window surface before its synchronous repaint.
-        clearInputPassThroughRect();
+        clearScrollingVisualHole();
+        clearScrollingResultPreview();
         clearScrollingThumbnail();
     }
 
@@ -349,6 +405,7 @@ void ScreenshotOverlayWindow::setScrollingCaptureMode(bool enabled) {
     }
 
     m_scrollingCaptureMode = enabled;
+    updateScrollingInputTransparency();
     if (m_canvas != nullptr && m_canvas->isVisible() && m_canvas->updatesEnabled()) {
         m_canvas->repaint();
     } else if (m_canvas != nullptr) {
@@ -357,16 +414,28 @@ void ScreenshotOverlayWindow::setScrollingCaptureMode(bool enabled) {
 }
 
 void ScreenshotOverlayWindow::beginScrollingThumbnail(const QRect& localSelection,
-                                                      ScreenshotScrollingRecognitionMode mode) {
+                                                      ScreenshotScrollingRecognitionMode mode,
+                                                      const QSize& captureViewportSize) {
+    clearScrollingResultPreview();
     if (m_scrollingThumbnail == nullptr) {
-        return;
+        m_scrollingThumbnail = new ScreenshotScrollingThumbnailWidget(*this);
+        // Configure once, before creating the native surface. Reparenting or changing
+        // QWidget window flags during capture would hide/recreate visible windows.
+        m_scrollingThumbnail->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
+                                             Qt::WindowStaysOnTopHint |
+                                             Qt::WindowDoesNotAcceptFocus);
+        m_scrollingThumbnail->setAttribute(Qt::WA_ShowWithoutActivating);
+        m_scrollingThumbnail->setAttribute(Qt::WA_TranslucentBackground);
+        m_scrollingThumbnail->hide();
+        connect(m_scrollingThumbnail, &ScreenshotScrollingThumbnailWidget::hoverSourceRectChanged,
+                this, &ScreenshotOverlayWindow::scrollingThumbnailHoverChanged);
     }
 
-    m_scrollingThumbnailSessionActive = true;
     m_scrollingThumbnailAnchor = localSelection.normalized();
     m_scrollingThumbnailMode = mode;
     m_scrollingThumbnail->setRecognitionMode(mode);
     m_scrollingThumbnail->reset();
+    m_scrollingThumbnail->setCaptureViewportSize(captureViewportSize);
     m_scrollingThumbnail->hide();
     layoutScrollingThumbnail();
 }
@@ -376,31 +445,125 @@ void ScreenshotOverlayWindow::updateScrollingThumbnail(const QImage& previewImag
                                                        ScreenshotScrollingStitchChange change,
                                                        int addedRows, bool replacePreview,
                                                        int replacedPreviewRows) {
-    if (!m_scrollingThumbnailSessionActive || m_scrollingThumbnail == nullptr) {
+    if (m_scrollingThumbnail == nullptr) {
         return;
     }
 
     m_scrollingThumbnail->setStitchedImage(previewImage, sourceSize, change, addedRows,
                                            replacePreview, replacedPreviewRows);
-    m_scrollingThumbnail->show();
+    layoutScrollingThumbnail();
+    if (isVisible() && !m_scrollingThumbnail->isVisible()) {
+#ifdef Q_OS_MACOS
+        snow_shot::platform::configureScreenshotToolbarWindow(m_scrollingThumbnail);
+#endif
+        m_scrollingThumbnail->show();
+    }
+}
+
+void ScreenshotOverlayWindow::reanchorScrollingThumbnail(const QRect& localSelection) {
+    if (m_scrollingThumbnailAnchor != localSelection) {
+        clearScrollingResultPreview();
+        if (m_scrollingThumbnail != nullptr) {
+            m_scrollingThumbnail->clearHover();
+        }
+    }
+    m_scrollingThumbnailAnchor = localSelection;
     layoutScrollingThumbnail();
 }
 
 void ScreenshotOverlayWindow::clearScrollingThumbnail() {
-    m_scrollingThumbnailSessionActive = false;
+    clearScrollingResultPreview();
+    delete std::exchange(m_scrollingThumbnail, nullptr);
     m_scrollingThumbnailAnchor = {};
     m_scrollingThumbnailMode = ScreenshotScrollingRecognitionMode::Vertical;
-    if (m_scrollingThumbnail == nullptr) {
+}
+
+void ScreenshotOverlayWindow::setScrollingResultPreview(const QImage& image,
+                                                        const QRectF& canvasRect, bool showStatus,
+                                                        std::optional<Qt::Orientation> cropGuide) {
+    if (!m_scrollingCaptureMode || m_screenshotRenderer == nullptr) {
+        clearScrollingResultPreview();
         return;
     }
-
-    m_scrollingThumbnail->hide();
-    m_scrollingThumbnail->reset();
+    m_screenshotRenderer->setScrollingResultPreview(image, canvasRect, cropGuide);
+    if (!m_screenshotRenderer->hasScrollingResultPreview()) {
+        clearScrollingResultPreview();
+        return;
+    }
+    m_scrollingResultPreviewCanvasRect = canvasRect.normalized();
+    m_scrollingResultPreviewStatusVisible = showStatus;
     updateWindowMask();
+    updateScrollingResultPreviewReadout();
+}
+
+void ScreenshotOverlayWindow::clearScrollingResultPreview() {
+    if (m_screenshotRenderer == nullptr || (!m_screenshotRenderer->hasScrollingResultPreview() &&
+                                            m_scrollingResultPreviewCanvasRect.isEmpty())) {
+        return;
+    }
+    const QRect damage =
+        m_canvas != nullptr ? m_canvas->viewRectForCanvasRect(m_scrollingResultPreviewCanvasRect, 1)
+                                  .intersected(m_canvas->rect())
+                            : QRect();
+    m_screenshotRenderer->clearScrollingResultPreview();
+    m_scrollingResultPreviewCanvasRect = {};
+    m_scrollingResultPreviewStatusVisible = false;
+    if (m_scrollingResultPreviewReadout != nullptr) {
+        m_scrollingResultPreviewReadout->hide();
+    }
+    updateWindowMask();
+    if (m_canvas != nullptr && isVisible() && updatesEnabled() && m_canvas->updatesEnabled()) {
+        // A queued update can outlive hover exit and be captured as a new stitch frame.
+        // Present the transparent restoration synchronously, before source restart.
+        const QRect canvasDamage = damage.isEmpty() ? m_canvas->rect() : damage;
+        repaint(canvasDamage.translated(m_canvas->pos()));
+        m_canvas->repaint(canvasDamage);
+    }
+}
+
+void ScreenshotOverlayWindow::updateScrollingResultPreviewReadout() {
+    if (!m_scrollingResultPreviewStatusVisible || m_screenshotRenderer == nullptr ||
+        !m_screenshotRenderer->hasScrollingResultPreview() || m_canvas == nullptr) {
+        if (m_scrollingResultPreviewReadout != nullptr) {
+            m_scrollingResultPreviewReadout->hide();
+        }
+        return;
+    }
+    if (m_scrollingResultPreviewReadout == nullptr) {
+        m_scrollingResultPreviewReadout = new CanvasStatusReadout(this);
+        m_scrollingResultPreviewReadout->setObjectName(
+            QStringLiteral("scrollingScreenshotResultPreviewLabel"));
+    }
+    const QRect anchor = m_canvas->viewRectForCanvasRect(m_scrollingResultPreviewCanvasRect, 0)
+                             .intersected(m_canvas->rect())
+                             .translated(m_canvas->pos());
+    if (anchor.isEmpty()) {
+        m_scrollingResultPreviewReadout->hide();
+        return;
+    }
+    m_scrollingResultPreviewReadout->setText(tr("Result Preview in Progress"));
+    m_scrollingResultPreviewReadout->layoutIn(anchor);
+    m_scrollingResultPreviewReadout->show();
+    m_scrollingResultPreviewReadout->raise();
+}
+
+QWidget* ScreenshotOverlayWindow::scrollingThumbnailWindow() const {
+    return m_scrollingThumbnail;
+}
+
+void ScreenshotOverlayWindow::updateScrollingInputTransparency() {
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    // Mutate only WS_EX_TRANSPARENT on the existing layered HWND. In particular,
+    // do not hide/show the overlay or ask Qt to rebuild its window flags.
+    static_cast<void>(
+        snow_shot::platform::windows::setWindowInputTransparent(this, m_scrollingCaptureMode));
+#elif defined(Q_OS_MACOS)
+    snow_shot::platform::setScreenshotInputTransparent(this, m_scrollingCaptureMode);
+#endif
 }
 
 ScreenshotScrollingTrimRange ScreenshotOverlayWindow::scrollingThumbnailTrim() const {
-    if (!m_scrollingThumbnailSessionActive || m_scrollingThumbnail == nullptr) {
+    if (m_scrollingThumbnail == nullptr) {
         return {};
     }
     return {
@@ -436,15 +599,23 @@ void ScreenshotOverlayWindow::showPreparedFrame(bool deferFirstPaint) {
 }
 
 void ScreenshotOverlayWindow::releaseNativeSurface() {
+    clearScrollingResultPreview();
     hide();
     setUpdatesEnabled(false);
     clearMask();
-    m_inputPassThroughRect = {};
+    m_scrollingVisualHole = {};
     m_appliedWindowMask = QRegion();
     m_windowMaskInitialized = false;
     if (m_canvas != nullptr) {
         m_canvas->setInteractionEnabled(false);
         m_canvas->setUpdatesEnabled(false);
+    }
+
+    // A child top-level QWidget is not necessarily WA_NativeWindow, so destroy()
+    // does not recursively release it. Release the preview before its owner;
+    // otherwise it survives with a null transient parent when this overlay is reused.
+    if (m_scrollingThumbnail != nullptr) {
+        m_scrollingThumbnail->releaseNativeSurface();
     }
 
     // QWidget::destroy() keeps this QObject and its renderer/model alive while
@@ -465,6 +636,11 @@ void ScreenshotOverlayWindow::restoreNativeSurface() {
 }
 
 void ScreenshotOverlayWindow::initializeScreenshotSurface() {
+    // Capture coordinates cover the full display, including the macOS menu bar
+    // and notch band. Qt's default safe-area margins would inset the canvas and
+    // break its alignment with the captured pixels and pointer coordinates.
+    setAttribute(Qt::WA_ContentsMarginsRespectsSafeArea, false);
+
     // Keep the native surface mode stable after winId/show. Runtime toggling of
     // WA_TranslucentBackground is unreliable for top-level layered windows on Windows.
     setAttribute(Qt::WA_TranslucentBackground, true);
@@ -483,6 +659,45 @@ void ScreenshotOverlayWindow::initializeScreenshotSurface() {
 }
 
 bool ScreenshotOverlayWindow::event(QEvent* event) {
+    if (event != nullptr && event->type() == QEvent::Hide) {
+        clearScrollingResultPreview();
+    }
+    if (event != nullptr &&
+        (event->type() == QEvent::LanguageChange || event->type() == QEvent::FontChange ||
+         event->type() == QEvent::ApplicationFontChange ||
+         event->type() == QEvent::DevicePixelRatioChange ||
+         event->type() == QEvent::ScreenChangeInternal)) {
+        updateScrollingResultPreviewReadout();
+    }
+    if (event != nullptr && event->type() == QEvent::Show) {
+        updateScrollingInputTransparency();
+    }
+    if (event != nullptr && m_scrollingThumbnail != nullptr) {
+        if (event->type() == QEvent::Hide) {
+            m_scrollingThumbnail->hide();
+        } else if (event->type() == QEvent::Move) {
+            layoutScrollingThumbnail();
+        } else if (event->type() == QEvent::Show) {
+            layoutScrollingThumbnail();
+            if (m_scrollingThumbnail->hasPreview()) {
+#ifdef Q_OS_MACOS
+                snow_shot::platform::configureScreenshotToolbarWindow(m_scrollingThumbnail);
+#endif
+                m_scrollingThumbnail->show();
+            }
+        }
+    }
+    if (event != nullptr &&
+        (event->type() == QEvent::SafeAreaMarginsChange || event->type() == QEvent::Show)) {
+        layoutRegionTypeControl();
+    }
+#ifdef Q_OS_MACOS
+    if (event != nullptr && event->type() == QEvent::Show) {
+        const bool handled = QWidget::event(event);
+        snow_shot::platform::configureScreenshotOverlayWindow(this);
+        return handled;
+    }
+#endif
     if (event == nullptr || event->type() != QEvent::UpdateRequest) {
         return QWidget::event(event);
     }
@@ -587,14 +802,18 @@ void ScreenshotOverlayWindow::paintEvent(QPaintEvent* event) {
 void ScreenshotOverlayWindow::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     layoutScrollingThumbnail();
+    layoutRegionTypeControl();
+    updateWindowMask();
+    updateScrollingResultPreviewReadout();
 }
 
 void ScreenshotOverlayWindow::layoutScrollingThumbnail() {
-    if (!m_scrollingThumbnailSessionActive || m_scrollingThumbnail == nullptr) {
+    if (m_scrollingThumbnail == nullptr) {
         return;
     }
 
-    const QRect bounds = rect();
+    const QRect bounds(QPoint(), captureGeometry().size());
+    const QPoint displayOrigin = captureGeometry().topLeft();
     if (m_scrollingThumbnailMode == ScreenshotScrollingRecognitionMode::Horizontal) {
         const int availableWidth = std::max(1, bounds.width() - kScrollingThumbnailMargin * 2);
         m_scrollingThumbnail->setMaximumPreviewExtent(availableWidth);
@@ -612,9 +831,7 @@ void ScreenshotOverlayWindow::layoutScrollingThumbnail() {
                                       bounds.width() - thumbnailWidth - kScrollingThumbnailMargin);
         const int x =
             std::clamp(m_scrollingThumbnailAnchor.x(), kScrollingThumbnailMargin, maximumX);
-        m_scrollingThumbnail->move(x, y);
-        m_scrollingThumbnail->raise();
-        updateWindowMask();
+        m_scrollingThumbnail->move(QPoint(x, y) + displayOrigin);
         return;
     }
 
@@ -638,35 +855,32 @@ void ScreenshotOverlayWindow::layoutScrollingThumbnail() {
     const int maximumY = std::max(kScrollingThumbnailMargin,
                                   bounds.height() - thumbnailHeight - kScrollingThumbnailMargin);
     const int y = std::clamp(m_scrollingThumbnailAnchor.y(), bounds.top(), maximumY);
-    m_scrollingThumbnail->move(x, y);
-    m_scrollingThumbnail->raise();
-    updateWindowMask();
+    m_scrollingThumbnail->move(QPoint(x, y) + displayOrigin);
 }
 
 void ScreenshotOverlayWindow::updateWindowMask() {
-    const QRect hole = m_inputPassThroughRect.intersected(rect());
-    QRegion interactiveRegion;
-    if (hole.isEmpty()) {
-        interactiveRegion = {};
+    const QRect hole =
+        m_scrollingVisualHole.translated(m_captureFrameMargins.left(), m_captureFrameMargins.top())
+            .intersected(rect());
+    QRegion visibleRegion;
+    if (hole.isEmpty() ||
+        (m_screenshotRenderer != nullptr && m_screenshotRenderer->hasScrollingResultPreview())) {
+        visibleRegion = {};
     } else {
-        interactiveRegion = QRegion(rect()).subtracted(QRegion(hole));
-        if (m_scrollingThumbnailSessionActive && m_scrollingThumbnail != nullptr &&
-            m_scrollingThumbnail->isVisible()) {
-            interactiveRegion += QRegion(m_scrollingThumbnail->geometry());
-        }
+        visibleRegion = QRegion(rect()).subtracted(QRegion(hole));
     }
-    if (m_windowMaskInitialized && interactiveRegion == m_appliedWindowMask) {
+    if (m_windowMaskInitialized && visibleRegion == m_appliedWindowMask) {
         return;
     }
     m_windowMaskInitialized = true;
-    m_appliedWindowMask = interactiveRegion;
+    m_appliedWindowMask = visibleRegion;
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
     ++m_windowMaskApplicationCount;
 #endif
-    if (interactiveRegion.isEmpty()) {
+    if (visibleRegion.isEmpty()) {
         clearMask();
     } else {
-        setMask(interactiveRegion);
+        setMask(visibleRegion);
     }
 }
 
@@ -675,11 +889,19 @@ bool ScreenshotOverlayWindow::handleCanvasEvent(QEvent* event) {
         return false;
     }
 
+    if ((event->type() == QEvent::KeyPress || event->type() == QEvent::MouseButtonPress ||
+         event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonRelease ||
+         event->type() == QEvent::MouseButtonDblClick || event->type() == QEvent::Wheel) &&
+        !m_eventSink.acceptOverlayInput(event->spontaneous())) {
+        event->accept();
+        return true;
+    }
     if (event->type() == QEvent::KeyPress) {
         return handleCanvasKeyPress(static_cast<QKeyEvent*>(event));
     }
     if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseMove ||
-        event->type() == QEvent::MouseButtonRelease) {
+        event->type() == QEvent::MouseButtonRelease ||
+        event->type() == QEvent::MouseButtonDblClick) {
         return handleCanvasMouseEvent(static_cast<QMouseEvent*>(event));
     }
     if (event->type() == QEvent::Wheel) {
@@ -708,6 +930,11 @@ bool ScreenshotOverlayWindow::handleCanvasMouseEvent(QMouseEvent* event) {
         return false;
     }
 
+    if (event->type() == QEvent::MouseButtonDblClick && event->button() == Qt::LeftButton &&
+        m_eventSink.handleRegionDoubleClick(this, event->position())) {
+        event->accept();
+        return true;
+    }
     if (event->type() == QEvent::MouseButtonPress && event->button() == Qt::RightButton) {
         const auto action = m_eventSink.handleOverlayRightClick(this, event->position());
         if (action == ScreenshotOverlayRightClickResult::CancelCapture) {
@@ -718,6 +945,13 @@ bool ScreenshotOverlayWindow::handleCanvasMouseEvent(QMouseEvent* event) {
             event->accept();
             return true;
         }
+    }
+
+    // A drawing gesture owns the pointer until the canvas releases its grab. The
+    // selection border may cross that gesture, but cannot take over its moves or release.
+    if (m_canvas != nullptr && QWidget::mouseGrabber() == m_canvas &&
+        (event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonRelease)) {
+        return false;
     }
 
     if (event->type() == QEvent::MouseMove && !event->buttons().testFlag(Qt::LeftButton)) {
@@ -738,6 +972,9 @@ bool ScreenshotOverlayWindow::handleCanvasMouseEvent(QMouseEvent* event) {
 
 bool ScreenshotOverlayWindow::handleCanvasWheel(QWheelEvent* event) {
     if (event == nullptr) {
+        return false;
+    }
+    if (m_canvas != nullptr && m_canvas->hasActiveTextEditing()) {
         return false;
     }
     if (!m_eventSink.handleOverlayWheel(this, event->position(), event->angleDelta(),
@@ -775,4 +1012,44 @@ bool ScreenshotOverlayWindow::dispatchHandledMouseEvent(QMouseEvent* event) {
     }
 
     return false;
+}
+
+void ScreenshotOverlayWindow::setRegionTypeControlVisible(bool visible, ScreenshotRegionType type,
+                                                          const QRectF& selectionGlobal,
+                                                          const QPointF& cursorGlobal) {
+    m_regionTypeControl->setType(type);
+    if (visible) {
+        layoutRegionTypeControl();
+    }
+    m_regionTypeControl->setPresentationVisible(visible, selectionGlobal, cursorGlobal);
+}
+
+void ScreenshotOverlayWindow::layoutRegionTypeControl() {
+    if (m_regionTypeControl == nullptr) {
+        return;
+    }
+    const int maximumWidth = std::max(1, width() - 16);
+    if (m_regionTypeControl->maximumWidth() != maximumWidth) {
+        m_regionTypeControl->setMaximumWidth(maximumWidth);
+        m_regionTypeControl->adjustSize();
+    }
+    // Keep the capture canvas full-screen, but place controls below the notch.
+    // QWindow reports logical margins, matching QWidget coordinates at every DPR.
+    const int safeTop = windowHandle() != nullptr ? windowHandle()->safeAreaMargins().top() : 0;
+    const QPoint position(
+        std::max(0, (width() - m_regionTypeControl->width()) / 2),
+        std::max(0, std::min(safeTop + 12, height() - m_regionTypeControl->height())));
+    if (m_regionTypeControl->pos() != position)
+        m_regionTypeControl->move(position);
+}
+
+void ScreenshotOverlayWindow::setSelectionDraft(const QPainterPath& path,
+                                                const QVector<QPointF>& vertices) {
+    m_screenshotRenderer->setSelectionDraft(path, vertices);
+}
+
+void ScreenshotOverlayWindow::setScrollingTrimModel(
+    std::shared_ptr<ScreenshotScrollingTrimRange> trim) {
+    if (m_scrollingThumbnail)
+        m_scrollingThumbnail->setTrimModel(std::move(trim));
 }

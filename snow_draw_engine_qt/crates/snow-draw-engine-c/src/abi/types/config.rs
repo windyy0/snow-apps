@@ -78,6 +78,7 @@ snow_c_enum! {
         Inversion = 3,
         Emboss = 4,
         SmartErase = 5,
+        Brightness = 6,
     }
 }
 
@@ -131,6 +132,8 @@ pub struct SnowShapeStyle {
     pub end_arrowhead: SnowArrowhead,
     pub stroke_style: SnowStrokeStyle,
     pub arrow_type: SnowArrowType,
+    pub arrow_shaft_type: SnowArrowShaftType,
+    pub arrow_ratio: f64,
     pub fill_style: SnowFillStyle,
     pub opacity: f64,
     pub highlight_shape: SnowHighlightShape,
@@ -247,6 +250,8 @@ pub struct SnowArrowStyle {
     pub end_arrowhead: SnowArrowhead,
     pub stroke_style: SnowStrokeStyle,
     pub arrow_type: SnowArrowType,
+    pub arrow_shaft_type: SnowArrowShaftType,
+    pub arrow_ratio: f64,
     pub reserved0: [u8; 4],
 }
 
@@ -469,6 +474,8 @@ impl Default for SnowShapeStyle {
             end_arrowhead: SnowArrowhead::None,
             stroke_style: SnowStrokeStyle::Solid,
             arrow_type: SnowArrowType::Straight,
+            arrow_shaft_type: SnowArrowShaftType::Plain,
+            arrow_ratio: 1.0,
             fill_style: SnowFillStyle::Solid,
             opacity: 1.0,
             highlight_shape: SnowHighlightShape::Rectangle,
@@ -499,6 +506,8 @@ impl Default for SnowArrowStyle {
             end_arrowhead: SnowArrowhead::None,
             stroke_style: SnowStrokeStyle::Solid,
             arrow_type: SnowArrowType::Straight,
+            arrow_shaft_type: SnowArrowShaftType::Plain,
+            arrow_ratio: 1.0,
             reserved0: [0; 4],
         }
     }

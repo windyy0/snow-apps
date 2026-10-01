@@ -38,8 +38,14 @@ void writeBytes(const QString& path, qint64 size) {
 
 void setLastModified(const QString& path, const QDateTime& when) {
     namespace fs = std::filesystem;
-    const auto moment = std::chrono::clock_cast<fs::file_time_type::clock>(
-        std::chrono::system_clock::time_point{std::chrono::milliseconds(when.toMSecsSinceEpoch())});
+    const auto systemMoment =
+        std::chrono::system_clock::time_point{std::chrono::milliseconds(when.toMSecsSinceEpoch())};
+#if __cpp_lib_chrono >= 201907L
+    const auto moment = std::chrono::clock_cast<fs::file_time_type::clock>(systemMoment);
+#else
+    // libc++ provides the file-clock conversion but not C++20 clock_cast yet.
+    const auto moment = fs::file_time_type::clock::from_sys(systemMoment);
+#endif
     std::error_code error;
     fs::last_write_time(fs::path(path.toStdWString()), moment, error);
     require(!error, "failed to set test file timestamp");
@@ -96,7 +102,7 @@ void scanCategorizesAppOwnedLocations() {
     writeBytes(
         QDir(dirs.appData).filePath(QStringLiteral("capture_history/records/rec1/display.png")),
         60);
-    writeBytes(QDir(dirs.appData).filePath(QStringLiteral("pinned_windows/index.json")), 25);
+    writeBytes(QDir(dirs.appData).filePath(QStringLiteral("pinned_windows_v2/index.json")), 25);
     writeBytes(QDir(dirs.appData).filePath(QStringLiteral("assets/ocr/model.onnx")), 200);
     writeBytes(QDir(dirs.appData).filePath(QStringLiteral("config.json")), 10);
     writeBytes(QDir(dirs.appData).filePath(QStringLiteral("stray.log")), 5);

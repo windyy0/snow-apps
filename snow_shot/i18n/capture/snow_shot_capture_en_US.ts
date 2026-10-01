@@ -28,7 +28,18 @@
         </message>
     </context>
     <context>
+        <name>ScreenshotCaptureCoordinator</name>
+        <message>
+            <source>Could not snapshot the cursor</source>
+            <translation>Could not snapshot the cursor</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotController</name>
+        <message>
+            <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</source>
+            <translation>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</translation>
+        </message>
         <message>
             <source>Automatic screenshot saving failed: %1</source>
             <translation>Automatic screenshot saving failed: %1</translation>
@@ -36,6 +47,14 @@
         <message>
             <source>Cancel</source>
             <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>Could not insert the draw template</source>
+            <translation>Could not insert the draw template</translation>
+        </message>
+        <message>
+            <source>Could not read the selected files from Finder. Please try again.</source>
+            <translation>Could not read the selected files from Finder. Please try again.</translation>
         </message>
         <message>
             <source>Could not recapture the screen</source>
@@ -50,8 +69,20 @@
             <translation>Exit screenshot?</translation>
         </message>
         <message>
+            <source>Finder is unavailable. Open Finder and try again.</source>
+            <translation>Finder is unavailable. Open Finder and try again.</translation>
+        </message>
+        <message>
+            <source>Finder took too long to return the selected files. Please try again.</source>
+            <translation>Finder took too long to return the selected files. Please try again.</translation>
+        </message>
+        <message>
             <source>No recognized result is available to copy</source>
             <translation>No recognized result is available to copy</translation>
+        </message>
+        <message>
+            <source>Save recognition text</source>
+            <translation>Save recognition text</translation>
         </message>
         <message>
             <source>Save screenshot</source>
@@ -90,12 +121,24 @@
             <translation>The clipboard pin queue is full</translation>
         </message>
         <message>
+            <source>The pinned window could not be restored</source>
+            <translation>The pinned window could not be restored</translation>
+        </message>
+        <message>
+            <source>The recognition text could not be saved: %1</source>
+            <translation>The recognition text could not be saved: %1</translation>
+        </message>
+        <message>
             <source>The screenshot clipboard operation could not be started</source>
             <translation>The screenshot clipboard operation could not be started</translation>
         </message>
         <message>
             <source>The screenshot could not be copied: %1</source>
             <translation>The screenshot could not be copied: %1</translation>
+        </message>
+        <message>
+            <source>The screenshot could not be pinned</source>
+            <translation>The screenshot could not be pinned</translation>
         </message>
         <message>
             <source>The screenshot could not be prepared for saving</source>
@@ -122,8 +165,19 @@
             <translation>The scrolling screenshot could not be prepared</translation>
         </message>
         <message>
+            <source>This screenshot cannot be pinned</source>
+            <translation>This screenshot cannot be pinned</translation>
+        </message>
+        <message>
             <source>Your current screenshot will be discarded.</source>
             <translation>Your current screenshot will be discarded.</translation>
+        </message>
+    </context>
+    <context>
+        <name>ScreenshotMcpServer</name>
+        <message>
+            <source>MCP request failed (%1).</source>
+            <translation>MCP request failed (%1).</translation>
         </message>
     </context>
     <context>
@@ -131,6 +185,64 @@
         <message>
             <source>Loading screenshot history</source>
             <translation>Loading screenshot history</translation>
+        </message>
+        <message>
+            <source>Result Preview in Progress</source>
+            <translation>Result Preview in Progress</translation>
+        </message>
+    </context>
+    <context>
+        <name>ScreenshotQrController</name>
+        <message>
+            <source>Copy Text</source>
+            <translation>Copy Text</translation>
+        </message>
+        <message>
+            <source>Open URL</source>
+            <translation>Open URL</translation>
+        </message>
+        <message>
+            <source>QR Code</source>
+            <translation>QR Code</translation>
+        </message>
+        <message>
+            <source>QR Code %1</source>
+            <translation>QR Code %1</translation>
+        </message>
+        <message>
+            <source>QR code recognition failed</source>
+            <translation>QR code recognition failed</translation>
+        </message>
+        <message>
+            <source>QR code text</source>
+            <translation>QR code text</translation>
+        </message>
+        <message>
+            <source>Unable to open the recognized link</source>
+            <translation>Unable to open the recognized link</translation>
+        </message>
+    </context>
+    <context>
+        <name>ScreenshotRegionTypeControl</name>
+        <message>
+            <source>%1 to switch region type</source>
+            <translation>%1 to switch region type</translation>
+        </message>
+        <message>
+            <source>Curve region</source>
+            <translation>Curve region</translation>
+        </message>
+        <message>
+            <source>Freehand region</source>
+            <translation>Freehand region</translation>
+        </message>
+        <message>
+            <source>Polyline region</source>
+            <translation>Polyline region</translation>
+        </message>
+        <message>
+            <source>Rectangle region</source>
+            <translation>Rectangle region</translation>
         </message>
     </context>
     <context>
@@ -250,12 +362,12 @@
     <context>
         <name>ScreenshotSelectionToolbarWidget</name>
         <message>
-            <source>%1 × %2 px</source>
-            <translation>%1 × %2 px</translation>
-        </message>
-        <message>
             <source>Corner radius</source>
             <translation>Corner radius</translation>
+        </message>
+        <message>
+            <source>Corner radius is unavailable for custom regions</source>
+            <translation>Corner radius is unavailable for custom regions</translation>
         </message>
         <message>
             <source>Height</source>
@@ -266,16 +378,12 @@
             <translation>Lock selection aspect ratio</translation>
         </message>
         <message>
-            <source>Output image dimensions</source>
-            <translation>Output image dimensions</translation>
+            <source>Logical pixels</source>
+            <translation>Logical pixels</translation>
         </message>
         <message>
             <source>Pixels</source>
             <translation>Pixels</translation>
-        </message>
-        <message>
-            <source>Points</source>
-            <translation>Points</translation>
         </message>
         <message>
             <source>Shadow width</source>
@@ -294,8 +402,8 @@
             <translation>Y coordinate</translation>
         </message>
         <message>
-            <source>pt</source>
-            <translation>pt</translation>
+            <source>dp</source>
+            <translation>dp</translation>
         </message>
         <message>
             <source>px</source>
@@ -358,6 +466,32 @@
         </message>
     </context>
     <context>
+        <name>snow_shot::app::mcp::ScreenshotMcpServer</name>
+        <message>
+            <source>Another Snow Shot instance owns the MCP endpoint.</source>
+            <translation>Another Snow Shot instance owns the MCP endpoint.</translation>
+        </message>
+        <message>
+            <source>Could not open the local MCP endpoint.</source>
+            <translation>Could not open the local MCP endpoint.</translation>
+        </message>
+        <message>
+            <source>Could not secure the MCP runtime directory.</source>
+            <translation>Could not secure the MCP runtime directory.</translation>
+        </message>
+        <message>
+            <source>Could not write the private MCP descriptor.</source>
+            <translation>Could not write the private MCP descriptor.</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::app::mcp::ScreenshotMcpSession</name>
+        <message>
+            <source>MCP request failed (%1).</source>
+            <translation>MCP request failed (%1).</translation>
+        </message>
+    </context>
+    <context>
         <name>snow_shot::presentation::DirectCaptureController</name>
         <message>
             <source>Capture failed: %1</source>
@@ -374,10 +508,6 @@
         <message>
             <source>The clipboard publication could not be queued</source>
             <translation>The clipboard publication could not be queued</translation>
-        </message>
-        <message>
-            <source>The image could not be prepared for the clipboard</source>
-            <translation>The image could not be prepared for the clipboard</translation>
         </message>
     </context>
 </TS>

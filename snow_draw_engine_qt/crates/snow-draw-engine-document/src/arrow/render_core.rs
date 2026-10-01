@@ -8,6 +8,7 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArrowheadPointsInput {
+    pub arrow_ratio: f64,
     pub arrow_points: Vec<Point>,
     pub stroke_width: f64,
     pub curve_ops: Vec<CurvePathOp>,
@@ -17,6 +18,7 @@ pub struct ArrowheadPointsInput {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArrowheadRenderPrimitivesInput {
+    pub arrow_ratio: f64,
     pub arrow_points: Vec<Point>,
     pub stroke_width: f64,
     pub curve_ops: Vec<CurvePathOp>,
@@ -135,7 +137,9 @@ pub fn get_arrowhead_points(input: &ArrowheadPointsInput) -> Option<ArrowheadPoi
     // The endpoint styles are sized for a two-pixel stroke. Square-root growth
     // gives thicker strokes more detail spacing without oversized endpoints.
     let stroke_scale = (input.stroke_width / 2.0).max(1.0).sqrt();
-    let size = get_arrowhead_size(input.arrowhead) * stroke_scale;
+    let ratio = snow_draw_engine_core::arrow::normalize_arrow_ratio(input.arrow_ratio);
+    let base_size = get_arrowhead_size(input.arrowhead) * stroke_scale;
+    let size = base_size * ratio;
     let length = get_segment_length(arrow_points, input.position);
     let length_multiplier = if matches!(
         input.arrowhead,
@@ -155,7 +159,9 @@ pub fn get_arrowhead_points(input: &ArrowheadPointsInput) -> Option<ArrowheadPoi
         input.arrowhead,
         Arrowhead::Dot | Arrowhead::Circle | Arrowhead::CircleOutline
     ) {
-        let diameter = (ys - y2).hypot(xs - x2) + input.stroke_width.min(2.0) - 2.0;
+        let stroke_adjustment = input.stroke_width.min(2.0) - 2.0;
+        let diameter = ((base_size + stroke_adjustment) * ratio)
+            .min(length * length_multiplier + stroke_adjustment);
         return Some(vec![x2, y2, diameter]);
     }
 
@@ -176,31 +182,10 @@ pub fn get_arrowhead_points(input: &ArrowheadPointsInput) -> Option<ArrowheadPoi
         input.arrowhead,
         Arrowhead::Diamond | Arrowhead::DiamondOutline | Arrowhead::Square
     ) {
-        let previous_point = match input.position {
-            ArrowEndpointPosition::Start => {
-                if arrow_points.len() > 1 {
-                    arrow_points[1]
-                } else {
-                    [0.0, 0.0]
-                }
-            }
-            ArrowEndpointPosition::End => {
-                if arrow_points.len() > 1 {
-                    arrow_points[arrow_points.len() - 2]
-                } else {
-                    [0.0, 0.0]
-                }
-            }
-        };
-        let opposite_seed = match input.position {
-            ArrowEndpointPosition::Start => [x2 + min_size * 2.0, y2],
-            ArrowEndpointPosition::End => [x2 - min_size * 2.0, y2],
-        };
-        let opposite_angle = match input.position {
-            ArrowEndpointPosition::Start => (previous_point[1] - y2).atan2(previous_point[0] - x2),
-            ArrowEndpointPosition::End => (y2 - previous_point[1]).atan2(x2 - previous_point[0]),
-        };
-        let [ox, oy] = rotate_point(opposite_seed, [x2, y2], opposite_angle);
+        // Keep the rear vertex on the same axis as the shoulders. The chord
+        // between arrow points diverges from this direction on curved shafts.
+        let ox = x2 - direction[0] * min_size * 2.0;
+        let oy = y2 - direction[1] * min_size * 2.0;
 
         return Some(vec![x2, y2, x3, y3, ox, oy, x4, y4]);
     }
@@ -216,6 +201,7 @@ pub fn get_arrowhead_render_primitives(
     input: &ArrowheadRenderPrimitivesInput,
 ) -> Vec<ArrowheadRenderPrimitive> {
     let Some(points) = get_arrowhead_points(&ArrowheadPointsInput {
+        arrow_ratio: input.arrow_ratio,
         arrow_points: input.arrow_points.clone(),
         stroke_width: input.stroke_width,
         curve_ops: input.curve_ops.clone(),
@@ -273,6 +259,21 @@ pub fn get_arrowhead_render_primitives(
             ArrowheadFillMode::Background,
             0.5,
         )],
+        Arrowhead::IndentedTriangle => {
+            let tip = to_point(points[0], points[1]);
+            let a = to_point(points[2], points[3]);
+            let b = to_point(points[4], points[5]);
+            let midpoint = [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5];
+            let notch = [
+                midpoint[0] + 0.25 * (tip[0] - midpoint[0]),
+                midpoint[1] + 0.25 * (tip[1] - midpoint[1]),
+            ];
+            vec![polygon(
+                vec![tip, a, notch, b, tip],
+                ArrowheadFillMode::Stroke,
+                1.0,
+            )]
+        }
         Arrowhead::Triangle | Arrowhead::TriangleOutline | Arrowhead::InvertedTriangle => {
             vec![polygon(
                 vec![
@@ -333,6 +334,7 @@ pub fn get_arrowhead_render_primitives(
 
             if input.arrowhead == Arrowhead::CrowfootOneOrMany
                 && let Some(crowfoot_one_points) = get_arrowhead_points(&ArrowheadPointsInput {
+                    arrow_ratio: input.arrow_ratio,
                     arrow_points: input.arrow_points.clone(),
                     stroke_width: input.stroke_width,
                     curve_ops: input.curve_ops.clone(),

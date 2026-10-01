@@ -1,5 +1,4 @@
 //! Live observation is an adapter around the same explicitly clocked effects used by video.
-use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -7,31 +6,50 @@ use std::time::{Duration, Instant};
 
 use crate::keyboard_hook::KeyboardInput;
 use crate::keyboard_overlay::{KeyboardOverlay, KeyboardOverlayConfig, KeycapRasterizer};
-use crate::laser_trail::LaserTrail;
-use crate::mouse_effects::{CLICK_ANIMATION_MS, CLICK_QUEUE_DEPTH, RenderClick, draw_clicks_to};
+use crate::mouse_effects::{CLICK_QUEUE_DEPTH, RenderClick};
 use crate::mouse_hook::{MouseClickObservation, MouseHookObserver, MouseMovement};
+use crate::state::InputEffectsState;
 use crate::surface::{Tile, TileSurface};
 use crossbeam_channel::{Receiver, Sender, bounded, select_biased};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct PreviewConfig {
+    /// Native desktop units: points on macOS, physical pixels on Windows.
     pub region: (i32, i32, u32, u32),
+    /// Physical display pixels used to rasterize fixed-size preview styles.
+    pub canvas: (u32, u32),
     pub output: (u32, u32),
     pub trail: [u8; 4],
     pub trail_duration_ms: u64,
     pub click: [u8; 4],
+    pub highlight: [u8; 4],
+    pub record_mouse_clicks: bool,
+    pub show_keyboard: bool,
     pub keyboard: Option<KeyboardOverlayConfig>,
     pub generation: u64,
 }
 
 impl PreviewConfig {
+    fn effects_output(&self) -> (u32, u32) {
+        // Preview styles belong to the desktop capture canvas. Export dimensions
+        // only affect saved video and must not rescale live effects.
+        self.canvas
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if !(100..=2000).contains(&self.trail_duration_ms) {
             return Err("trail duration must be between 100 and 2000 ms".into());
         }
-        if [self.region.2, self.region.3, self.output.0, self.output.1]
-            .into_iter()
-            .any(|v| v == 0 || v > 32768)
+        if [
+            self.region.2,
+            self.region.3,
+            self.canvas.0,
+            self.canvas.1,
+            self.output.0,
+            self.output.1,
+        ]
+        .into_iter()
+        .any(|v| v == 0 || v > 32768)
         {
             return Err("effect dimensions must be between 1 and 32768 pixels".into());
         }
@@ -49,8 +67,7 @@ pub struct PreviewFrame {
     pub error: Option<String>,
 }
 
-/// Mouse tiles use export coordinates; keyboard tiles use physical capture pixels.
-/// Keeping these destinations separate prevents export scaling from resizing keycaps.
+/// Both layers use physical display pixels, independent of export dimensions.
 #[derive(Default)]
 pub struct PreviewLayers {
     pub mouse: Vec<Tile>,
@@ -72,32 +89,42 @@ impl PreviewLayers {
 /// Deterministic preview destination. No native APIs, worker, or wall clock are required.
 pub struct EffectsPreview {
     pub config: PreviewConfig,
-    pub trail: LaserTrail,
-    pub clicks: VecDeque<RenderClick>,
-    pub keyboard: Option<KeyboardOverlay>,
+    pub input_effects: InputEffectsState,
     surface: TileSurface,
     keyboard_surface: TileSurface,
     position: Option<(i32, i32)>,
     continuity: u64,
 }
 
+impl std::ops::Deref for EffectsPreview {
+    type Target = InputEffectsState;
+    fn deref(&self) -> &Self::Target {
+        &self.input_effects
+    }
+}
+impl std::ops::DerefMut for EffectsPreview {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.input_effects
+    }
+}
+
 impl EffectsPreview {
     pub fn new(config: PreviewConfig, rasterizer: Option<Box<dyn KeycapRasterizer>>) -> Self {
-        let output = config.output;
-        let trail = LaserTrail::new(config.trail_duration_ms);
-        let keyboard_output = (config.region.2, config.region.3);
+        let output = config.effects_output();
         let keycap_size = config
             .keyboard
             .as_ref()
             .map_or(64, |style| style.keycap_size);
+        let input_effects = InputEffectsState {
+            keyboard: rasterizer
+                .map(|r| KeyboardOverlay::new(output, r).with_keycap_size(keycap_size)),
+            ..InputEffectsState::new(config.trail_duration_ms)
+        };
         Self {
             config,
-            trail,
-            clicks: VecDeque::new(),
-            keyboard: rasterizer
-                .map(|r| KeyboardOverlay::new(keyboard_output, r).with_keycap_size(keycap_size)),
+            input_effects,
             surface: TileSurface::new(output),
-            keyboard_surface: TileSurface::new(keyboard_output),
+            keyboard_surface: TileSurface::new(output),
             position: None,
             continuity: 0,
         }
@@ -105,10 +132,10 @@ impl EffectsPreview {
     pub fn observe(&mut self, position: Option<(i32, i32)>, at: u64) {
         self.position = position;
         if self.config.trail[3] != 0 {
-            self.trail.observe(
+            self.input_effects.observe_pointer(
                 position,
                 (self.config.region.2, self.config.region.3),
-                self.config.output,
+                self.config.effects_output(),
                 at,
             );
         }
@@ -122,36 +149,67 @@ impl EffectsPreview {
         self.observe(position, at);
     }
     pub fn click(&mut self, click: RenderClick) {
-        if self.clicks.len() == CLICK_QUEUE_DEPTH {
-            self.clicks.pop_front();
+        self.input_effects.click(click);
+    }
+    pub fn key_event(&mut self, event: crate::keyboard_overlay::KeyEvent) {
+        self.input_effects.queue_key(event);
+    }
+    pub fn reset_inputs(&mut self, now: u64) {
+        self.input_effects.reset_keyboard(now);
+    }
+    pub fn mouse_event(&mut self, event: &MouseClickObservation, at_ms: u64) {
+        if event.down && event.button.has_ring() && self.config.click[3] != 0 {
+            self.click(RenderClick {
+                timestamp_ms: at_ms,
+                x: event.x,
+                y: event.y,
+                button: event.button,
+            });
         }
-        self.clicks.push_back(click);
+        if self.config.record_mouse_clicks
+            && let Some(style) = &self.config.keyboard
+        {
+            self.key_event(event.event(at_ms, style, self.config.show_keyboard));
+        }
     }
     pub fn render(&mut self, now: u64) -> Result<PreviewLayers, String> {
         self.surface.clear();
         self.keyboard_surface.clear();
         self.observe(self.position, now);
-        self.clicks
-            .retain(|click| now.saturating_sub(click.timestamp_ms) < CLICK_ANIMATION_MS);
-        self.trail
-            .draw_to(&mut self.surface, now, self.config.trail);
-        draw_clicks_to(
-            &mut self.surface,
-            &self.clicks,
-            now,
-            self.config.click,
-            (self.config.region.2, self.config.region.3),
-        );
-        if let Some(keyboard) = self.keyboard.as_mut() {
-            keyboard.draw_to(&mut self.keyboard_surface, now)?;
+        if let Some(position) = self.position {
+            let center = crate::mouse_effects::scale_point(
+                position.0,
+                position.1,
+                (self.config.region.2, self.config.region.3),
+                self.config.effects_output(),
+            );
+            crate::mouse_effects::draw_highlight_to(
+                &mut self.surface,
+                center,
+                self.config.highlight,
+                false,
+            );
         }
+        self.input_effects.draw_mouse_layers_to(
+            &mut self.surface,
+            now,
+            (self.config.region.2, self.config.region.3),
+            self.config.trail,
+            self.config.trail_duration_ms,
+            self.config.click,
+        );
+        self.input_effects
+            .draw_keyboard_to(&mut self.keyboard_surface, now)?;
         Ok(PreviewLayers {
             mouse: self.surface.snapshot(),
             keyboard: self.keyboard_surface.snapshot(),
         })
     }
     pub fn next_frame_at(&self, now: u64) -> Option<u64> {
-        if self.trail.has_active_animation(now) || !self.clicks.is_empty() {
+        if !self.pending_keys.is_empty()
+            || self.trail.has_active_animation(now)
+            || !self.clicks.is_empty()
+        {
             Some(now.saturating_add(16))
         } else {
             self.keyboard
@@ -182,13 +240,23 @@ impl PreviewSession {
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self, String> {
         config.validate()?;
+        // Initialize on the caller before spawning the preview worker: stop()
+        // may join that worker from the main thread, so key translation cannot
+        // synchronously dispatch back to the host.
+        #[cfg(target_os = "macos")]
+        if config.show_keyboard {
+            snow_macos::text::prepare_keyboard_layout();
+        }
         let (sender, receiver) = bounded(1);
         let pending = receiver.clone();
         let latest = Arc::new(Mutex::new(None));
         let shared = Arc::clone(&latest);
         let worker = std::thread::Builder::new()
             .name("snow-effects-preview".into())
-            .spawn(move || run(config, receiver, shared, notify))
+            .spawn(move || {
+                snow_core::qos::apply_current_thread();
+                run(config, receiver, shared, notify)
+            })
             .map_err(|e| e.to_string())?;
         Ok(Self {
             sender,
@@ -199,6 +267,12 @@ impl PreviewSession {
     }
     pub fn configure(&self, config: PreviewConfig) -> Result<(), String> {
         config.validate()?;
+        // Enabling keyboard display on an existing preview has the same
+        // initialization contract as starting one with keyboard display enabled.
+        #[cfg(target_os = "macos")]
+        if config.show_keyboard {
+            snow_macos::text::prepare_keyboard_layout();
+        }
         // Keep only the newest configuration; rapid color/geometry updates never block Qt.
         let command = Command::Configure(config);
         match self.sender.try_send(command) {
@@ -247,15 +321,20 @@ fn initialize(config: &PreviewConfig) -> Result<(Input, EffectsPreview), String>
     let keyboard = config
         .keyboard
         .as_ref()
+        .filter(|_| config.show_keyboard)
         .map(|_| KeyboardInput::start())
         .transpose()?;
     let (click_tx, clicks) = bounded(CLICK_QUEUE_DEPTH);
     let (move_tx, mouse) = bounded(1);
-    let observer = if config.trail[3] != 0 || config.click[3] != 0 {
+    let observer = if config.trail[3] != 0
+        || config.highlight[3] != 0
+        || config.click[3] != 0
+        || config.record_mouse_clicks
+    {
         Some(MouseHookObserver::start_with_movement(
             config.region,
             click_tx,
-            (config.trail[3] != 0).then(|| (move_tx, mouse.clone())),
+            (config.trail[3] != 0 || config.highlight[3] != 0).then(|| (move_tx, mouse.clone())),
         )?)
     } else {
         None
@@ -295,9 +374,9 @@ fn run(
                     PreviewFrame {
                         generation: config.generation,
                         revision,
-                        output: config.output,
+                        output: config.effects_output(),
                         tiles: vec![],
-                        keyboard_output: (config.region.2, config.region.3),
+                        keyboard_output: config.effects_output(),
                         keyboard_tiles: vec![],
                         error: Some(error),
                     },
@@ -316,12 +395,12 @@ fn run(
         // Disabled sources must never turn a disconnected receiver into a busy loop.
         let no_mouse = crossbeam_channel::never();
         let no_clicks = crossbeam_channel::never();
-        let mouse = if config.trail[3] != 0 {
+        let mouse = if config.trail[3] != 0 || config.highlight[3] != 0 {
             &input.mouse
         } else {
             &no_mouse
         };
-        let clicks = if config.click[3] != 0 {
+        let clicks = if config.click[3] != 0 || config.record_mouse_clicks {
             &input.clicks
         } else {
             &no_clicks
@@ -329,10 +408,36 @@ fn run(
         let mut dirty = true;
         let mut next_frame = elapsed(Instant::now());
         let mut keyboard_generation = 0;
+        let mut mouse_generation = 0;
         let mut pending_position: Option<MouseMovement> = None;
         loop {
             let now = elapsed(Instant::now());
+            let generation = input
+                ._mouse
+                .as_ref()
+                .map_or(0, MouseHookObserver::generation);
+            if generation != mouse_generation {
+                mouse_generation = generation;
+                while input.clicks.try_recv().is_ok() {}
+                effects.reset_inputs(now);
+                dirty = true;
+            }
             if dirty && now >= next_frame {
+                for event in input.clicks.try_iter() {
+                    effects.mouse_event(&event, elapsed(event.at));
+                }
+                if let (Some(input), Some(style)) = (&input.keyboard, &config.keyboard) {
+                    let generation = input.generation.load(Ordering::Acquire);
+                    if generation != keyboard_generation {
+                        effects.reset_inputs(now);
+                        keyboard_generation = generation;
+                    }
+                    for event in input.receiver.try_iter() {
+                        if event.generation == generation {
+                            effects.key_event(event.event(elapsed(event.at), style));
+                        }
+                    }
+                }
                 if let Some(movement) = pending_position.take() {
                     effects.observe_input(
                         movement.position,
@@ -353,9 +458,9 @@ fn run(
                     PreviewFrame {
                         generation: config.generation,
                         revision,
-                        output: config.output,
+                        output: config.effects_output(),
                         tiles: tiles.mouse,
-                        keyboard_output: (config.region.2, config.region.3),
+                        keyboard_output: config.effects_output(),
                         keyboard_tiles: tiles.keyboard,
                         error,
                     },
@@ -375,6 +480,11 @@ fn run(
             let timer = deadline
                 .map(|at| crossbeam_channel::after(Duration::from_millis(at.saturating_sub(now))))
                 .unwrap_or_else(crossbeam_channel::never);
+            let reset_timer = if config.record_mouse_clicks {
+                crossbeam_channel::after(Duration::from_millis(50))
+            } else {
+                crossbeam_channel::never()
+            };
             select_biased! {
                 recv(receiver) -> command => match command {
                     Ok(Command::Configure(next)) => { config = next; continue 'configure; }
@@ -385,19 +495,20 @@ fn run(
                     dirty = true;
                 },
                 recv(clicks) -> event => if let Ok(event) = event {
-                    effects.click(RenderClick { timestamp_ms: elapsed(event.at), x: event.x, y: event.y, button: event.button });
+                    effects.mouse_event(&event, elapsed(event.at));
                     dirty = true;
                 },
                 recv(keys) -> event => if let Ok(event) = event
-                    && let (Some(input), Some(style), Some(overlay)) = (&input.keyboard, &config.keyboard, &mut effects.keyboard) {
+                    && let (Some(input), Some(style)) = (&input.keyboard, &config.keyboard) {
                         let generation = input.generation.load(Ordering::Acquire);
                         if generation != keyboard_generation {
-                            overlay.model.reset(now);
+                            effects.reset_inputs(now);
                             keyboard_generation = generation;
                         }
-                        if event.generation == generation { overlay.model.event(event.event(elapsed(event.at), style)); }
+                        if event.generation == generation { effects.key_event(event.event(elapsed(event.at), style)); }
                         dirty = true;
                 },
+                recv(reset_timer) -> _ => {},
                 recv(timer) -> _ => { dirty = true; },
             }
         }
@@ -421,19 +532,159 @@ fn publish(latest: &Mutex<Option<Arc<PreviewFrame>>>, notify: &dyn Fn(), frame: 
 mod tests {
     use super::*;
     use crate::keyboard_overlay::{KeyEvent, Keycap};
+    use crate::laser_trail::LaserTrail;
+    use crate::mouse_effects::draw_clicks_to;
     use crate::mouse_hook::ObservedMouseButton;
     use crate::surface::{RgbaSurface, Surface, TILE_SIZE};
+    use std::collections::VecDeque;
 
     fn config() -> PreviewConfig {
         PreviewConfig {
             region: (-400, -200, 1920, 1080),
+            canvas: (1920, 1080),
             output: (1920, 1080),
             trail: [255, 0, 0, 128],
             trail_duration_ms: 500,
             click: [0, 255, 0, 128],
+            highlight: [0; 4],
+            record_mouse_clicks: false,
+            show_keyboard: true,
             keyboard: None,
             generation: 7,
         }
+    }
+
+    #[test]
+    fn desktop_points_map_to_display_pixels_without_scaling_effect_styles() {
+        struct FixedSquare;
+        impl KeycapRasterizer for FixedSquare {
+            fn rasterize(&mut self, _: &str, scale: f32) -> Result<Keycap, String> {
+                assert_eq!(scale, 1.0);
+                Ok(Keycap {
+                    width: 64,
+                    height: 64,
+                    pixels: [100, 0, 0, 255].repeat(64 * 64),
+                })
+            }
+        }
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            for output in [(320, 240), (1920, 1080)] {
+                let mut cfg = config();
+                cfg.region = (-400, -200, 640, 480);
+                cfg.canvas = ((640.0 * scale) as u32, (480.0 * scale) as u32);
+                cfg.output = output;
+                cfg.highlight = [255, 255, 0, 128];
+                let mut reference = cfg.clone();
+                reference.region.2 = cfg.canvas.0;
+                reference.region.3 = cfg.canvas.1;
+                let render = |cfg: PreviewConfig, input_scale: f64| {
+                    let mut preview = EffectsPreview::new(cfg, Some(Box::new(FixedSquare)));
+                    preview.key_event(key(0, true));
+                    preview.observe(
+                        Some(((160.0 * input_scale) as i32, (120.0 * input_scale) as i32)),
+                        0,
+                    );
+                    preview.observe(
+                        Some(((200.0 * input_scale) as i32, (160.0 * input_scale) as i32)),
+                        17,
+                    );
+                    preview.click(RenderClick {
+                        timestamp_ms: 17,
+                        x: (300.0 * input_scale) as i32,
+                        y: (200.0 * input_scale) as i32,
+                        button: ObservedMouseButton::Left,
+                    });
+                    preview.render(200).unwrap()
+                };
+                let frame = render(cfg, 1.0);
+                let expected = render(reference, scale);
+                let pixels = |tiles: &[Tile]| {
+                    tiles
+                        .iter()
+                        .map(|tile| (tile.x, tile.y, tile.pixels.clone()))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(
+                    pixels(&frame.mouse),
+                    pixels(&expected.mouse),
+                    "pointer effects at scale {scale}, export {output:?}"
+                );
+                assert_eq!(
+                    pixels(&frame.keyboard),
+                    pixels(&expected.keyboard),
+                    "keyboard at scale {scale}, export {output:?}"
+                );
+                let count = frame
+                    .keyboard
+                    .iter()
+                    .flat_map(|tile| tile.pixels.chunks_exact(4))
+                    .filter(|pixel| pixel[3] != 0)
+                    .count();
+                assert_eq!(count, 64 * 64, "keycaps keep their physical pixel size");
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_pixel_preview_styles_do_not_depend_on_export_dimensions() {
+        for capture in [(640, 480), (1920, 1080), (3840, 2160), (641, 479)] {
+            let mut reference = None;
+            for output in [(320, 180), (640, 480), (1920, 1080), (3840, 2160)] {
+                let mut cfg = config();
+                cfg.region = (-400, -200, capture.0, capture.1);
+                cfg.canvas = capture;
+                cfg.output = output;
+                cfg.highlight = [255, 255, 0, 128];
+                let mut preview = EffectsPreview::new(cfg, Some(Box::new(Solid)));
+                preview.key_event(key(0, true));
+                preview.observe(Some((160, 160)), 0);
+                preview.observe(Some((200, 200)), 17);
+                preview.click(RenderClick {
+                    timestamp_ms: 17,
+                    x: 200,
+                    y: 200,
+                    button: crate::mouse_hook::ObservedMouseButton::Left,
+                });
+                let frame = preview.render(200).unwrap();
+                let pixels: Vec<_> = frame
+                    .iter()
+                    .map(|tile| (tile.x, tile.y, tile.pixels.clone()))
+                    .collect();
+                if let Some(reference) = &reference {
+                    assert!(
+                        &pixels == reference,
+                        "capture {capture:?}, export {output:?}"
+                    );
+                } else {
+                    reference = Some(pixels);
+                }
+            }
+        }
+    }
+    #[test]
+    fn highlight_preview_moves_and_clears_without_animating_a_stationary_pointer() {
+        let mut cfg = config();
+        cfg.trail = [0; 4];
+        cfg.click = [0; 4];
+        cfg.highlight = [255, 255, 0, 128];
+        let mut preview = EffectsPreview::new(cfg, None);
+        preview.observe(Some((200, 200)), 0);
+        let first = preview.render(0).unwrap();
+        assert!(!first.mouse.is_empty());
+        assert!(preview.next_frame_at(20).is_none());
+        preview.observe(Some((800, 800)), 40);
+        let second = preview.render(40).unwrap();
+        assert!(
+            first
+                .mouse
+                .iter()
+                .all(|a| second.mouse.iter().all(|b| a.x != b.x || a.y != b.y))
+        );
+        preview.observe(None, 60);
+        assert!(preview.render(60).unwrap().is_empty());
+        preview.config.highlight = [0; 4];
+        preview.observe(Some((200, 200)), 80);
+        assert!(preview.render(80).unwrap().is_empty());
     }
     struct Solid;
     impl KeycapRasterizer for Solid {
@@ -445,6 +696,22 @@ mod tests {
             })
         }
     }
+    #[test]
+    fn preview_queues_future_input_and_orders_mouse_with_keyboard() {
+        let mut cfg = config();
+        cfg.click = [0; 4];
+        cfg.trail = [0; 4];
+        let mut preview = EffectsPreview::new(cfg, Some(Box::new(Solid)));
+        preview.key_event(key(200, false));
+        preview.key_event(key(100, true));
+        assert!(preview.render(50).unwrap().is_empty());
+        assert!(!preview.render(150).unwrap().is_empty());
+        assert!(!preview.render(250).unwrap().is_empty());
+        assert!(preview.render(1900).unwrap().is_empty());
+        preview.key_event(key(2200, true));
+        preview.reset_inputs(2100);
+        assert!(preview.render(2300).unwrap().is_empty());
+    }
     fn key(at_ms: u64, down: bool) -> KeyEvent {
         KeyEvent {
             at_ms,
@@ -455,7 +722,7 @@ mod tests {
         }
     }
     #[test]
-    fn preview_keycaps_stay_64_physical_pixels_independent_of_capture_and_export_size() {
+    fn preview_keycaps_keep_fixed_size_in_capture_coordinates() {
         struct FixedSquare;
         impl KeycapRasterizer for FixedSquare {
             fn rasterize(&mut self, _: &str, scale: f32) -> Result<Keycap, String> {
@@ -471,9 +738,11 @@ mod tests {
             for output in [(320, 180), (640, 480), (1920, 1080)] {
                 let mut config = config();
                 config.region = (-400, -200, capture.0, capture.1);
+                config.canvas = capture;
                 config.output = output;
                 let mut preview = EffectsPreview::new(config, Some(Box::new(FixedSquare)));
                 preview.keyboard.as_mut().unwrap().model.event(key(0, true));
+                assert_eq!(preview.config.effects_output(), capture);
                 let frame = preview.render(200).unwrap();
                 assert!(frame.mouse.is_empty());
                 let mut count = 0;
@@ -483,7 +752,10 @@ mod tests {
                         if pixel[3] != 0 {
                             let x = tile.x + index as u32 % TILE_SIZE;
                             let y = tile.y + index as u32 / TILE_SIZE;
-                            assert!(x < capture.0 && y < capture.1);
+                            assert!(
+                                x < preview.config.effects_output().0
+                                    && y < preview.config.effects_output().1
+                            );
                             left = left.min(x);
                             top = top.min(y);
                             right = right.max(x);
@@ -558,6 +830,7 @@ mod tests {
         let mut value = config();
         value.output = (131, 129);
         value.region = (-400, -200, 131, 129);
+        value.canvas = (131, 129);
         let mut preview = EffectsPreview::new(value, Some(Box::new(Solid)));
         preview.keyboard.as_mut().unwrap().model.event(key(0, true));
         preview.render(200).unwrap();
@@ -611,6 +884,7 @@ mod tests {
             value.trail_duration_ms = duration;
             value.output = (256, 128);
             value.region = (-500, 20, 256, 128);
+            value.canvas = (256, 128);
             let mut preview = EffectsPreview::new(value.clone(), Some(Box::new(Solid)));
             let mut video_trail = LaserTrail::new(duration);
             for (index, point) in [(120, 96), (130, 100), (140, 96)].into_iter().enumerate() {

@@ -106,6 +106,79 @@
         </message>
     </context>
     <context>
+        <name>ScreenshotRecognitionFileExport</name>
+        <message>
+            <source>An existing output file could not be replaced</source>
+            <translation>无法替换现有输出文件</translation>
+        </message>
+        <message>
+            <source>An output file already exists</source>
+            <translation>输出文件已存在</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>HTML document (*.html)</source>
+            <translation>HTML 文档 (*.html)</translation>
+        </message>
+        <message>
+            <source>Markdown document (*.md)</source>
+            <translation>Markdown 文档 (*.md)</translation>
+        </message>
+        <message>
+            <source>No available output filename was found</source>
+            <translation>找不到可用的输出文件名</translation>
+        </message>
+        <message>
+            <source>No output file was selected</source>
+            <translation>未选择输出文件</translation>
+        </message>
+        <message>
+            <source>No recognition text is available to save</source>
+            <translation>没有可保存的识别文本</translation>
+        </message>
+        <message>
+            <source>Replace</source>
+            <translation>替换</translation>
+        </message>
+        <message>
+            <source>Replace existing files?</source>
+            <translation>替换现有文件？</translation>
+        </message>
+        <message>
+            <source>Replace the existing file(s)?
+%1</source>
+            <translation>替换以下现有文件？
+%1</translation>
+        </message>
+        <message>
+            <source>Text document (*.txt)</source>
+            <translation>文本文档 (*.txt)</translation>
+        </message>
+        <message>
+            <source>The output directory could not be created</source>
+            <translation>无法创建输出目录</translation>
+        </message>
+        <message>
+            <source>The save directory is not configured</source>
+            <translation>未配置保存目录</translation>
+        </message>
+        <message>
+            <source>The screenshot filename format is invalid</source>
+            <translation>截图文件名格式无效</translation>
+        </message>
+        <message>
+            <source>The text file could not be published</source>
+            <translation>无法完成文本文件的保存</translation>
+        </message>
+        <message>
+            <source>The text file could not be staged</source>
+            <translation>无法暂存文本文件</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotSaveAsFileDialog</name>
         <message>
             <source>%1B</source>
@@ -160,6 +233,10 @@
             <translation>取消</translation>
         </message>
         <message>
+            <source>Compression level</source>
+            <translation>压缩级别</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>删除</translation>
         </message>
@@ -188,6 +265,10 @@
             <translation>高度</translation>
         </message>
         <message>
+            <source>High</source>
+            <translation>高</translation>
+        </message>
+        <message>
             <source>Image format</source>
             <translation>图像格式</translation>
         </message>
@@ -206,6 +287,14 @@
         <message>
             <source>Lossless</source>
             <translation>无损</translation>
+        </message>
+        <message>
+            <source>Low</source>
+            <translation>低</translation>
+        </message>
+        <message>
+            <source>Medium</source>
+            <translation>中</translation>
         </message>
         <message>
             <source>Name</source>
@@ -230,10 +319,6 @@
         <message>
             <source>Percentage</source>
             <translation>百分比</translation>
-        </message>
-        <message>
-            <source>Pixels</source>
-            <translation>像素</translation>
         </message>
         <message>
             <source>Please enter a name</source>
@@ -338,6 +423,10 @@
         <message>
             <source>Width</source>
             <translation>宽度</translation>
+        </message>
+        <message>
+            <source>pixel</source>
+            <translation>像素</translation>
         </message>
     </context>
     <context>

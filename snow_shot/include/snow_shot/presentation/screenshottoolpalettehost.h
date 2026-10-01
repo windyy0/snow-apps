@@ -34,6 +34,7 @@ class ScreenshotToolPaletteHost final : public QWidget {
     QRect mainToolbarContentRect() const;
     ScreenshotToolbarPlacementSnapshot placementSnapshot() const;
     QRegion interactiveHostRegion() const;
+    QRegion surfaceHostRegion() const;
     QPoint contentOffset() const;
     void prepareForDisplay();
     void resetStyleState();
@@ -47,7 +48,7 @@ class ScreenshotToolPaletteHost final : public QWidget {
     void setShadowMargins(const QMargins& margins);
     void setPhysicalScale(qreal scale);
     qreal physicalScale() const;
-    void commitDpiScale(qreal scale, const QMargins& shadowMargins);
+    void setScaleContext(const adqt::widgets::AdControlScaleContext& context);
     void setFrameSize(const QSize& frameSize, bool anchorToBottom);
     void setStyleToolbarAboveMain(bool above);
     void setStyleToolbarVisible(bool visible);
@@ -65,6 +66,7 @@ class ScreenshotToolPaletteHost final : public QWidget {
     void dragCancelled();
 
   private:
+    QRegion panelHostRegion(bool rounded) const;
     bool eventFilter(QObject* watched, QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 

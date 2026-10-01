@@ -4,10 +4,41 @@
 #include "snow_recording.h"
 #include "snow_recording_effects.h"
 #include <QString>
+#include <QCoreApplication>
 #include <QVector>
 #include <QByteArray>
 #include <QColor>
+#include <QGuiApplication>
+#include <QFontInfo>
+#include <QTextLayout>
 #include <utility>
+
+// Resolve on the GUI thread, then carry owned strings to native recording workers.
+struct RecordingKeyboardFont {
+    QByteArray family;
+    QByteArray cjkFamily;
+    uint32_t weight;
+
+    RecordingKeyboardFont() {
+        const QFont font = QGuiApplication::font();
+        family = QFontInfo(font).family().toUtf8();
+        weight = static_cast<uint32_t>(font.weight());
+        // Ask Qt which font it uses for Han glyphs instead of maintaining an
+        // overlay-specific list. This is a font coverage probe, not visible text.
+        QTextLayout layout(QString(QChar(0x6C49)), font);
+        layout.beginLayout();
+        layout.createLine();
+        layout.endLayout();
+        const auto runs = layout.glyphRuns();
+        cjkFamily = runs.isEmpty() ? family : runs.front().rawFont().familyName().toUtf8();
+    }
+
+    template <typename Config> void applyTo(Config& config) const {
+        config.keyboard_font_family_utf8 = family.constData();
+        config.keyboard_cjk_font_family_utf8 = cjkFamily.constData();
+        config.keyboard_font_weight = weight;
+    }
+};
 
 struct RecordingKeyboardLabels {
     QVector<QByteArray> text;
@@ -69,11 +100,21 @@ struct RecordingKeyboardLabels {
         text.reserve(64);
         entries.reserve(64);
         for (const auto& [key, label] : names) {
+#ifdef Q_OS_MACOS
+            const char* legend = key == 0x12 ? "Option" : key == 0x5B ? "Command" : label;
+            add(key, QString::fromLatin1(legend));
+#else
             add(key, QString::fromLatin1(label));
+#endif
         }
         for (uint32_t key = 0x60; key <= 0x69; ++key) {
             add(key, QStringLiteral("Num %1").arg(key - 0x60));
         }
+        add(0x200, QCoreApplication::translate("RecordingKeyboardLabels", "Left click"));
+        add(0x201, QCoreApplication::translate("RecordingKeyboardLabels", "Right click"));
+        add(0x202, QCoreApplication::translate("RecordingKeyboardLabels", "Middle click"));
+        add(0x203, QCoreApplication::translate("RecordingKeyboardLabels", "Mouse button 4"));
+        add(0x204, QCoreApplication::translate("RecordingKeyboardLabels", "Mouse button 5"));
         for (const auto& entry : entries) {
             previewEntries.push_back({entry.key_code, reinterpret_cast<const char*>(entry.utf8)});
         }

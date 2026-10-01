@@ -1,6 +1,8 @@
 #include "color_picker.h"
+#include "detail/pointer_region.h"
 
 #include "color_picker_style.h"
+#include "checkerboard.h"
 #include "combo_box.h"
 #include "detail/color_picker_value_model.h"
 #include "detail/timing_hub.h"
@@ -19,7 +21,6 @@
 #include <QFrame>
 #include <QFontMetrics>
 #include <QGridLayout>
-#include <QHash>
 #include <QHBoxLayout>
 #include <QImage>
 #include <QKeyEvent>
@@ -127,27 +128,7 @@ qreal snapToDevicePixelCoord(qreal value, qreal dpr) {
   return qRound(value * dpr) / dpr;
 }
 
-constexpr int kCheckerBrushCacheMaxEntries = 32;
 constexpr int kInteractiveEditorRefreshIntervalMs = 16;
-
-struct CheckerBrushCacheKey {
-  int cellSize = 0;
-  QRgb light = 0;
-  QRgb dark = 0;
-
-  bool operator==(const CheckerBrushCacheKey& other) const {
-    return cellSize == other.cellSize && light == other.light && dark == other.dark;
-  }
-};
-
-size_t qHash(const CheckerBrushCacheKey& key, size_t seed) {
-  return qHashMulti(seed, key.cellSize, key.light, key.dark);
-}
-
-QHash<CheckerBrushCacheKey, QBrush>& checkerBrushCache() {
-  static QHash<CheckerBrushCacheKey, QBrush> cache;
-  return cache;
-}
 
 QRectF snapRectToDevicePixels(const QRectF& rect, qreal dpr) {
   if (dpr <= 0.0) {
@@ -974,33 +955,6 @@ QString colorToTriggerHexText(const QColor& color) {
   return QStringLiteral("%1,%2%").arg(hex).arg(alphaPercent);
 }
 
-QBrush makeCheckerBrush(int cellSize, const QColor& light = QColor(255, 255, 255),
-                        const QColor& dark = QColor(0, 0, 0, 20)) {
-  const int cell = std::max(2, cellSize);
-  const CheckerBrushCacheKey key{cell, light.rgba(), dark.rgba()};
-  auto& cache = checkerBrushCache();
-  const auto cached = cache.constFind(key);
-  if (cached != cache.constEnd()) {
-    return cached.value();
-  }
-
-  QPixmap pixmap(cell * 2, cell * 2);
-  pixmap.fill(light);
-
-  QPainter painter(&pixmap);
-  painter.fillRect(QRect(0, 0, cell, cell), dark);
-  painter.fillRect(QRect(cell, cell, cell, cell), dark);
-  painter.end();
-
-  QBrush brush(pixmap);
-  brush.setStyle(Qt::TexturePattern);
-  if (cache.size() >= kCheckerBrushCacheMaxEntries) {
-    cache.clear();
-  }
-  cache.insert(key, brush);
-  return brush;
-}
-
 QBrush makeHueBrush() {
   static const QBrush brush = []() {
     QLinearGradient gradient(0.0, 0.0, 1.0, 0.0);
@@ -1130,12 +1084,14 @@ class ColorPickerSwatch final : public QWidget {
 
     switch (fillMode_) {
       case FillMode::Solid: {
-        painter.fillPath(fillPath, makeCheckerBrush(checkerCellSize_, checkerLight_, checkerDark_));
+        painter.fillPath(fillPath,
+                         checkerboardBrush(checkerCellSize_, checkerLight_, checkerDark_));
         painter.fillPath(fillPath, solidFill_);
         break;
       }
       case FillMode::Gradient: {
-        painter.fillPath(fillPath, makeCheckerBrush(checkerCellSize_, checkerLight_, checkerDark_));
+        painter.fillPath(fillPath,
+                         checkerboardBrush(checkerCellSize_, checkerLight_, checkerDark_));
         if (!gradientStops_.isEmpty()) {
           QLinearGradient gradient(0.0, 0.0, 1.0, 0.0);
           gradient.setCoordinateMode(QGradient::ObjectBoundingMode);
@@ -1610,14 +1566,17 @@ class PresetColorButton final : public QAbstractButton {
   }
 
  protected:
+  bool event(QEvent* event) override {
+    detail::resetWidgetHoverOnLifecycle(this, event);
+    return QAbstractButton::event(event);
+  }
+
   void enterEvent(QEnterEvent* event) override {
-    hovered_ = true;
     update();
     QAbstractButton::enterEvent(event);
   }
 
   void leaveEvent(QEvent* event) override {
-    hovered_ = false;
     update();
     QAbstractButton::leaveEvent(event);
   }
@@ -1657,7 +1616,7 @@ class PresetColorButton final : public QAbstractButton {
     const qreal radius = std::max<qreal>(0.0, radius_);
     const QPainterPath fillPath = roundedRectPath(shapeRect, radius, radius, radius, radius);
 
-    painter.fillPath(fillPath, makeCheckerBrush(checkerCellSize_, checkerLight_, checkerDark_));
+    painter.fillPath(fillPath, checkerboardBrush(checkerCellSize_, checkerLight_, checkerDark_));
     if (fillMode_ == FillMode::Gradient) {
       if (!gradientStops_.isEmpty()) {
         QLinearGradient gradient(0.0, 0.0, 1.0, 0.0);
@@ -1677,7 +1636,7 @@ class PresetColorButton final : public QAbstractButton {
       painter.drawPath(roundedRectPath(borderRect, radius, radius, radius, radius));
     }
 
-    if (hovered_ && isEnabled()) {
+    if (detail::widgetHovered(this) && isEnabled()) {
       const qreal outlineWidth = std::max<qreal>(1.0, borderWidth_);
       const qreal outlineHalf = outlineWidth / 2.0;
       const QRectF rawOutlineRect = outerRect.adjusted(outlineHalf + 0.5, outlineHalf + 0.5,
@@ -1728,7 +1687,7 @@ class PresetColorButton final : public QAbstractButton {
   FillMode fillMode_ = FillMode::Solid;
   QColor solidFill_ = QColor("#1677ff");
   QVector<QPair<qreal, QColor>> gradientStops_;
-  bool hovered_ = false;
+
   bool checkedVisual_ = false;
   bool bright_ = false;
 };
@@ -1815,14 +1774,17 @@ class ColorPickerClearButton final : public QAbstractButton {
   }
 
  protected:
+  bool event(QEvent* event) override {
+    detail::resetWidgetHoverOnLifecycle(this, event);
+    return QAbstractButton::event(event);
+  }
+
   void enterEvent(QEnterEvent* event) override {
-    hovered_ = true;
     update();
     QAbstractButton::enterEvent(event);
   }
 
   void leaveEvent(QEvent* event) override {
-    hovered_ = false;
     update();
     QAbstractButton::leaveEvent(event);
   }
@@ -1834,7 +1796,8 @@ class ColorPickerClearButton final : public QAbstractButton {
     const qreal dpr = devicePixelRatioF();
     const bool cacheStale = cachedPixmap_.isNull() || cachedLogicalSize_ != logicalSize ||
                             !qFuzzyCompare(cachedDpr_ + 1.0, dpr + 1.0) ||
-                            cachedHovered_ != hovered_ || cachedEnabled_ != isEnabled();
+                            cachedHovered_ != detail::widgetHovered(this) ||
+                            cachedEnabled_ != isEnabled();
     if (cacheStale) {
       renderCache(logicalSize, dpr);
     }
@@ -1879,7 +1842,7 @@ class ColorPickerClearButton final : public QAbstractButton {
     const qreal radius = std::max<qreal>(0.0, radius_);
     const QPainterPath fillPath = roundedRectPath(borderRect, radius, radius, radius, radius);
 
-    QColor borderColor = hovered_ && isEnabled() ? borderHover_ : border_;
+    QColor borderColor = detail::widgetHovered(this) && isEnabled() ? borderHover_ : border_;
     QColor slashColor = slash_;
     if (!isEnabled()) {
       borderColor.setAlphaF(borderColor.alphaF() * 0.8F);
@@ -1905,7 +1868,7 @@ class ColorPickerClearButton final : public QAbstractButton {
     cachedPixmap_ = pixmap;
     cachedLogicalSize_ = logicalSize;
     cachedDpr_ = dpr;
-    cachedHovered_ = hovered_;
+    cachedHovered_ = detail::widgetHovered(this);
     cachedEnabled_ = isEnabled();
   }
 
@@ -1915,7 +1878,7 @@ class ColorPickerClearButton final : public QAbstractButton {
   QColor slash_ = QColor("#ff4d4f");
   qreal borderWidth_ = 1.0;
   int radius_ = 4;
-  bool hovered_ = false;
+
   QPixmap cachedPixmap_;
   QSize cachedLogicalSize_;
   qreal cachedDpr_ = 0.0;
@@ -5634,7 +5597,8 @@ void AdColorPicker::refreshChannelVisuals(LivePanelSyncSource source) {
 
   if (alphaSlider_ && refreshAlpha) {
     AdSliderSemanticStyles alphaStyles;
-    alphaStyles.rail.brush = makeCheckerBrush(kTransparencyCell);
+    alphaStyles.rail.brush =
+        checkerboardBrush(kTransparencyCell, style.panelBackground, style.transparentCellB);
     alphaStyles.tracks.brush = makeAlphaBrush(editableColor);
     alphaStyles.handle.borderColor = style.channelHandleBorder;
     QColor alphaHandleColor = editableColor.toRgb();

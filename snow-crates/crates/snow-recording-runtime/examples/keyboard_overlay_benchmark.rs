@@ -16,6 +16,7 @@ use std::time::Instant;
 
 fn style(dark: bool) -> KeyboardOverlayConfig {
     KeyboardOverlayConfig {
+        font: None,
         keycap_size: 64,
         background_rgba: if dark {
             [31, 31, 31, 204]
@@ -141,7 +142,7 @@ fn encode_fixture(output: &Path, format: ExportFormat) -> Result<(), String> {
             speed: VideoEncodingSpeed::VeryFast,
         },
         encode_threads: 2,
-        audio: None,
+        audio: Vec::new(),
     })
     .map_err(|e| e.to_string())?;
     let base = background(size);

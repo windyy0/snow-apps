@@ -1,3 +1,4 @@
+#include "physical_key_test_support.h"
 #include "snow_shot/presentation/screenshotsaveasfiledialog.h"
 #include "snow_shot/presentation/screenshotsavepreviewcanvas.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
@@ -24,6 +25,9 @@
 #include "widgets/slider.h"
 #include "widgets/popover.h"
 #include "theme/theme_manager.h"
+#ifdef Q_OS_MACOS
+#include "macos_native_input.h"
+#endif
 
 #include <QApplication>
 #include <QColorSpace>
@@ -51,6 +55,7 @@
 #include <QTimer>
 #include <QWheelEvent>
 #include <QWindow>
+#include <array>
 #include <atomic>
 #include <algorithm>
 #include <cmath>
@@ -58,6 +63,7 @@
 #include <iostream>
 #include <source_location>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 using namespace adqt::widgets;
@@ -146,6 +152,7 @@ void reusablePathInputsAndSettings() {
     const auto& registry = settings::builtInSettingsRegistry();
     settings::SettingsRuntimeSession session(registry, backend);
     SettingsPageWidget storagePage(registry, QStringLiteral("storage-and-privacy"), session);
+    storagePage.reveal({storagePage.pageId(), QStringLiteral("screen-recording-output"), {}});
     const auto directoryControls = storagePage.findChildren<DirectoryPathInput*>();
     require(directoryControls.size() == 2,
             "all screenshot and recording directory settings must use DirectoryPathInput");
@@ -157,6 +164,7 @@ void reusablePathInputsAndSettings() {
     }
 
     SettingsPageWidget interfacePage(registry, QStringLiteral("interface-settings"), session);
+    interfacePage.reveal({interfacePage.pageId(), QStringLiteral("tray"), {}});
     const auto fileControls = interfacePage.findChildren<FilePathInput*>();
     require(fileControls.size() == 1 &&
                 adqt::icons::describeIcon(fileControls.constFirst()->browseButton()->iconRef())
@@ -239,7 +247,15 @@ void saveDialogKeepsToolbarVisible() {
                 "the screenshot toolbar must remain visible throughout Save as File");
         require(!toolbar.testAttribute(Qt::WA_DontShowOnScreen),
                 "saving must not alter the toolbar's native visibility attributes");
-        if (QApplication::platformName() != QStringLiteral("offscreen")) {
+#ifdef Q_OS_MACOS
+        if (QApplication::platformName() == QStringLiteral("cocoa")) {
+            // Cocoa's native modal ordering can differ from Qt's topLevelAt()
+            // when the dialog's transient toolbar differs from its QWidget owner.
+            require(macWindowReceivesPoint(surface, toolbar.geometry().center()),
+                    "the native save dialog must remain above its toolbar after a queued raise");
+        } else
+#endif
+            if (QApplication::platformName() != QStringLiteral("offscreen")) {
             require(QApplication::topLevelAt(toolbar.geometry().center()) == surface,
                     "the save dialog must remain above its toolbar after a queued raise");
         }
@@ -308,12 +324,21 @@ void persistence(const QTemporaryDir& temp) {
     require(backend.selectValue(settings::SettingsSelectBinding::ScreenshotSaveAsFileDialog) ==
                 QStringLiteral("snow_shot"),
             "settings backend failed to read dialog selection");
-    require(backend.resetSection(settings::SettingsSectionReset::ScreenshotSettings) &&
+    require(backend.resetSection(settings::SettingsSectionReset::ScreenshotOutput) &&
                 adapter.saveAsFileDialog() == QStringLiteral("system"),
-            "reset must restore system dialog");
+            "screenshot output reset must restore the system dialog");
     require(backend.applySelectValue(settings::SettingsSelectBinding::ScreenshotSaveAsFileDialog,
                                      QStringLiteral("snow_shot")),
             "settings backend failed to write dialog selection");
+    require(adapter.setAutoSaveAfterCopy(true) && adapter.setCopyImageFileToClipboard(true) &&
+                backend.resetSection(settings::SettingsSectionReset::ScreenshotSettings) &&
+                adapter.autoSaveAfterCopy() && adapter.copyImageFileToClipboard() &&
+                adapter.saveAsFileDialog() == QStringLiteral("snow_shot"),
+            "function reset must preserve screenshot output settings");
+    require(backend.resetSection(settings::SettingsSectionReset::ScreenshotOutput) &&
+                !adapter.autoSaveAfterCopy() && !adapter.copyImageFileToClipboard() &&
+                adapter.saveAsFileDialog() == QStringLiteral("system"),
+            "output reset must restore all moved screenshot settings");
 
     const QString pathKey = QStringLiteral("screenshot/save_path_shortcuts");
     const auto malformed =
@@ -361,7 +386,8 @@ void pdfDialogAndSettings(QWidget& owner, const QTemporaryDir& temp) {
             const auto source = pipeline::prepare(snow_shot::image_codec::srgbRowSource(fixture()),
                                                   cancellation, &error);
             auto pixels = pipeline::preparePixels(source, source.rows.size, cancellation, &error);
-            ScreenshotSaveExportOptions options{source.rows.size, Format::Pdf, 99};
+            ScreenshotSaveExportOptions options{
+                .size = source.rows.size, .format = Format::Pdf, .quality = 99};
             const auto first = pipeline::render(pixels, options, cancellation, &error);
             require(first && first->pdf, "PDF pipeline must encode its image payload");
             options.pdfTitle = QStringLiteral("renamed");
@@ -397,9 +423,35 @@ void pdfDialogAndSettings(QWidget& owner, const QTemporaryDir& temp) {
     require(!settings.setPdfPageSize(QStringLiteral("invalid")) &&
                 settings.pdfPageSize() == QStringLiteral("a4_landscape"),
             "invalid page size must preserve the previous value");
+    require(
+        backend.applySelectValue(settings::SettingsSelectBinding::ScreenshotCompressionLevel,
+                                 QStringLiteral("high")) &&
+            backend.selectValue(settings::SettingsSelectBinding::ScreenshotCompressionLevel) ==
+                QStringLiteral("high") &&
+            backend.applySliderValue(settings::SettingsSliderBinding::ScreenshotImageQuality, 0) &&
+            backend.sliderValue(settings::SettingsSliderBinding::ScreenshotImageQuality) == 0,
+        "global image encoding settings must round-trip through the settings backend");
+    require(storage::ConfigurationSchema::defaultValue(
+                QStringLiteral("capture_history/compression_level")) == QStringLiteral("medium") &&
+                backend.selectValue(settings::SettingsSelectBinding::HistoryCompressionLevel) ==
+                    QStringLiteral("medium") &&
+                backend.applySelectValue(settings::SettingsSelectBinding::HistoryCompressionLevel,
+                                         QStringLiteral("high")) &&
+                backend.selectValue(settings::SettingsSelectBinding::HistoryCompressionLevel) ==
+                    QStringLiteral("high") &&
+                settings.compressionLevel() == QStringLiteral("high") &&
+                !backend.applySelectValue(settings::SettingsSelectBinding::HistoryCompressionLevel,
+                                          QStringLiteral("invalid")) &&
+                backend.resetSection(settings::SettingsSectionReset::HistoryPolicy) &&
+                backend.selectValue(settings::SettingsSelectBinding::HistoryCompressionLevel) ==
+                    QStringLiteral("medium") &&
+                settings.compressionLevel() == QStringLiteral("high"),
+            "history display compression must validate, reset, and remain independent of output");
     require(backend.resetSection(settings::SettingsSectionReset::ScreenshotOutput) &&
-                settings.pdfPageSize() == QStringLiteral("a4_portrait"),
-            "output reset must restore portrait A4");
+                settings.pdfPageSize() == QStringLiteral("a4_portrait") &&
+                settings.compressionLevel() == QStringLiteral("medium") &&
+                settings.imageQuality() == 100,
+            "output reset must restore PDF, compression, and quality defaults");
     require(settings.setImageSaveDirectory(temp.path()) &&
                 settings.setLastManualSaveFormat(QStringLiteral("pdf")) &&
                 settings.setPdfPageSize(QStringLiteral("a4_landscape")),
@@ -460,12 +512,14 @@ void pdfDialogAndSettings(QWidget& owner, const QTemporaryDir& temp) {
                         ->pdfLayout()
                         .pagePoints == QSizeF(120, 75),
             "new dialogs must remember PDF, reset quality and read the current page setting");
+    const QJsonObject optionsBeforeCancel = settings.manualSaveFormatOptions();
     child<AdSlider>(content, "saveQualitySlider")->setValue(20);
     child<AdSelect>(content, "saveFormatSelect")->setCurrentValue(QStringLiteral("jpeg"));
     modal->reject();
     flush();
-    require(settings.lastManualSaveFormat() == QStringLiteral("pdf"),
-            "cancel must not replace remembered PDF");
+    require(settings.lastManualSaveFormat() == QStringLiteral("pdf") &&
+                settings.manualSaveFormatOptions() == optionsBeforeCancel,
+            "cancel must not replace the remembered format or any per-format options");
     require(settings.setLastManualSaveFormat(QStringLiteral("png")) &&
                 settings.setPdfPageSize(QStringLiteral("a4_portrait")),
             "PDF settings cleanup failed");
@@ -570,6 +624,7 @@ void stateRules(const QTemporaryDir& temp) {
             "suggested filename must omit the image format extension");
     require(state.directory == remembered && state.output.size == QSize(160, 100) &&
                 state.output.format == Format::Png && state.output.quality == 100 &&
+                state.output.compressionLevel == ScreenshotCompressionLevel::Medium &&
                 state.lockAspectRatio,
             "opening controls must use defaults and remembered directory");
     require(settings.setLastManualSaveDirectory(temp.filePath("missing")),
@@ -604,8 +659,21 @@ void stateRules(const QTemporaryDir& temp) {
                                                     ScreenshotImageFileService::extension(format)),
                 "output must preserve the base name and append the selected format extension");
     }
-    require(pipeline::normalizedOptions({QSize(320, 123), Format::Bmp, 75}).quality == 100,
-            "BMP quality must normalize out because the encoder has no quality setting");
+    require(
+        pipeline::normalizedOptions({.size = QSize(320, 123), .format = Format::Bmp, .quality = 75})
+                .quality == 100,
+        "BMP quality must normalize out because the encoder has no quality setting");
+    require(pipeline::normalizedOptions({.size = QSize(320, 123),
+                                         .format = Format::Jpeg,
+                                         .quality = 0,
+                                         .compressionLevel = ScreenshotCompressionLevel::High})
+                        .quality == 0 &&
+                pipeline::normalizedOptions({.size = QSize(320, 123),
+                                             .format = Format::Jpeg,
+                                             .quality = 0,
+                                             .compressionLevel = ScreenshotCompressionLevel::High})
+                        .compressionLevel == ScreenshotCompressionLevel::Low,
+            "normalization must preserve quality zero and remove unsupported compression");
     state.output.size = QSize(0, 100);
     require(!state.validationError().isEmpty(), "zero dimensions must fail");
     state.output.format = Format::Webp;
@@ -640,7 +708,9 @@ void encodingAndFullResolutionDisplay() {
                                 Format::Avif}) {
                 for (int quality : {100, 72}) {
                     const ScreenshotSaveExportOptions options{
-                        quality == 100 ? QSize(80, 50) : QSize(96, 32), format, quality};
+                        .size = quality == 100 ? QSize(80, 50) : QSize(96, 32),
+                        .format = format,
+                        .quality = quality};
                     const auto output = pipeline::render(source, options, cancellation, &error);
                     require(output && snow_shot::image_codec::inspectFile(
                                           output->path,
@@ -655,8 +725,9 @@ void encodingAndFullResolutionDisplay() {
                             "display pixels must match an independent decode of the export");
                 }
                 if (format != Format::Jpeg) {
-                    const auto lossless = pipeline::render(source, {original.size(), format, 100},
-                                                           cancellation, &error);
+                    const auto lossless = pipeline::render(
+                        source, {.size = original.size(), .format = format, .quality = 100},
+                        cancellation, &error);
                     const QImage preview =
                         lossless ? pipeline::decode(*lossless, cancellation, &error) : QImage{};
                     if (preview != original) {
@@ -688,8 +759,9 @@ void encodingAndFullResolutionDisplay() {
                     "large source must retain full dimensions and a bounded preview");
             for (auto format : {Format::Png, Format::Jpeg, Format::Bmp, Format::Webp, Format::Jxl,
                                 Format::Avif}) {
-                const auto output =
-                    pipeline::render(large, {QSize(48, 2304), format, 72}, cancellation, &error);
+                const auto output = pipeline::render(
+                    large, {.size = QSize(48, 2304), .format = format, .quality = 72}, cancellation,
+                    &error);
                 require(output != nullptr, "large output encoding failed");
                 const QImage preview = pipeline::decode(*output, cancellation, &error);
                 require(preview.size() == QSize(48, 2304) &&
@@ -699,8 +771,9 @@ void encodingAndFullResolutionDisplay() {
                                            ScreenshotImageFileService::snowImageFormat(format))),
                         "large display images must contain the complete decoded export");
             }
-            const auto retained =
-                pipeline::render(source, {original.size(), Format::Png, 100}, cancellation, &error);
+            const auto retained = pipeline::render(
+                source, {.size = original.size(), .format = Format::Png, .quality = 100},
+                cancellation, &error);
             require(retained != nullptr, "retained export fixture failed");
             const QString parked = retained->path + QStringLiteral(".unavailable");
             require(QFile::rename(retained->path, parked),
@@ -737,7 +810,7 @@ void encodingAndFullResolutionDisplay() {
             mapped = {};
             require(weak.expired(), "releasing the last display image must release its mapping");
             pipeline::Encoded missing;
-            missing.options = {QSize(2, 2), Format::Png, 100};
+            missing.options = {.size = QSize(2, 2), .format = Format::Png, .quality = 100};
             missing.path = missing.directory.filePath(QStringLiteral("missing.png"));
             error.clear();
             require(pipeline::decode(missing, cancellation, &error).isNull() && !error.isEmpty(),
@@ -889,6 +962,49 @@ void canvasPdfComparison() {
             "automatic PDF fitting must continue to use source pixels");
 }
 
+void canvasWheelZoom() {
+    ScreenshotSavePreviewCanvas canvas;
+    canvas.resize(600, 400);
+    canvas.setSource(fixture(), QSize(160, 100));
+    const QPointF position(120, 80);
+    const auto scroll = [&](QPoint pixels, QPoint angles,
+                            Qt::MouseEventSource source = Qt::MouseEventNotSynthesized,
+                            Qt::ScrollPhase phase = Qt::NoScrollPhase) {
+        QWheelEvent event(position, position, pixels, angles, Qt::NoButton, Qt::NoModifier, phase,
+                          false, source);
+        QApplication::sendEvent(&canvas, &event);
+        require(event.isAccepted(), "preview wheel zoom must consume the input");
+    };
+    scroll({}, QPoint(0, 120));
+    require(qAbs(canvas.zoom() - 1.15) < 0.000001,
+            "a Windows mouse notch must retain its 15 percent zoom factor");
+#ifdef Q_OS_MACOS
+    for (int pixels : {2, 2, 80}) {
+        const double before = canvas.zoom();
+        const QPointF imagePoint =
+            (position - QRectF(canvas.rect()).center() - canvas.pan()) / before;
+        scroll(QPoint(0, pixels), QPoint(0, 120));
+        require(qAbs(canvas.zoom() - before * 1.15) < 0.000001,
+                "every Cocoa mouse notch must match the Windows zoom factor");
+        const QPointF afterPoint =
+            (position - QRectF(canvas.rect()).center() - canvas.pan()) / canvas.zoom();
+        require(QLineF(imagePoint, afterPoint).length() < 0.000001,
+                "mouse wheel zoom must keep the source point under the cursor");
+    }
+    const double beforeReverse = canvas.zoom();
+    scroll(QPoint(0, -2), QPoint(0, -120));
+    require(qAbs(canvas.zoom() - beforeReverse / 1.15) < 0.000001,
+            "reverse Cocoa mouse scrolling must match Windows");
+#endif
+    const double beforePrecise = canvas.zoom();
+    scroll(QPoint(0, 2), QPoint(0, 4), Qt::MouseEventSynthesizedBySystem);
+    require(qAbs(canvas.zoom() - beforePrecise * std::pow(1.15, 0.02)) < 0.000001,
+            "precise phase-less Cocoa input must retain continuous pixel scaling");
+    const double beforeHorizontal = canvas.zoom();
+    scroll(QPoint(20, 0), QPoint(120, 0));
+    require(canvas.zoom() == beforeHorizontal, "horizontal mouse scrolling must not zoom");
+}
+
 void canvasZoomHint() {
     ScreenshotSavePreviewCanvas canvas;
     canvas.resize(600, 400);
@@ -907,7 +1023,13 @@ void canvasZoomHint() {
         require(hint->isHidden(), "zoom hint must disappear when its timer expires");
     };
     const auto pressKey = [&](int key) {
-        QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
+        PhysicalKeyEvent hardware(QEvent::KeyPress, key, Qt::NoModifier);
+#ifdef Q_OS_MACOS
+        QKeyEvent event(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier, 1, hardware.nativeVirtualKey(),
+                        0);
+#else
+        auto& event = hardware;
+#endif
         QApplication::sendEvent(&canvas, &event);
     };
     pressKey(Qt::Key_Plus);
@@ -996,6 +1118,7 @@ void unchangedPreviewEdits(QWidget& owner) {
     auto* height = child<AdInputNumber>(content, "saveHeightInput");
     auto* lock = child<AdButton>(content, "saveAspectLockButton");
     auto* quality = child<AdSlider>(content, "saveQualitySlider");
+    auto* compression = child<AdSelect>(content, "saveCompressionLevelSelect");
     auto* format = child<AdSelect>(content, "saveFormatSelect");
     processUntil([&] { return content->property("previewGeneration").toULongLong() > 0; });
     const quint64 generation = content->property("previewGeneration").toULongLong();
@@ -1029,10 +1152,19 @@ void unchangedPreviewEdits(QWidget& owner) {
     processUntil([&] { return settled; });
     require(content->property("previewGeneration").toULongLong() == generation,
             "equivalent edits must not complete redundant preview jobs");
+    const qulonglong preparedIdentity = content->property("preparedPixelsIdentity").toULongLong();
+    compression->setCurrentValue(QStringLiteral("high"));
+    require(!busy->isHidden(), "PNG compression changes must render a new encoded result");
+    processUntil([&] { return content->property("previewGeneration").toULongLong() > generation; });
+    require(content->property("preparedPixelsIdentity").toULongLong() == preparedIdentity,
+            "compression changes must reuse the already prepared pixels");
+    const quint64 compressionGeneration = content->property("previewGeneration").toULongLong();
     width->setValue(80);
     lock->click();
     lock->click();
-    processUntil([&] { return content->property("previewGeneration").toULongLong() > generation; });
+    processUntil([&] {
+        return content->property("previewGeneration").toULongLong() > compressionGeneration;
+    });
     require(height->value() == 50, "aspect lock must continue to update the paired dimension");
     const quint64 resizedGeneration = content->property("previewGeneration").toULongLong();
     format->setCurrentValue(QStringLiteral("jpeg"));
@@ -1078,6 +1210,9 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
     });
     auto* content = modal->contentWidget();
     auto* trigger = child<AdButton>(content, "savePathExpand_0");
+    require(!trigger->isHidden() &&
+                adqt::icons::describeIcon(trigger->iconRef()).key.name == QStringLiteral("more"),
+            "custom save path menu button must stay visible and use the More icon");
     auto enter = [](QWidget* widget) {
         const QPoint local = widget->rect().center();
         const QPoint global = widget->mapToGlobal(local);
@@ -1110,6 +1245,7 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
     std::cerr << "Shortcut popup width: " << popupWidth
               << "; visible after leaving trigger: " << menu->isVisible() << '\n';
     require(!menu->isVisible(), "leaving the trigger without entering its menu must hide it");
+    require(!trigger->isHidden(), "leaving a custom save path must keep its menu button visible");
     require(popupWidth < 160, "two-action shortcut popup must size to its content");
     flush();
 
@@ -1173,6 +1309,35 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
     leave(menu);
     settle();
     require(!menu->isVisible(), "leaving the popup must hide it without a click");
+
+    flush();
+    trigger->click();
+    flush();
+    menu = child<AdContextMenu>(content, "savePathMenu");
+    require(menu && menu->isVisible(), "covered-trigger setup must reopen the shortcut menu");
+    QWidget blocker(content);
+    blocker.setGeometry(QRect(trigger->mapTo(content, QPoint()), trigger->size()));
+    blocker.show();
+    blocker.raise();
+    require(menu && menu->isVisible(), "covering the trigger must leave the menu open initially");
+    const QPoint coveredTrigger = trigger->mapToGlobal(trigger->rect().center());
+    QCursor::setPos(coveredTrigger);
+    require(QApplication::widgetAt(coveredTrigger) == &blocker,
+            "hover occlusion fixture must cover the shortcut trigger");
+    QMouseEvent coveredMove(QEvent::MouseMove, menu->mapFromGlobal(coveredTrigger), coveredTrigger,
+                            Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(menu, &coveredMove);
+    settle();
+    require(!menu->isVisible(),
+            "a covered trigger must not keep the hover popup open after pointer movement");
+    const QPoint triggerCenter = trigger->rect().center();
+    QEnterEvent coveredEnter(triggerCenter, triggerCenter, coveredTrigger);
+    QApplication::sendEvent(trigger, &coveredEnter);
+    const auto menus = content->findChildren<AdContextMenu*>(QStringLiteral("savePathMenu"));
+    require(
+        std::none_of(menus.begin(), menus.end(),
+                     [](const AdContextMenu* candidate) { return candidate->isPopupVisible(); }),
+        "entering a covered trigger must not reopen its hover popup");
     require(settings.setSavePathShortcuts({}), "hover shortcut cleanup failed");
 }
 
@@ -1254,11 +1419,15 @@ void shortcutsAndCancellation(QWidget& owner, const QTemporaryDir& temp) {
             "custom save path must group its main and edit buttons");
     auto* shortcutButton = child<AdButton>(content, "savePathShortcut_0");
     auto* shortcutEdit = child<AdButton>(content, "savePathExpand_0");
+    require(!shortcutEdit->isHidden() &&
+                adqt::icons::describeIcon(shortcutEdit->iconRef()).key.name ==
+                    QStringLiteral("more"),
+            "custom save path menu button must stay visible and use More");
     require(shortcutButton->parentWidget() == shortcutGroup &&
                 shortcutEdit->parentWidget() == shortcutGroup &&
                 shortcutButton->geometry().right() == shortcutEdit->geometry().left(),
             "save path and edit buttons must share a joined border without a gap");
-    child<AdButton>(content, "savePathExpand_0")->click();
+    shortcutEdit->click();
     auto* menu = child<AdContextMenu>(content, "savePathMenu");
     require(menu->actions().size() == 2 && menu->actionDanger(menu->actions()[1]),
             "shortcut menu must include danger Delete");
@@ -1293,7 +1462,9 @@ void shortcutsAndCancellation(QWidget& owner, const QTemporaryDir& temp) {
             "cancel must preserve confirmed shortcut edits and never save");
     modal = openDialog(owner, fixture());
     content = modal->contentWidget();
-    child<AdButton>(content, "savePathExpand_0")->click();
+    auto* reopenedExpand = child<AdButton>(content, "savePathExpand_0");
+    require(!reopenedExpand->isHidden(), "reopened custom save path menu button must stay visible");
+    reopenedExpand->click();
     menu = child<AdContextMenu>(content, "savePathMenu");
     menu->hide();
     menu->actions()[1]->trigger();
@@ -1313,6 +1484,13 @@ void previewAndSave(QWidget& owner, const QTemporaryDir& temp) {
     auto* content = modal->contentWidget();
     auto* format = child<AdSelect>(content, "saveFormatSelect");
     auto* quality = child<AdSlider>(content, "saveQualitySlider");
+    auto* compression = child<AdSelect>(content, "saveCompressionLevelSelect");
+    auto* form = content->findChild<AdForm*>();
+    require(form != nullptr, "save form is missing");
+    auto* qualityRow = form->itemForName(QStringLiteral("quality"));
+    auto* compressionRow = form->itemForName(QStringLiteral("compression-level"));
+    require(qualityRow != nullptr && compressionRow != nullptr,
+            "image encoding option rows are missing");
     auto* filename = child<AdLineEdit>(content, "saveFilenameInput");
     require(!filename->text().isEmpty() && !filename->text().endsWith(QStringLiteral(".png")),
             "filename input must initially omit the image format extension");
@@ -1330,7 +1508,7 @@ void previewAndSave(QWidget& owner, const QTemporaryDir& temp) {
     auto* unit = child<AdSegmented>(dimensions, "saveSizeUnitSegmented");
     require(sizeLabel->text() == QStringLiteral("Size") && unit->count() == 2 &&
                 unit->currentValue() == QStringLiteral("pixels") &&
-                unit->optionLabel(0) == QStringLiteral("Pixels") &&
+                unit->optionLabel(0) == QStringLiteral("pixel") &&
                 unit->optionLabel(1) == QStringLiteral("Percentage") &&
                 sizeLabel->geometry().right() < unit->geometry().left() &&
                 unit->geometry().right() == dimensions->rect().right(),
@@ -1353,9 +1531,10 @@ void previewAndSave(QWidget& owner, const QTemporaryDir& temp) {
                 lockGeometry.center().y() == widthItem->geometry().center().y() &&
                 unit->geometry().bottom() < widthItem->geometry().top(),
             "aspect lock must remain between the width and height fields");
-    require(quality->marks().value(quality->minimum()).label == QStringLiteral("0%") &&
+    require(quality->minimum() == 0 && quality->maximum() == 100 &&
+                quality->marks().value(quality->minimum()).label == QStringLiteral("0%") &&
                 quality->marks().value(quality->maximum()).label == QStringLiteral("100%"),
-            "PNG quality endpoints must read 0% and 100%");
+            "quality must preserve the complete 0-100 range and endpoint labels");
     require(content->findChild<QWidget*>(QStringLiteral("saveLosslessBadge")) == nullptr,
             "quality must not retain the separate lossless badge");
     snapshot(modal, QStringLiteral("export-light"));
@@ -1373,25 +1552,39 @@ void previewAndSave(QWidget& owner, const QTemporaryDir& temp) {
         static_cast<void>(modal->takeContentWidget());
         modal->setContentWidget(content);
     }
-    require(!quality->isEnabled(), "PNG must disable quality");
+    require(qualityRow->isHidden() && !compressionRow->isHidden() &&
+                compression->currentValue() == QStringLiteral("medium"),
+            "PNG must hide Quality and show Compression level at Medium");
     format->setCurrentValue(QStringLiteral("bmp"));
-    require(format->currentValue() == QStringLiteral("bmp") && !quality->isEnabled(),
-            "BMP must be selectable and disable quality");
+    require(format->currentValue() == QStringLiteral("bmp") && qualityRow->isHidden() &&
+                compressionRow->isHidden(),
+            "BMP must hide both image encoding option rows");
     for (const auto& key :
          {QStringLiteral("webp"), QStringLiteral("avif"), QStringLiteral("jxl")}) {
         format->setCurrentValue(key);
         quality->setValue(100);
-        require(quality->isEnabled() &&
+        require(!qualityRow->isHidden() && !compressionRow->isHidden() &&
                     quality->marks().value(quality->maximum()).label == QStringLiteral("Lossless"),
-                "lossless format must replace the 100% endpoint with Lossless");
+                "lossless formats must show both controls and label quality 100 as Lossless");
         if (key == QStringLiteral("webp"))
             snapshot(modal, QStringLiteral("export-lossless"));
         quality->setValue(99);
     }
     format->setCurrentValue(QStringLiteral("jpeg"));
-    require(quality->marks().value(quality->maximum()).label == QStringLiteral("100%"),
-            "lossy format must restore the 100% endpoint");
+    quality->setValue(61);
+    require(!qualityRow->isHidden() && compressionRow->isHidden() &&
+                quality->marks().value(quality->maximum()).label == QStringLiteral("100%"),
+            "JPEG must show Quality, hide Compression level, and restore the 100% endpoint");
+    format->setCurrentValue(QStringLiteral("webp"));
+    quality->setValue(73);
+    compression->setCurrentValue(QStringLiteral("high"));
+    format->setCurrentValue(QStringLiteral("jpeg"));
+    require(quality->value() == 61, "JPEG must restore its independent quality value");
+    format->setCurrentValue(QStringLiteral("webp"));
+    require(quality->value() == 73 && compression->currentValue() == QStringLiteral("high"),
+            "WebP must restore its independent quality and compression values");
     format->setCurrentValue(QStringLiteral("png"));
+    compression->setCurrentValue(QStringLiteral("low"));
     const quint64 generation = content->property("previewGeneration").toULongLong();
     child<AdLineEdit>(content, "saveFilenameInput")->setText(QString());
     child<AdInputNumber>(content, "saveWidthInput")->setValue(96);
@@ -1400,6 +1593,7 @@ void previewAndSave(QWidget& owner, const QTemporaryDir& temp) {
     require(child<AdInputNumber>(content, "saveHeightInput")->value() == 50 &&
                 !modal->acceptButton()->isEnabled(),
             "latest geometry must render despite invalid filename and Save must remain blocked");
+    compression->setCurrentValue(QStringLiteral("medium"));
     child<AdLineEdit>(content, "saveFilenameInput")->setText(QStringLiteral("result"));
     const QString blocking = temp.filePath("blocking-file");
     QFile file(blocking);
@@ -1437,6 +1631,28 @@ void previewAndSave(QWidget& owner, const QTemporaryDir& temp) {
         savedPath.endsWith(QStringLiteral("result.png")) &&
             snow_shot::image_codec::inspectFile(savedPath, snow::image::Format::png, QSize(80, 50)),
         "saved output must use normalized extension and requested dimensions");
+    flush();
+    const QJsonObject rememberedOptions = storage::ScreenshotSettings().manualSaveFormatOptions();
+    require(rememberedOptions.value(QStringLiteral("png"))
+                        .toObject()
+                        .value(QStringLiteral("compression_level")) == QStringLiteral("medium") &&
+                rememberedOptions.value(QStringLiteral("jpeg"))
+                        .toObject()
+                        .value(QStringLiteral("quality")) == 61 &&
+                rememberedOptions.value(QStringLiteral("webp"))
+                        .toObject()
+                        .value(QStringLiteral("quality")) == 73 &&
+                rememberedOptions.value(QStringLiteral("webp"))
+                        .toObject()
+                        .value(QStringLiteral("compression_level")) == QStringLiteral("high"),
+            "the first confirmed save attempt must persist independent per-format controls");
+    modal = openDialog(owner, fixture());
+    content = modal->contentWidget();
+    require(child<AdSelect>(content, "saveFormatSelect")->currentValue() == QStringLiteral("png") &&
+                child<AdSelect>(content, "saveCompressionLevelSelect")->currentValue() ==
+                    QStringLiteral("medium"),
+            "reopening the dialog must restore the selected format's compression value");
+    modal->reject();
     flush();
 }
 
@@ -1594,8 +1810,8 @@ void sizeUnits(QWidget& owner, const QTemporaryDir& temp) {
         editor->setFocus();
         editor->selectAll();
         for (const auto character : text) {
-            QKeyEvent key(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
-                          QString(character));
+            PhysicalKeyEvent key(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
+                                 QString(character));
             QApplication::sendEvent(editor, &key);
         }
     };
@@ -1619,7 +1835,7 @@ void sizeUnits(QWidget& owner, const QTemporaryDir& temp) {
     require(QApplication::installTranslator(&translator), "size translator unavailable");
     flush();
     require(child<QLabel>(content, "saveSizeLabel")->text() == QStringLiteral("Translated Size") &&
-                unit->optionLabel(0) == QStringLiteral("Translated Pixels") &&
+                unit->optionLabel(0) == QStringLiteral("Translated pixel") &&
                 unit->optionLabel(1) == QStringLiteral("Translated Percentage") &&
                 unit->accessibleName() == QStringLiteral("Translated Size unit") &&
                 width->toolTip() == QStringLiteral("Translated Width") &&
@@ -1643,7 +1859,8 @@ void sizeUnits(QWidget& owner, const QTemporaryDir& temp) {
             flush();
             auto* dimensions = child<QWidget>(content, "saveDimensionsForm");
             auto* label = child<QLabel>(content, "saveSizeLabel");
-            require(label->geometry().right() < unit->geometry().left() &&
+            require(unit->optionLabel(0) == QStringLiteral("像素") &&
+                        label->geometry().right() < unit->geometry().left() &&
                         dimensions->rect().contains(unit->geometry()) &&
                         unit->width() >= unit->minimumSizeHint().width(),
                     "translated size header must fit without clipping");
@@ -1742,6 +1959,9 @@ void overwriteRequiresConfirmation(QWidget& owner, const QTemporaryDir& temp) {
     QString saved;
     auto* modal = openDialog(owner, fixture(), [&](const QString& path) { saved = path; });
     auto* content = modal->contentWidget();
+    const QJsonObject optionsBeforeConfirmation =
+        storage::ScreenshotSettings().manualSaveFormatOptions();
+    child<AdSelect>(content, "saveCompressionLevelSelect")->setCurrentValue(QStringLiteral("high"));
     child<AdLineEdit>(content, "saveDirectoryInput")->setText(temp.path());
     child<AdLineEdit>(content, "saveFilenameInput")->setText(QStringLiteral("existing.jpg"));
     modal->acceptButton()->click();
@@ -1749,8 +1969,11 @@ void overwriteRequiresConfirmation(QWidget& owner, const QTemporaryDir& temp) {
     require(confirmation->isOpen(), "normalized destination must trigger overwrite confirmation");
     confirmation->rejectButton()->click();
     flush();
-    require(modal->isOpen() && saved.isEmpty() && existing.open(QIODevice::ReadOnly),
-            "canceling overwrite must retain the export form");
+    require(modal->isOpen() && saved.isEmpty() &&
+                storage::ScreenshotSettings().manualSaveFormatOptions() ==
+                    optionsBeforeConfirmation &&
+                existing.open(QIODevice::ReadOnly),
+            "canceling overwrite must retain the form without persisting format options");
     require(existing.readAll() == QByteArray("existing"), "canceling overwrite modified the file");
     existing.close();
     modal->acceptButton()->click();
@@ -1942,6 +2165,8 @@ AdModal* openCountedDialog(QWidget& owner, const std::shared_ptr<ExportProbe>& p
 }
 
 void optimizedPipelineBehavior(QWidget& owner) {
+    require(storage::ScreenshotSettings().setLastManualSaveState(QStringLiteral("png"), {}),
+            "optimized pipeline format-option reset failed");
     const QImage image = fixture();
     ScreenshotImageRowSource rows = snow_shot::image_codec::srgbRowSource(image);
     auto entered = std::make_shared<std::atomic_bool>(false);
@@ -2021,7 +2246,13 @@ void optimizedPipelineBehavior(QWidget& owner) {
     quality->setValue(72);
     processUntil([&] { return content->property("previewGeneration").toULongLong() > previous; });
     selectFormat(QStringLiteral("webp"));
+    previous = content->property("previewGeneration").toULongLong();
+    quality->setValue(72);
+    processUntil([&] { return content->property("previewGeneration").toULongLong() > previous; });
     selectFormat(QStringLiteral("jxl"));
+    previous = content->property("previewGeneration").toULongLong();
+    quality->setValue(72);
+    processUntil([&] { return content->property("previewGeneration").toULongLong() > previous; });
     require(content->property("previewDecodeCount").toInt() == 5 &&
                 content->property("preparedPixelsIdentity").toULongLong() == preparedIdentity,
             "lossy same-size exports did not reuse prepared pixels and decode codec artifacts");
@@ -2050,13 +2281,50 @@ void unbackedExactPreviewDecodesArtifact(QWidget& owner) {
     flush();
 }
 
-void sourceSizedPngAdoptsHistoryEncoding(QWidget& owner, const QTemporaryDir& temp) {
+void oversizedManualPngStreamsWithoutPopulatingCache(QWidget& owner, const QTemporaryDir& temp) {
+    const storage::ScreenshotSettings settings;
+    require(settings.setLastManualSaveState(QStringLiteral("png"), {}),
+            "streaming PNG fixture settings failed");
     const QImage image = fixture();
-    auto reads = std::make_shared<std::atomic_int>(0);
-    ScreenshotImageRowSource rows = snow_shot::image_codec::srgbRowSource(image);
-    rows.readRows = [read = rows.readRows, reads](int first, int count, qsizetype stride,
-                                                  uchar* target, qsizetype capacity) {
-        ++*reads;
+    auto artifact = std::make_shared<ScreenshotExportArtifact>(
+        ScreenshotExportSource::fromImage(image), ScreenshotCompressionLevel::Low,
+        ScreenshotExportArtifact::PngCachePolicy{1, {}});
+    require(!artifact->shouldCachePng(image.size()), "large image should use streaming");
+    QString savedPath;
+    require(ScreenshotSaveAsFileDialog::open(&owner, &owner, artifact,
+                                             [&](const QString& path) { savedPath = path; }),
+            "streaming PNG dialog did not open");
+    auto* modal = child<AdModal>(&owner, "screenshotSaveAsFileModal");
+    QPointer<QWidget> content = modal->contentWidget();
+    processUntil([&] { return content->property("previewGeneration").toULongLong() > 0; });
+    require(!artifact->cachedPng(ScreenshotCompressionLevel::Low).isValid(),
+            "streaming preview populated the in-memory PNG cache");
+    child<AdLineEdit>(content, "saveDirectoryInput")->setText(temp.path());
+    child<AdLineEdit>(content, "saveFilenameInput")->setText(QStringLiteral("streamed-png"));
+    modal->acceptButton()->click();
+    processUntil([&] { return !savedPath.isEmpty(); });
+    require(samePixels(QImage(savedPath), image), "streamed PNG changed the source pixels");
+    flush();
+}
+
+void obsoleteSharedPngDoesNotBlockCurrentPreview(QWidget& owner) {
+    const storage::ScreenshotSettings settings;
+    require(
+        settings.setLastManualSaveState(
+            QStringLiteral("png"),
+            QJsonObject{{QStringLiteral("png"), QJsonObject{{QStringLiteral("compression_level"),
+                                                             QStringLiteral("high")}}}}),
+        "PNG preview fixture settings failed");
+    auto entered = std::make_shared<std::atomic_bool>(false);
+    auto released = std::make_shared<std::atomic_bool>(false);
+    const auto release = qScopeGuard([released] { released->store(true); });
+    auto rows = snow_shot::image_codec::srgbRowSource(fixture());
+    rows.readRows = [read = rows.readRows, entered, released](
+                        int first, int count, qsizetype stride, uchar* target, qsizetype capacity) {
+        if (!entered->exchange(true)) {
+            while (!released->load())
+                QThread::msleep(1);
+        }
         return read(first, count, stride, target, capacity);
     };
     auto artifact = std::make_shared<ScreenshotExportArtifact>(ScreenshotExportSource::fromProducer(
@@ -2064,41 +2332,112 @@ void sourceSizedPngAdoptsHistoryEncoding(QWidget& owner, const QTemporaryDir& te
             rows.cancellationRequested = std::move(cancellation);
             return rows;
         }));
-
-    QString savedPath;
-    QByteArray historyPng;
-    int historyCallbacks = 0;
-    require(ScreenshotSaveAsFileDialog::open(
-                &owner, &owner, artifact,
-                [&, artifact](const QString& path) {
-                    savedPath = path;
-                    require(artifact->requestCanonicalPng(
-                                &owner,
-                                [&](ScreenshotExportEncodingResult result) {
-                                    require(result.succeeded(),
-                                            "history canonical PNG request failed after save");
-                                    historyPng = result.image.bytes();
-                                    ++historyCallbacks;
-                                }),
-                            "history canonical PNG request was rejected after save");
-                }),
-            "history-adoption export dialog did not open");
+    require(ScreenshotSaveAsFileDialog::open(&owner, &owner, artifact),
+            "stale shared PNG dialog did not open");
     auto* modal = child<AdModal>(&owner, "screenshotSaveAsFileModal");
     QPointer<QWidget> content = modal->contentWidget();
+    const auto close = qScopeGuard([&] {
+        if (content) {
+            modal->reject();
+            flush();
+        }
+    });
+    processUntil([&] { return entered->load(); });
+    child<AdSelect>(content, "saveFormatSelect")->setCurrentValue(QStringLiteral("jpeg"));
     processUntil([&] { return content->property("previewGeneration").toULongLong() > 0; });
-    const int readsBeforeSave = reads->load();
-    require(readsBeforeSave > 0, "initial source-sized PNG did not read its row source");
-
-    child<AdLineEdit>(content, "saveDirectoryInput")->setText(temp.path());
-    child<AdLineEdit>(content, "saveFilenameInput")->setText(QStringLiteral("history-adoption"));
-    modal->acceptButton()->click();
-    processUntil([&] { return !savedPath.isEmpty() && historyCallbacks == 1; });
-
-    QFile saved(savedPath);
-    require(reads->load() == readsBeforeSave && saved.open(QIODevice::ReadOnly) &&
-                saved.readAll() == historyPng,
-            "source-sized PNG save did not seed history with the retained encoded artifact");
+    const auto generation = content->property("previewGeneration").toULongLong();
+    bool sharedCompleted = false;
+    require(artifact->requestPng(&owner, ScreenshotCompressionLevel::High,
+                                 [&](ScreenshotExportEncodingResult result) {
+                                     require(result.succeeded(), "shared PNG was cancelled");
+                                     sharedCompleted = true;
+                                 }),
+            "shared PNG subscriber rejected");
+    released->store(true);
+    processUntil([&] { return sharedCompleted; });
     flush();
+    require(content->property("previewGeneration").toULongLong() == generation,
+            "obsolete shared PNG replaced the current preview");
+}
+
+void sourceSizedPngSharesMatchingEncoding(QWidget& owner, const QTemporaryDir& temp) {
+    const storage::ScreenshotSettings settings;
+    require(settings.setCompressionLevel(QStringLiteral("low")),
+            "global PNG compression fixture failed");
+    for (const auto& customCompression :
+         {QStringLiteral("low"), QStringLiteral("medium"), QStringLiteral("high")}) {
+        require(settings.setLastManualSaveState(
+                    QStringLiteral("png"),
+                    QJsonObject{
+                        {QStringLiteral("png"),
+                         QJsonObject{{QStringLiteral("compression_level"), customCompression}}}}),
+                "custom PNG compression fixture failed");
+        const QImage image = fixture();
+        auto reads = std::make_shared<std::atomic_int>(0);
+        ScreenshotImageRowSource rows = snow_shot::image_codec::srgbRowSource(image);
+        rows.readRows = [read = rows.readRows, reads](int first, int count, qsizetype stride,
+                                                      uchar* target, qsizetype capacity) {
+            ++*reads;
+            return read(first, count, stride, target, capacity);
+        };
+        auto artifact =
+            std::make_shared<ScreenshotExportArtifact>(ScreenshotExportSource::fromProducer(
+                {}, [rows](std::function<bool()> cancellation) mutable {
+                    rows.cancellationRequested = std::move(cancellation);
+                    return rows;
+                }));
+
+        QByteArray existingPng;
+        require(artifact->requestPng(
+                    &owner, ScreenshotImageFileService::compressionLevelForKey(customCompression),
+                    [&](ScreenshotExportEncodingResult result) {
+                        require(result.succeeded(), "preexisting PNG encoding failed");
+                        existingPng = result.image.bytes();
+                    }),
+                "preexisting PNG request rejected");
+        processUntil([&] { return !existingPng.isEmpty(); });
+        const int readsBeforeDialog = reads->load();
+        QString savedPath;
+        QByteArray historyPng;
+        int historyCallbacks = 0;
+        require(ScreenshotSaveAsFileDialog::open(
+                    &owner, &owner, artifact,
+                    [&, artifact](const QString& path) {
+                        savedPath = path;
+                        require(artifact->requestPng(
+                                    &owner,
+                                    ScreenshotImageFileService::compressionLevelForKey(
+                                        customCompression),
+                                    [&](ScreenshotExportEncodingResult result) {
+                                        require(result.succeeded(),
+                                                "matching cached PNG request failed after save");
+                                        historyPng = result.image.bytes();
+                                        ++historyCallbacks;
+                                    }),
+                                "matching cached PNG request was rejected after save");
+                    }),
+                "history-adoption export dialog did not open");
+        auto* modal = child<AdModal>(&owner, "screenshotSaveAsFileModal");
+        QPointer<QWidget> content = modal->contentWidget();
+        processUntil([&] { return content->property("previewGeneration").toULongLong() > 0; });
+        const int readsBeforeSave = reads->load();
+        require(readsBeforeSave == readsBeforeDialog,
+                "source-sized PNG preview re-encoded an existing matching artifact");
+
+        child<AdLineEdit>(content, "saveDirectoryInput")->setText(temp.path());
+        child<AdLineEdit>(content, "saveFilenameInput")
+            ->setText(QStringLiteral("history-adoption-%1").arg(customCompression));
+        modal->acceptButton()->click();
+        processUntil([&] { return !savedPath.isEmpty() && historyCallbacks == 1; });
+
+        QFile saved(savedPath);
+        require(saved.open(QIODevice::ReadOnly), "source-sized PNG save is unreadable");
+        const QByteArray savedPng = saved.readAll();
+        require(reads->load() == readsBeforeSave && savedPng == historyPng &&
+                    historyPng.constData() == existingPng.constData(),
+                "source-sized PNG did not share the matching cached encoding");
+        flush();
+    }
 }
 
 void saveReusesCalculatedResult(QWidget& owner, const QTemporaryDir& temp) {
@@ -2149,8 +2488,8 @@ void saveReusesCalculatedResult(QWidget& owner, const QTemporaryDir& temp) {
         }
         child<AdInputNumber>(content, "saveWidthInput")->setValue(80);
         if (moment == Moment::QueuedEncode) {
-            require(ScreenshotExportCoordinator::shared().pendingJobCount() == 3,
-                    "the calculation must be queued behind the worker gates");
+            processUntil(
+                [&] { return ScreenshotExportCoordinator::shared().pendingJobCount() == 3; });
             save();
             *gate.released = true;
         } else if (moment == Moment::RunningEncode) {
@@ -2206,8 +2545,8 @@ void committedControlsAndSave(QWidget& owner, const QTemporaryDir& temp) {
         editor->setFocus();
         editor->selectAll();
         for (const auto character : text) {
-            QKeyEvent key(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
-                          QString(character));
+            PhysicalKeyEvent key(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
+                                 QString(character));
             QApplication::sendEvent(editor, &key);
         }
     };
@@ -2334,6 +2673,37 @@ void failedAndClosedCalculations(QWidget& owner, const QTemporaryDir& temp) {
             "closing during calculation must discard worker completion and release the dialog");
 }
 
+void repeatedPreviewChangesKeepLatestRequest(QWidget& owner, const QTemporaryDir& temp) {
+    auto probe = std::make_shared<ExportProbe>();
+    QString savedPath;
+    auto* modal = openCountedDialog(owner, probe, [&](const QString& path) { savedPath = path; });
+    auto* content = modal->contentWidget();
+    ExportObserver observer(content);
+    WorkerGate gate;
+    gate.block(&owner);
+    processUntil(
+        [&] { return gate.started->load() == std::clamp(QThread::idealThreadCount(), 1, 2); });
+    auto* width = child<AdInputNumber>(content, "saveWidthInput");
+    for (int index = 0; index < 40; ++index) {
+        width->setValue(80 + index);
+        flush(); // Each edit occurs in a separate event-loop turn, as with real input.
+        require(ScreenshotExportCoordinator::shared().pendingJobCount() == 3 &&
+                    child<QLabel>(content, "saveErrorLabel")->isHidden(),
+                "only the latest preview may occupy a queued slot");
+    }
+    *gate.released = true;
+    processUntil([&] { return observer.publications == 1; });
+    require(observer.encodes == 1 && probe->passes == 2 && width->value() == 119,
+            "superseded preview jobs must not read or encode the source");
+    child<AdLineEdit>(content, "saveDirectoryInput")->setText(temp.path());
+    child<AdLineEdit>(content, "saveFilenameInput")->setText(QStringLiteral("latest-preview"));
+    modal->acceptButton()->click();
+    processUntil([&] { return !savedPath.isEmpty(); });
+    require(QImage(savedPath).width() == 119 && observer.encodes == 1,
+            "Save must reuse the latest successful preview without another edit or retry");
+    flush();
+}
+
 void rejectedCalculationRetries(QWidget& owner, const QTemporaryDir& temp) {
     auto probe = std::make_shared<ExportProbe>();
     QString savedPath;
@@ -2343,6 +2713,7 @@ void rejectedCalculationRetries(QWidget& owner, const QTemporaryDir& temp) {
     WorkerGate gate;
     gate.block(&owner, 16);
     child<AdInputNumber>(content, "saveWidthInput")->setValue(80);
+    processUntil([&] { return !child<QLabel>(content, "saveErrorLabel")->isHidden(); });
     require(!child<QLabel>(content, "saveErrorLabel")->isHidden() && probe->passes == 1 &&
                 observer.encodes == 0 && modal->acceptButton()->isEnabled(),
             "a rejected calculation must preserve the latest options and allow retry");
@@ -2411,6 +2782,7 @@ int main(int argc, char* argv[]) {
             committedControlsAndSave(owner, temp);
             retainedResultFailures(owner, temp);
             failedAndClosedCalculations(owner, temp);
+            repeatedPreviewChangesKeepLatestRequest(owner, temp);
             rejectedCalculationRetries(owner, temp);
             ScreenshotExportCoordinator::shared().shutdown();
             storage::ApplicationStorage::instance().shutdown();
@@ -2418,18 +2790,23 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--optimized-pipeline"))) {
+            oversizedManualPngStreamsWithoutPopulatingCache(owner, temp);
+            obsoleteSharedPngDoesNotBlockCurrentPreview(owner);
             optimizedPipelineBehavior(owner);
             unbackedExactPreviewDecodesArtifact(owner);
-            sourceSizedPngAdoptsHistoryEncoding(owner, temp);
+            sourceSizedPngSharesMatchingEncoding(owner, temp);
             ScreenshotExportCoordinator::shared().shutdown();
             storage::ApplicationStorage::instance().shutdown();
             std::cout << "Optimized export pipeline tests passed\n";
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--zoom-hint")) ||
+            app.arguments().contains(QStringLiteral("--wheel-zoom")) ||
             app.arguments().contains(QStringLiteral("--canvas-baseline")) ||
             app.arguments().contains(QStringLiteral("--unchanged-edits")) ||
             app.arguments().contains(QStringLiteral("--row-backed-preview"))) {
+            if (app.arguments().contains(QStringLiteral("--wheel-zoom")))
+                canvasWheelZoom();
             if (app.arguments().contains(QStringLiteral("--zoom-hint")))
                 canvasZoomHint();
             if (app.arguments().contains(QStringLiteral("--canvas-baseline")))
@@ -2478,6 +2855,7 @@ int main(int argc, char* argv[]) {
         canvasInteraction();
         canvasPdfComparison();
         canvasZoomHint();
+        canvasWheelZoom();
         canvasOriginalSizeBaseline();
         unchangedPreviewEdits(owner);
         shortcutsAndCancellation(owner, temp);
@@ -2486,13 +2864,16 @@ int main(int argc, char* argv[]) {
         overwriteRequiresConfirmation(owner, temp);
         shortcutWrappingAndLanguageChange(owner, temp);
         rowBackedDialogAndStalePreview(owner, temp);
+        oversizedManualPngStreamsWithoutPopulatingCache(owner, temp);
+        obsoleteSharedPngDoesNotBlockCurrentPreview(owner);
         optimizedPipelineBehavior(owner);
         unbackedExactPreviewDecodesArtifact(owner);
-        sourceSizedPngAdoptsHistoryEncoding(owner, temp);
+        sourceSizedPngSharesMatchingEncoding(owner, temp);
         saveReusesCalculatedResult(owner, temp);
         committedControlsAndSave(owner, temp);
         retainedResultFailures(owner, temp);
         failedAndClosedCalculations(owner, temp);
+        repeatedPreviewChangesKeepLatestRequest(owner, temp);
         rejectedCalculationRetries(owner, temp);
         pendingCancellation(owner);
         ScreenshotExportCoordinator::shared().shutdown();

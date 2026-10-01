@@ -416,6 +416,8 @@ impl Editor {
                     end_arrowhead: None,
                     stroke_style: style.stroke_style,
                     arrow_type: style.arrow_type,
+                    arrow_shaft_type: style.arrow_shaft_type,
+                    arrow_ratio: style.arrow_ratio,
                 },
             )?
             .into_line(style.fill, style.fill_style)

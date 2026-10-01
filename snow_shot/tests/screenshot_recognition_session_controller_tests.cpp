@@ -1,7 +1,12 @@
 #include "snow_shot/presentation/screenshotocrpresentation.h"
+#include "snow_shot/presentation/screenshotrecognitionwindow.h"
+#include <QTextEdit>
+#include <QMimeData>
+#include <QJsonArray>
 #include "snow_shot/presentation/screenshotrecognitionsessioncontroller.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationstore.h"
+#include "snow_shot/storage/settingsadapters.h"
 
 #include "widgets/modal.h"
 #include "widgets/popover.h"
@@ -16,6 +21,7 @@
 #include "widgets/switch.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QImage>
@@ -55,6 +61,75 @@ void processFor(int durationMs) {
     loop.exec();
 }
 
+void headlessWorkflowResultsAndEdits() {
+    ScreenshotRecognitionSessionActions actions;
+    actions.ensureContent = []() -> ScreenshotRecognitionWindow* { return nullptr; };
+    ScreenshotRecognitionSessionController session(nullptr, nullptr, nullptr, actions);
+    QImage image(80, 60, QImage::Format_ARGB32);
+    image.fill(Qt::white);
+    session.setTarget({QStringLiteral("mcp-headless"), image, QRectF(0, 0, 80, 60)});
+    ScreenshotRecognitionResults results;
+    results.key = QStringLiteral("mcp-headless");
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = QRect(0, 0, 80, 60);
+    ScreenshotOcrLine line;
+    line.text = QStringLiteral("Original text");
+    line.confidence = 0.95;
+    line.quad = QPolygonF{QPointF(0, 0), QPointF(70, 0), QPointF(70, 20), QPointF(0, 20)};
+    presentation->lines.append(line);
+    presentation->prepareForRendering();
+    results.text = ScreenshotOcrRecognitionResult{presentation};
+    results.translatedText = std::make_shared<ScreenshotOcrPresentation>(*presentation);
+    results.translatedText->setLineText(0, QStringLiteral("Translated text"));
+    SnowShotTableResult table;
+    table.html =
+        QStringLiteral("<table><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></table>");
+    results.table = table;
+    results.qr = ScreenshotQrRecognitionResult{{QStringLiteral("payload")}, {}};
+    session.seedRecognitionResults(results);
+    session.activate(ScreenshotRecognitionSessionController::Mode::Text);
+    require(session.workflowResult().value(QStringLiteral("lines")).toArray().size() == 1,
+            "headless OCR returns layout");
+    require(session.activateCachedTextTranslation(), "headless cached translation activates");
+    const auto translated = session.workflowResult();
+    require(translated.value(QStringLiteral("text")) == QStringLiteral("Translated text") &&
+                translated.value(QStringLiteral("lines"))
+                        .toArray()
+                        .at(0)
+                        .toObject()
+                        .value(QStringLiteral("text")) == QStringLiteral("Translated text"),
+            "headless translation exports matching text and layout");
+    require(session.editWorkflow({{QStringLiteral("action"), QStringLiteral("set_text")},
+                                  {QStringLiteral("text"), QStringLiteral("Edited text")}}),
+            "headless text edit");
+    require(session.workflowResult().value(QStringLiteral("text")) == QStringLiteral("Edited text"),
+            "edited draft exported");
+    session.activate(ScreenshotRecognitionSessionController::Mode::Table);
+    require(session.workflowResult().value(QStringLiteral("cells")).toArray().size() == 4,
+            "headless table returns cells");
+    require(session.editWorkflow({{QStringLiteral("action"), QStringLiteral("select_cells")},
+                                  {QStringLiteral("range"), QJsonArray{0, 0, 0, 1}}}),
+            "table selection without widget");
+    require(session.editWorkflow({{QStringLiteral("action"), QStringLiteral("merge_cells")}}),
+            "headless table merge");
+    require(session.workflowResult().value(QStringLiteral("cells")).toArray().size() == 3,
+            "merged cells reflected in result");
+    require(session.editWorkflow({{QStringLiteral("action"), QStringLiteral("undo")}}),
+            "headless table undo");
+    require(session.workflowResult().value(QStringLiteral("cells")).toArray().size() == 4,
+            "table undo restores cells");
+    const auto before = session.workflowResult();
+    require(!session.editWorkflow({{QStringLiteral("action"), QStringLiteral("set_cell")},
+                                   {QStringLiteral("row"), 99},
+                                   {QStringLiteral("column"), 0},
+                                   {QStringLiteral("text"), QStringLiteral("invalid")}}),
+            "invalid cell rejected");
+    require(session.workflowResult() == before, "invalid cell edit is atomic");
+    session.activate(ScreenshotRecognitionSessionController::Mode::Qr);
+    require(session.workflowResult().value(QStringLiteral("contents")).toArray() ==
+                QJsonArray{QStringLiteral("payload")},
+            "headless QR result");
+}
 void tablePreparationPreservesSessionAndSiblingPopovers() {
     using Mode = ScreenshotRecognitionSessionController::Mode;
     for (int scenario = 0; scenario < 5; ++scenario) {
@@ -230,8 +305,207 @@ makeTextSession(ControllableOcrRecognition& recognition, PromptRecorder& recorde
     return controller;
 }
 
+void recognizedTextDefaultsApplyOnFirstEditAndOriginalCopy() {
+    const snow_shot::storage::TextRecognitionSettings settings;
+    const QString priorFormatting = settings.defaultFormatting();
+    const QString priorPunctuation = settings.defaultPunctuation();
+    require(settings.setDefaultFormatting(QStringLiteral("remove")) &&
+                settings.setDefaultPunctuation(QStringLiteral("full")),
+            "set OCR defaults for the recognition session");
+
+    QString selectedFormatting;
+    QString selectedPunctuation;
+    ScreenshotRecognitionWindow window({});
+    ScreenshotRecognitionSessionActions actions;
+    actions.ensureContent = [&window]() { return &window; };
+    actions.setTextTransformState = [&](const QString& formatting, const QString& punctuation) {
+        selectedFormatting = formatting;
+        selectedPunctuation = punctuation;
+    };
+    ScreenshotRecognitionSessionController session(nullptr, nullptr, nullptr, actions);
+    QImage image(80, 60, QImage::Format_ARGB32);
+    image.fill(Qt::white);
+    session.setTarget({QStringLiteral("defaults"), image, QRectF(0, 0, 80, 60)});
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = QRect(0, 0, 80, 60);
+    presentation->lines = {
+        ScreenshotOcrLine{QStringLiteral("A,"), 1.0, QPolygonF(QRectF(0, 0, 60, 20))},
+        ScreenshotOcrLine{QStringLiteral("B!"), 1.0, QPolygonF(QRectF(0, 30, 60, 20))},
+    };
+    presentation->prepareForRendering();
+    ScreenshotRecognitionResults cached;
+    cached.key = QStringLiteral("defaults");
+    cached.text = ScreenshotOcrRecognitionResult{presentation};
+    cached.translatedText = std::make_shared<ScreenshotOcrPresentation>(*presentation);
+    cached.translatedText->setLineText(0, QStringLiteral("Translated,"));
+    cached.translatedText->setLineText(1, QStringLiteral("overlay!"));
+    session.seedRecognitionResults(cached);
+    session.activate(ScreenshotRecognitionSessionController::Mode::Text);
+    session.setShowOriginalImage(true);
+    require(window.copyVisibleContentToClipboard() &&
+                QApplication::clipboard()->text() ==
+                    QStringLiteral("A") + QChar(0xFF0C) + QStringLiteral("B") + QChar(0xFF01),
+            "original-image window copy applies defaults before edit mode");
+    require(session.recognitionClipboardMimeData()->text() ==
+                    QStringLiteral("A") + QChar(0xFF0C) + QStringLiteral("B") + QChar(0xFF01) &&
+                session.originalText() == QStringLiteral("A,\nB!"),
+            "full original-image copy uses defaults without changing the OCR source");
+    presentation->beginTextSelection(ScreenshotOcrTextPosition{0, 1});
+    presentation->updateTextSelection(ScreenshotOcrTextPosition{1, 1});
+    presentation->finishTextSelection();
+    require(window.copyVisibleContentToClipboard() &&
+                QApplication::clipboard()->text() == QString(QChar(0xFF0C)) + QStringLiteral("B"),
+            "original-image window selection copy applies defaults");
+    require(session.recognitionClipboardMimeData(presentation.get())->text() ==
+                QString(QChar(0xFF0C)) + QStringLiteral("B"),
+            "selected original-image copy uses the same defaults");
+    presentation->clearTextSelection();
+    session.beginTextEditing();
+    require(session.textDraft() ==
+                    QStringLiteral("A") + QChar(0xFF0C) + QStringLiteral("B") + QChar(0xFF01) &&
+                selectedFormatting == QStringLiteral("remove") &&
+                selectedPunctuation == QStringLiteral("full"),
+            "first edit entry transforms the draft and selects both toolbar options");
+    session.undoTextEdit();
+    require(session.textDraft() == QStringLiteral("A,\nB!"),
+            "one undo reverses both default transformations");
+    session.redoTextEdit();
+    session.setTextDraft(QStringLiteral("User\n?"));
+    session.endTextEditing();
+    session.beginTextEditing();
+    require(session.textDraft() == QStringLiteral("User\n?"),
+            "re-entering edit mode preserves the manually changed draft");
+    session.endTextEditing();
+    require(session.activateCachedTextTranslation() && session.originalImageTranslationActive() &&
+                session.recognitionClipboardMimeData()->text() ==
+                    QStringLiteral("Translated,\noverlay!"),
+            "translated overlay copy bypasses OCR defaults");
+    require(window.copyVisibleContentToClipboard() &&
+                QApplication::clipboard()->text() == QStringLiteral("Translated,\noverlay!"),
+            "translated overlay window copy bypasses OCR defaults");
+    session.setTarget({QStringLiteral("other"), image, QRectF(0, 0, 80, 60)});
+    session.setTarget({QStringLiteral("defaults"), image, QRectF(0, 0, 80, 60)});
+    session.activate(ScreenshotRecognitionSessionController::Mode::Text);
+    session.beginTextEditing();
+    require(session.textDraft() ==
+                QStringLiteral("A") + QChar(0xFF0C) + QStringLiteral("B") + QChar(0xFF01),
+            "discarding a target draft allows defaults on its next first edit entry");
+    require(settings.setDefaultFormatting(priorFormatting) &&
+                settings.setDefaultPunctuation(priorPunctuation),
+            "restore OCR defaults after the recognition session");
+}
+
 // A cached launch pays asset re-verification and helper start-up before the
 // first recognition can run; none of that may surface the download prompt.
+void originalImageOverridePreservesSessionState() {
+    using Mode = ScreenshotRecognitionSessionController::Mode;
+    ControllableOcrRecognition recognition;
+    ScreenshotRecognitionWindow window({});
+    window.resize(320, 200);
+    window.show();
+    bool original = false;
+    ScreenshotRecognitionSessionActions actions;
+    actions.ensureContent = [&]() { return &window; };
+    actions.setShowOriginalImage = [&](bool show) { original = show; };
+    ScreenshotRecognitionSessionController session(&recognition, nullptr, nullptr, actions);
+    QImage image(64, 64, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::blue);
+    session.setTarget({QStringLiteral("original-toggle"), image, QRectF(0, 0, 64, 64)});
+    session.activate(Mode::Text);
+    session.setShowOriginalImage(true);
+    recognition.completeWithEmptyPresentation();
+    auto* content = window.findChild<QWidget*>(QStringLiteral("screenshotRecognitionContent"));
+    require(session.showOriginalImage() && original && content->isHidden(),
+            "asynchronous recognition completion cannot reveal hidden content");
+    session.beginTextEditing();
+    session.setTextDraft(QStringLiteral("Edited OCR"));
+    auto* editor = window.findChild<QTextEdit*>();
+    require(session.editing() && editor && !editor->isVisible(),
+            "original image takes precedence over newly activated edit mode");
+    session.setShowOriginalImage(false);
+    require(session.editing() && editor->isVisible() &&
+                session.textDraft() == QStringLiteral("Edited OCR"),
+            "revealing content preserves the editor and draft");
+    session.setShowOriginalImage(true);
+    const auto clipboard = session.recognitionClipboardMimeData();
+    require(clipboard && clipboard->text() == QStringLiteral("Edited OCR"),
+            "show original image preserves recognized-text clipboard commands");
+    session.setShowOriginalImage(false);
+    require(window.findChild<QTextEdit*>() == editor && session.editing(),
+            "toggling never rebuilds the text editor");
+    session.undoTextEdit();
+    require(session.textDraft().isEmpty(), "text undo history survives original-image viewing");
+    session.redoTextEdit();
+    require(session.textDraft() == QStringLiteral("Edited OCR"), "redo history survives");
+    require(recognition.requests == 1, "toggling never repeats recognition");
+    for (const auto mode : {Mode::Table, Mode::Qr, Mode::Markdown, Mode::Html, Mode::Text}) {
+        session.setShowOriginalImage(true);
+        session.activate(mode);
+        require(!session.showOriginalImage() && !original && !content->isHidden(),
+                "switching recognition tools resets original-image mode");
+    }
+    session.setShowOriginalImage(true);
+    session.deactivate();
+    require(!session.showOriginalImage() && !original, "deactivation resets original-image mode");
+    session.activate(Mode::Text);
+    session.setShowOriginalImage(true);
+    session.setTarget({QStringLiteral("next-image"), image, QRectF(0, 0, 64, 64)});
+    require(!session.showOriginalImage() && !original, "new target resets original-image mode");
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = QRect(0, 0, 64, 64);
+    presentation->lines.push_back(
+        {QStringLiteral("Source"), 0.99,
+         QPolygonF{QPointF(5, 5), QPointF(55, 5), QPointF(55, 25), QPointF(5, 25)}});
+    presentation->prepareForRendering();
+    ScreenshotRecognitionResults cached;
+    cached.key = QStringLiteral("next-image");
+    cached.text = ScreenshotOcrRecognitionResult{presentation, {}, {}, {}};
+    cached.translatedText = std::make_shared<ScreenshotOcrPresentation>(*presentation);
+    cached.translatedText->setLineText(0, QStringLiteral("Translated OCR"));
+    session.seedRecognitionResults(cached);
+    session.activate(Mode::Text);
+    require(session.activateCachedTextTranslation(), "activate cached translation fixture");
+    require(session.workflowResult().value(QStringLiteral("text")) ==
+                QStringLiteral("Translated OCR"),
+            "workflow exports in-image translation through the active text draft");
+    session.setShowOriginalImage(true);
+    require(session.translating() && session.originalImageTranslationActive() &&
+                !session.originalImageVisible() && content->isHidden() &&
+                session.textDraft() == QStringLiteral("Translated OCR"),
+            "original-image override preserves translation without exporting its overlay");
+    session.setShowOriginalImage(false);
+    require(session.originalImageVisible() && session.translating() && !content->isHidden(),
+            "disabling original-image override restores translation presentation");
+}
+
+void deactivationNotifiesOnlyOnStateTransition() {
+    ScreenshotRecognitionWindow content({});
+    int visualExits = 0;
+    int modeExits = 0;
+    ScreenshotRecognitionSessionActions actions;
+    actions.ensureContent = [&]() { return &content; };
+    actions.setRecognitionVisualState = [&](bool active) { visualExits += !active; };
+    actions.setActiveMode = [&](int mode) { modeExits += mode == -1; };
+    ScreenshotRecognitionSessionController session(nullptr, nullptr, nullptr, actions);
+    QImage image(32, 32, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    session.setTarget({QStringLiteral("deactivation"), image, QRectF(0, 0, 32, 32)});
+    ScreenshotRecognitionResults results;
+    results.key = QStringLiteral("deactivation");
+    results.qr = ScreenshotQrRecognitionResult{{QStringLiteral("Cached QR")}, {}};
+    session.seedRecognitionResults(results);
+    for (int cycle = 1; cycle <= 2; ++cycle) {
+        session.activate(ScreenshotRecognitionSessionController::Mode::Qr);
+        session.deactivate();
+        require(!session.active() && visualExits == cycle && modeExits == cycle,
+                "leaving an active session must notify the host exactly once");
+        session.deactivate();
+        session.deactivate();
+        require(visualExits == cycle && modeExits == cycle,
+                "retained recognition content must not cause repeated exit notifications");
+    }
+}
+
 void cachedVerificationStaysSilent() {
     ControllableOcrRecognition recognition;
     PromptRecorder recorder;
@@ -523,9 +797,18 @@ void translationLanguageSelectsUseCodePrefixGroups() {
                 target->popupLayerMode() == adqt::widgets::AdSelect::PopupLayerMode::QtTool,
             "translation language selects should use Qt tool popups");
 
+    for (auto* select : content->findChildren<adqt::widgets::AdSelect*>()) {
+        require(select->searchEnabled(), "translation settings selects support input filtering");
+        const auto previous = select->currentValue();
+        select->setSearchText(QStringLiteral("no-matching-translation-option-1937"));
+        require(select->currentValue() == previous,
+                "filtering translation options cannot change the value");
+        select->setSearchText(QString());
+    }
+
     const auto sourceOptions = source->options();
     const auto targetOptions = target->options();
-    require(sourceOptions.size() == 13 && targetOptions.size() == 12,
+    require(sourceOptions.size() == 14 && targetOptions.size() == 13,
             "language selects should contain the expected source and target options");
     require(sourceOptions.constFirst().value == QStringLiteral("auto") &&
                 sourceOptions.constFirst().group.isEmpty(),
@@ -578,6 +861,8 @@ void translationLanguageSelectsUseCodePrefixGroups() {
 }
 } // namespace
 
+void runLatexRecognitionTests();
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QTemporaryDir temporary;
@@ -588,6 +873,21 @@ int main(int argc, char** argv) {
                 .initialize({executable, temporary.path(), 60000})
                 .success,
             "initialize recognition test storage");
+    if (application.arguments().contains(QStringLiteral("--latex-only"))) {
+        runLatexRecognitionTests();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--original-image-only"))) {
+        originalImageOverridePreservesSessionState();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--ocr-defaults-only"))) {
+        recognizedTextDefaultsApplyOnFirstEditAndOriginalCopy();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--table-only"))) {
         tablePreparationPreservesSessionAndSiblingPopovers();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
@@ -603,6 +903,8 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    headlessWorkflowResultsAndEdits();
+    deactivationNotifiesOnlyOnStateTransition();
     tablePreparationPreservesSessionAndSiblingPopovers();
     cachedRecognitionUsesTheSelectedFillStyle();
     translationLanguageSelectsUseCodePrefixGroups();

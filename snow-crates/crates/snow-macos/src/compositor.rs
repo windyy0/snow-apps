@@ -2,19 +2,30 @@
 //! Rendering completes before publishing an immutable lease. No CPU mapping occurs.
 use crate::{MacError, MacResult};
 use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2_core_foundation::{
     CFBoolean, CFDictionary, CFNumber, CFRetained, CFType, CGAffineTransform, CGPoint, CGRect,
     CGSize,
 };
 use objc2_core_graphics::*;
-use objc2_core_image::{CIColor, CIContext, CIImage};
+use objc2_core_image::{CIColor, CIContext, CIImage, kCIContextCacheIntermediates};
 use objc2_core_video::*;
+use objc2_foundation::{NSDictionary, NSNumber};
+use objc2_metal::{
+    MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDevice,
+    MTLPixelFormat, MTLTextureUsage,
+};
 use snow_media::{
     ColorDescription, PixelFormat, TransferFunction,
     geometry::{PixelRect, PixelSize},
     macos::PixelBuffer,
 };
 use std::ptr::NonNull;
+
+struct MetalCopy {
+    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    cache: CFRetained<CVMetalTextureCache>,
+}
 
 /// Source/destination rectangles use top-left pixel coordinates.
 pub struct Layer<'a> {
@@ -36,7 +47,9 @@ pub struct Compositor {
     context: Retained<CIContext>,
     pool: CFRetained<CVPixelBufferPool>,
     threshold: CFRetained<CFDictionary>,
+    metal: Option<MetalCopy>,
     size: PixelSize,
+    format: PixelFormat,
     color: ColorDescription,
     color_space: CFRetained<CGColorSpace>,
 }
@@ -46,6 +59,17 @@ unsafe impl Send for Compositor {}
 
 impl Compositor {
     pub fn new(size: PixelSize, format: PixelFormat, maximum_leases: u32) -> MacResult<Self> {
+        // Turning intermediate caching off was slower at 1080p across repeated
+        // runs, and only sometimes faster at 4K. Production keeps the default.
+        Self::with_intermediate_cache(size, format, maximum_leases, true)
+    }
+
+    pub fn with_intermediate_cache(
+        size: PixelSize,
+        format: PixelFormat,
+        maximum_leases: u32,
+        cache_intermediates: bool,
+    ) -> MacResult<Self> {
         size.byte_len(8)
             .map_err(|e| MacError::InvalidConfig(e.to_string()))?;
         if !(2..=16).contains(&maximum_leases) {
@@ -53,7 +77,10 @@ impl Compositor {
                 "GPU pool capacity must be 2..=16".into(),
             ));
         }
-        unsafe {
+        // Native constructors autorelease internal objects even when their
+        // returned handles are retained. Drain those references here so replacing
+        // a compositor does not retain its context until the capture worker exits.
+        objc2::rc::autoreleasepool(|_| unsafe {
             let (fourcc, color, space) = match format {
                 PixelFormat::Bgra8 => (
                     kCVPixelFormatType_32BGRA,
@@ -85,7 +112,17 @@ impl Compositor {
             };
             let device = objc2_metal::MTLCreateSystemDefaultDevice()
                 .ok_or_else(|| MacError::Unsupported("Metal device unavailable".into()))?;
-            let context = CIContext::contextWithMTLDevice(&device);
+            let disabled = NSNumber::numberWithBool(false);
+            let options = NSDictionary::from_slices(
+                &[kCIContextCacheIntermediates],
+                &[&*disabled as &AnyObject],
+            );
+            let context = if cache_intermediates {
+                CIContext::contextWithMTLDevice(&device)
+            } else {
+                CIContext::contextWithMTLDevice_options(&device, Some(&options))
+            };
+            let metal = metal_copy(&device);
             let attrs = CFDictionary::<CFType, CFType>::from_slices(
                 &[
                     kCVPixelBufferWidthKey.as_ref(),
@@ -126,11 +163,78 @@ impl Compositor {
                 context,
                 pool,
                 threshold,
+                metal,
                 size,
+                format,
                 color,
                 color_space,
             })
+        })
+    }
+
+    /// Bit-exact detach of a same-size buffer into the output pool.
+    /// Callers fall back to [`Self::compose`] when this returns [`MacError::Unsupported`].
+    pub fn copy_identical(&mut self, image: &PixelBuffer) -> MacResult<PixelBuffer> {
+        if image.size() != self.size || image.format() != self.format {
+            return Err(MacError::Unsupported(
+                "identical copy requires the compositor size and format".into(),
+            ));
         }
+        let Some(metal_format) = metal_pixel_format(self.format) else {
+            return Err(MacError::Unsupported(
+                "identical copy does not cover this pixel format".into(),
+            ));
+        };
+        if self.metal.is_none() {
+            return Err(MacError::Unsupported(
+                "Metal texture copy is unavailable".into(),
+            ));
+        }
+        objc2::rc::autoreleasepool(|_| unsafe {
+            let buffer = self.allocate_output()?;
+            let metal = self
+                .metal
+                .as_ref()
+                .ok_or_else(|| MacError::Unsupported("Metal texture copy is unavailable".into()))?;
+            let width = self.size.width as usize;
+            let height = self.size.height as usize;
+            let source = metal_texture(
+                &metal.cache,
+                image.native_buffer(),
+                metal_format,
+                width,
+                height,
+            )?;
+            let destination = metal_texture(&metal.cache, &buffer, metal_format, width, height)?;
+            let source_texture = CVMetalTextureGetTexture(&source)
+                .ok_or_else(|| MacError::Unsupported("source has no Metal texture".into()))?;
+            let destination_texture = CVMetalTextureGetTexture(&destination)
+                .ok_or_else(|| MacError::Unsupported("destination has no Metal texture".into()))?;
+            let command = metal
+                .queue
+                .commandBuffer()
+                .ok_or_else(|| MacError::Unsupported("Metal command buffer unavailable".into()))?;
+            let encoder = command
+                .blitCommandEncoder()
+                .ok_or_else(|| MacError::Unsupported("Metal blit encoder unavailable".into()))?;
+            encoder.copyFromTexture_toTexture(&source_texture, &destination_texture);
+            // Discrete GPUs keep the blit in managed storage until this runs.
+            // Apple silicon treats it as a no-op.
+            encoder.synchronizeTexture_slice_level(&destination_texture, 0, 0);
+            encoder.endEncoding();
+            command.commit();
+            command.waitUntilCompleted();
+            if command.status() == objc2_metal::MTLCommandBufferStatus::Error {
+                return Err(MacError::Unsupported("Metal identical copy failed".into()));
+            }
+            drop(destination_texture);
+            drop(source_texture);
+            drop(destination);
+            drop(source);
+            metal.cache.flush(0);
+            PixelBuffer::from_retained(buffer, self.color)
+                .map_err(|error| MacError::Unsupported(error.to_string()))
+        })
     }
 
     /// Backpressure returns `Timeout`; callers should drop superseded observations.
@@ -143,7 +247,16 @@ impl Compositor {
         overlays: &[RgbaOverlay<'_>],
         opaque: bool,
     ) -> MacResult<PixelBuffer> {
-        for overlay in overlays {
+        self.compose_with_highlight(layers, overlays, &[], opaque)
+    }
+    pub fn compose_with_highlight(
+        &mut self,
+        layers: &[Layer<'_>],
+        overlays: &[RgbaOverlay<'_>],
+        highlight: &[RgbaOverlay<'_>],
+        opaque: bool,
+    ) -> MacResult<PixelBuffer> {
+        for overlay in highlight.iter().chain(overlays) {
             let needed = overlay.stride.checked_mul(overlay.height as usize);
             if overlay.width == 0
                 || overlay.height == 0
@@ -160,22 +273,7 @@ impl Compositor {
             validate_rect(layer.destination, self.size)?;
         }
         objc2::rc::autoreleasepool(|_| unsafe {
-            let mut buffer = std::ptr::null_mut();
-            let status = CVPixelBufferPool::create_pixel_buffer_with_aux_attributes(
-                None,
-                &self.pool,
-                Some(&self.threshold),
-                NonNull::from(&mut buffer),
-            );
-            if status == kCVReturnWouldExceedAllocationThreshold {
-                return Err(MacError::Timeout);
-            }
-            if status != 0 {
-                return Err(MacError::Unsupported(format!(
-                    "GPU output allocation failed: {status}"
-                )));
-            }
-            let buffer = CFRetained::from_raw(NonNull::new(buffer).ok_or(MacError::Inactive)?);
+            let buffer = self.allocate_output()?;
             let bounds = rect(0.0, 0.0, self.size.width as f64, self.size.height as f64);
             let background = CIColor::colorWithRed_green_blue_alpha(
                 0.0,
@@ -213,7 +311,11 @@ impl Compositor {
             }
             let srgb =
                 CGColorSpace::with_name(Some(kCGColorSpaceSRGB)).ok_or(MacError::Inactive)?;
-            for overlay in overlays {
+            for (overlay, multiply) in highlight
+                .iter()
+                .map(|tile| (tile, true))
+                .chain(overlays.iter().map(|tile| (tile, false)))
+            {
                 let data = objc2_foundation::NSData::with_bytes(overlay.bytes);
                 let image = CIImage::imageWithBitmapData_bytesPerRow_size_format_colorSpace(
                     &data,
@@ -235,7 +337,18 @@ impl Compositor {
                         - f64::from(overlay.y)
                         - f64::from(overlay.height),
                 });
-                result = positioned.imageByCompositingOverImage(&result);
+                result = if multiply {
+                    let parameters = objc2_foundation::NSDictionary::from_slices(
+                        &[objc2_foundation::ns_string!("inputBackgroundImage")],
+                        &[&*result as &objc2::runtime::AnyObject],
+                    );
+                    positioned.imageByApplyingFilter_withInputParameters(
+                        objc2_foundation::ns_string!("CIMultiplyBlendMode"),
+                        &parameters,
+                    )
+                } else {
+                    positioned.imageByCompositingOverImage(&result)
+                };
             }
             if self.color == ColorDescription::HDR10 {
                 for (key, value) in [
@@ -270,6 +383,29 @@ impl Compositor {
                 .map_err(|e| MacError::Unsupported(e.to_string()))
         })
     }
+
+    fn allocate_output(&self) -> MacResult<CFRetained<CVPixelBuffer>> {
+        unsafe {
+            let mut buffer = std::ptr::null_mut();
+            let status = CVPixelBufferPool::create_pixel_buffer_with_aux_attributes(
+                None,
+                &self.pool,
+                Some(&self.threshold),
+                NonNull::from(&mut buffer),
+            );
+            if status == kCVReturnWouldExceedAllocationThreshold {
+                return Err(MacError::Timeout);
+            }
+            if status != 0 {
+                return Err(MacError::Unsupported(format!(
+                    "GPU output allocation failed: {status}"
+                )));
+            }
+            Ok(CFRetained::from_raw(
+                NonNull::new(buffer).ok_or(MacError::Inactive)?,
+            ))
+        }
+    }
 }
 fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
     CGRect {
@@ -295,9 +431,113 @@ fn validate_rect(rect: PixelRect, size: PixelSize) -> MacResult<()> {
     }
     Ok(())
 }
+
+fn metal_copy(device: &ProtocolObject<dyn MTLDevice>) -> Option<MetalCopy> {
+    let queue = device.newCommandQueue()?;
+    let usage = CFNumber::new_i64(
+        (MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite).bits() as i64,
+    );
+    let attrs = CFDictionary::<CFType, CFType>::from_slices(
+        &[unsafe { kCVMetalTextureUsage }.as_ref()],
+        &[usage.as_ref()],
+    );
+    let mut cache = std::ptr::null_mut();
+    let status = unsafe {
+        CVMetalTextureCache::create(
+            None,
+            Some(attrs.as_opaque()),
+            device,
+            None,
+            NonNull::from(&mut cache),
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    NonNull::new(cache).map(|cache| MetalCopy {
+        queue,
+        cache: unsafe { CFRetained::from_raw(cache) },
+    })
+}
+
+fn metal_pixel_format(format: PixelFormat) -> Option<MTLPixelFormat> {
+    match format {
+        PixelFormat::Bgra8 => Some(MTLPixelFormat::BGRA8Unorm),
+        PixelFormat::Rgba16Float => Some(MTLPixelFormat::RGBA16Float),
+        _ => None,
+    }
+}
+
+fn metal_texture(
+    cache: &CVMetalTextureCache,
+    buffer: &CVPixelBuffer,
+    format: MTLPixelFormat,
+    width: usize,
+    height: usize,
+) -> MacResult<CFRetained<CVMetalTexture>> {
+    let mut texture = std::ptr::null_mut();
+    let status = unsafe {
+        CVMetalTextureCache::create_texture_from_image(
+            None,
+            cache,
+            buffer,
+            None,
+            format,
+            width,
+            height,
+            0,
+            NonNull::from(&mut texture),
+        )
+    };
+    if status != 0 {
+        return Err(MacError::Unsupported(format!(
+            "Metal texture allocation failed: {status}"
+        )));
+    }
+    NonNull::new(texture)
+        .map(|texture| unsafe { CFRetained::from_raw(texture) })
+        .ok_or(MacError::Inactive)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recreated_contexts_are_released_before_worker_pool_drains() {
+        std::thread::spawn(|| {
+            // A capture worker can have a pool spanning multiple compositor
+            // replacements. Each constructor must drain its own autoreleases.
+            objc2::rc::autoreleasepool(|_| {
+                let size = PixelSize::new(32, 18).unwrap();
+                for cache_intermediates in [true, false] {
+                    for _ in 0..3 {
+                        let mut compositor = Compositor::with_intermediate_cache(
+                            size,
+                            PixelFormat::Bgra8,
+                            4,
+                            cache_intermediates,
+                        )
+                        .expect("metal compositor");
+                        let context = objc2::rc::Weak::from_retained(&compositor.context);
+                        let frame = compositor
+                            .compose(&[], true)
+                            .expect("retained context renders");
+                        assert_eq!(frame.size(), size);
+                        drop(frame);
+                        drop(compositor);
+                        assert!(
+                            context.load().is_none(),
+                            "dropped compositor context outlived its owner"
+                        );
+                    }
+                }
+            });
+        })
+        .join()
+        .unwrap();
+    }
+
     #[test]
     fn rejects_overflowing_and_empty_layers() {
         let size = PixelSize::new(10, 10).unwrap();
@@ -336,6 +576,127 @@ mod tests {
                 size
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn bitmap_overlays_preserve_top_left_rows_and_edge_clipping() {
+        let size = PixelSize::new(10, 8).unwrap();
+        let mut compositor = Compositor::new(size, PixelFormat::Bgra8, 4).unwrap();
+        // Padded rows with distinct colors also detect accidental stride assumptions.
+        let pixels = [
+            255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 0, 0, 0, 255, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0,
+            0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 0, 0,
+        ];
+        for (x, y) in [(2, 1), (9, 7)] {
+            // Exercise both ordinary effects and the multiply highlight uploader.
+            for highlight in [false, true] {
+                let background = compositor
+                    .compose_with_overlays(
+                        &[],
+                        &[RgbaOverlay {
+                            x: 0,
+                            y: 0,
+                            width: 10,
+                            height: 8,
+                            stride: 40,
+                            bytes: &[255; 320],
+                        }],
+                        true,
+                    )
+                    .unwrap();
+                let layer = Layer {
+                    image: &background,
+                    source: PixelRect {
+                        x: 0,
+                        y: 0,
+                        width: 10,
+                        height: 8,
+                    },
+                    destination: PixelRect {
+                        x: 0,
+                        y: 0,
+                        width: 10,
+                        height: 8,
+                    },
+                };
+                let overlays = [RgbaOverlay {
+                    x,
+                    y,
+                    width: 2,
+                    height: 3,
+                    stride: 12,
+                    bytes: &pixels,
+                }];
+                let frame = compositor
+                    .compose_with_highlight(
+                        &[layer],
+                        if highlight { &[] } else { &overlays },
+                        if highlight { &overlays } else { &[] },
+                        true,
+                    )
+                    .unwrap()
+                    .to_cpu_format(PixelFormat::Rgba8)
+                    .unwrap();
+                for py in 0..8usize {
+                    for px in 0..10usize {
+                        let offset = frame.planes[0].offset + py * frame.planes[0].stride + px * 4;
+                        let expected = if px >= x as usize
+                            && px < x as usize + 2
+                            && py >= y as usize
+                            && py < y as usize + 3
+                        {
+                            let row = py - y as usize;
+                            &pixels[row * 12..row * 12 + 4]
+                        } else {
+                            &[255; 4]
+                        };
+                        assert_eq!(
+                            &frame.bytes[offset..offset + 4],
+                            expected,
+                            "overlay ({x}, {y}), pixel ({px}, {py}), highlight={highlight}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn identical_metal_copy_preserves_packed_bytes() {
+        use objc2_core_video::{
+            CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferLockBaseAddress,
+            CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
+        };
+        let size = PixelSize::new(32, 18).unwrap();
+        let mut compositor =
+            Compositor::new(size, snow_media::PixelFormat::Bgra8, 4).expect("metal compositor");
+        let source = compositor.compose(&[], true).unwrap();
+        unsafe {
+            assert_eq!(
+                CVPixelBufferLockBaseAddress(
+                    source.native_buffer(),
+                    CVPixelBufferLockFlags::empty()
+                ),
+                0
+            );
+            let stride = CVPixelBufferGetBytesPerRow(source.native_buffer());
+            let ptr = CVPixelBufferGetBaseAddress(source.native_buffer()).cast::<u8>();
+            for y in 0..18 {
+                for x in 0..32 {
+                    let pixel = ptr.add(y * stride + x * 4);
+                    pixel.write((x * 3) as u8);
+                    pixel.add(1).write((y * 5) as u8);
+                    pixel.add(2).write(9);
+                    pixel.add(3).write(255);
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(source.native_buffer(), CVPixelBufferLockFlags::empty());
+        }
+        let copied = compositor.copy_identical(&source).unwrap();
+        assert_eq!(
+            source.to_cpu().unwrap().bytes.as_ref(),
+            copied.to_cpu().unwrap().bytes.as_ref()
         );
     }
 }

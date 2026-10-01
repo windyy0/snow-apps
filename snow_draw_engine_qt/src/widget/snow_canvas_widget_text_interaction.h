@@ -4,6 +4,7 @@
 #include "snow_canvas_display_cache.h"
 #include "snow_canvas_ffi_handles.h"
 #include "snow_canvas_text_editor_session.h"
+#include "snow_canvas_text_measurement.h"
 #include "snow_draw_engine.h"
 #include "snow_draw_engine_qt/snow_canvas_types.h"
 
@@ -73,6 +74,8 @@ class SnowCanvasWidgetTextInteraction final {
     };
 
     SnowCanvasWidgetTextInteraction(QWidget& widget, SnowCanvasCursorController& cursorController);
+    void invalidateArrowTextMetrics();
+    void resetDocumentRetainedState();
 
     SnowCanvasTextEditorSession& session();
     const SnowCanvasTextEditorSession& session() const;
@@ -90,10 +93,7 @@ class SnowCanvasWidgetTextInteraction final {
                              const SnowCanvasDisplayCache& displayCache);
     StyleChangeResult applyTextStyle(SnowRuntime runtime, SnowViewport viewport,
                                      SnowCanvasDisplayCache& displayCache,
-                                     const SnowTextStyle& style);
-    StyleChangeResult stepFontSize(SnowRuntime runtime, SnowViewport viewport,
-                                   SnowCanvasDisplayCache& displayCache,
-                                   const SnowTextStyle& fallbackStyle, bool increase);
+                                     const SnowTextStyle& style, std::uint32_t properties);
 
     BeginResult beginArrow(SnowRuntime runtime, SnowViewport viewport,
                            SnowCanvasDisplayCache& displayCache, const QPointF& viewPosition,
@@ -189,6 +189,9 @@ class SnowCanvasWidgetTextInteraction final {
     QWidget& m_widget;
     SnowCanvasCursorController& m_cursorController;
     SnowCanvasTextEditorSession m_session;
+    snow_canvas_text_measurement::NaturalTextLayoutCache m_arrowNaturalLayouts;
+    QFont m_arrowLayoutFont;
+    bool m_arrowMetricsInvalid = true;
     QTimer m_caretBlinkTimer;
     QRegion m_caretUpdateRegion;
     int m_caretFlashTimeMs = 0;

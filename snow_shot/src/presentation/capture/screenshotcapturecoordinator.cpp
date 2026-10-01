@@ -1,9 +1,11 @@
+#include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/presentation/screenshotcapturecoordinator.h"
 
 #include "screenshotcaptureworker.h"
 
 #include "snow_capture.h"
 
+#include <QCoreApplication>
 #include <QMetaObject>
 #include <QPointer>
 #include <QThread>
@@ -68,8 +70,7 @@ void ScreenshotCaptureCoordinator::captureAsync(const ScreenshotCaptureRequest& 
     m_activeCancellation = cancellation;
     ScreenshotCaptureRequest preparedRequest = request;
 #if defined(Q_OS_WIN) || defined(_WIN32)
-    if (request.purpose == ScreenshotCapturePurpose::Recapture && request.captureCursor &&
-        !preparedRequest.cursorSnapshot) {
+    if (request.captureCursor && !preparedRequest.cursorSnapshot) {
         preparedRequest.cursorSnapshot = std::shared_ptr<SnowCaptureCursorSnapshot>(
             snow_capture_cursor_snapshot_create(), snow_capture_cursor_snapshot_destroy);
         if (!preparedRequest.cursorSnapshot) {
@@ -77,7 +78,8 @@ void ScreenshotCaptureCoordinator::captureAsync(const ScreenshotCaptureRequest& 
             ScreenshotCaptureResult result;
             result.requestId = request.requestId;
             result.purpose = request.purpose;
-            result.errorMessage = QStringLiteral("Could not snapshot the refreshed cursor");
+            result.errorMessage = QCoreApplication::translate("ScreenshotCaptureCoordinator",
+                                                              "Could not snapshot the cursor");
             emit captureFinished(std::move(result));
             return;
         }
@@ -129,6 +131,7 @@ void ScreenshotCaptureCoordinator::ensureWorker() {
     m_worker = new ScreenshotCaptureWorker;
     m_worker->moveToThread(m_thread);
     connect(m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
+    snow_shot::platform::configureApplicationQoSThread(m_thread);
     m_thread->start();
 }
 

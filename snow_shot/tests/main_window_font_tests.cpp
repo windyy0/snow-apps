@@ -1,3 +1,4 @@
+#include "window_close_shortcut_test_support.h"
 #include "snow_shot/presentation/components/actionrow.h"
 #include "snow_shot/presentation/components/contentcardwidget.h"
 #include "snow_shot/presentation/components/titlebarwidget.h"
@@ -11,6 +12,7 @@
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "widgets/message.h"
+#include "widgets/navigation_menu.h"
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -209,6 +211,39 @@ void customTitleBarUsesPlatformWindowControls() {
 #endif
 }
 
+void titleBarBackgroundMatchesNavigationMenu() {
+    auto& themeManager = styles::ThemeManager::instance();
+    themeManager.setThemeAppearance(styles::ThemeAppearance::Light);
+
+    QWidget host;
+    host.resize(360, 80);
+    TitleBarWidget titleBar(themeManager.themeColorScheme().metricAlias, &host);
+    titleBar.resize(host.width(), titleBar.height());
+    host.show();
+    flushEvents();
+
+    const auto lightMenuColors = adqt::widgets::AdNavigationMenu::resolveColorTokens(&titleBar);
+    require(titleBar.autoFillBackground() &&
+                titleBar.palette().color(QPalette::Window) == lightMenuColors.itemBackground &&
+                lightMenuColors.itemBackground ==
+                    themeManager.themeColorScheme().map.colorBgContainer,
+            "the light title bar must use the navigation menu item background");
+
+    themeManager.setThemeAppearance(styles::ThemeAppearance::Dark);
+    flushEvents();
+    const auto darkMenuColors = adqt::widgets::AdNavigationMenu::resolveColorTokens(&titleBar);
+    require(titleBar.palette().color(QPalette::Window) == darkMenuColors.itemBackground &&
+                darkMenuColors.itemBackground !=
+                    themeManager.themeColorScheme().map.colorBgContainer,
+            "the dark title bar must use the navigation menu item background");
+
+    themeManager.setThemeAppearance(styles::ThemeAppearance::Light);
+    flushEvents();
+    require(titleBar.palette().color(QPalette::Window) ==
+                adqt::widgets::AdNavigationMenu::resolveColorTokens(&titleBar).itemBackground,
+            "returning to the light theme must restore the navigation menu item background");
+}
+
 void mainWindowTitlesKeepSmoothRendering() {
     const QFont applicationFont = QApplication::font();
     const auto& registry = settings::builtInSettingsRegistry();
@@ -270,9 +305,34 @@ void mainWindowTitlesKeepSmoothRendering() {
     }
     require(QApplication::font() == applicationFont,
             "main window typography must not change the application font for other windows");
+    const QString family = QStringLiteral("SnowShot UI Font Test Family");
+    require(styles::ThemeManager::instance().setAppFontFamily(family),
+            "apply a new interface family");
+    flushEvents();
+    require(window.font().family() == family, "existing main window follows app font changes");
+    for (const auto* label : card->findChildren<QLabel*>()) {
+        require(label->font().family() == family,
+                "existing main window labels follow app font changes");
+    }
+    require(styles::ThemeManager::instance().setAppFontFamily(QString()), "restore system font");
+    flushEvents();
+    require(window.font().family() == applicationFont.family(),
+            "main window restores the platform family");
 }
 
 #ifdef Q_OS_MACOS
+void standardCloseClosesMainWindow() {
+    const auto& registry = settings::builtInSettingsRegistry();
+    snow_shot::presentation::GlobalShortcutManager shortcuts;
+    settings::BuiltInSettingsBackend backend(shortcuts);
+    settings::SettingsRuntimeSession session(registry, backend);
+    QPointer<MainWindow> window = new MainWindow(registry, session);
+    window->show();
+    require(triggerWindowCloseShortcut(window), "main window registers standard Close");
+    flushEvents();
+    require(!window, "standard Close disposes the main window");
+}
+
 void permissionRedirectShowsMainInterfacePrompt() {
     const auto& registry = settings::builtInSettingsRegistry();
     snow_shot::presentation::GlobalShortcutManager shortcuts;
@@ -342,8 +402,10 @@ int main(int argc, char** argv) {
     styles::ThemeManager::instance().initialize(application);
     applicationTypographyCoversUnownedSurfaces();
     customTitleBarUsesPlatformWindowControls();
+    titleBarBackgroundMatchesNavigationMenu();
     mainWindowTitlesKeepSmoothRendering();
 #ifdef Q_OS_MACOS
+    standardCloseClosesMainWindow();
     permissionRedirectShowsMainInterfacePrompt();
 #endif
     storage.shutdown();

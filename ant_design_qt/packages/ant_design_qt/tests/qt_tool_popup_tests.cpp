@@ -3,23 +3,32 @@
 #include <QHelpEvent>
 #include <QListView>
 #include <QMouseEvent>
+#include <QImage>
+#include <QPainter>
 #include <QProxyStyle>
 #include <QPointer>
 #include <QPushButton>
 #include <QScreen>
 #include <QSignalSpy>
+#include <QStyleOption>
 #include <QTest>
 #include <QWidget>
 
 #include <algorithm>
 
 #include "widgets/date_picker.h"
+#include "widgets/button.h"
 #include "widgets/color_picker.h"
 #include "widgets/detail/overlay_popup_surface.h"
+#include "widgets/detail/overlay_popup_controller.h"
 #include "widgets/detail/qt_tooltip_bridge.h"
 #include "widgets/popover.h"
 #include "widgets/select.h"
 #include "widgets/tooltip.h"
+
+#if defined(Q_OS_MACOS)
+#include "macos_native_input.h"
+#endif
 
 using adqt::widgets::AdColorPicker;
 using adqt::widgets::AdDatePicker;
@@ -91,14 +100,22 @@ class QtToolPopupTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void customButtonHitAreaIgnoresNativeBevel();
+  void popupHoverShapeTracksPaintedSurface();
+  void popupSurfacePreservesAntialiasedEdges();
+#if defined(Q_OS_MACOS)
+  void popupShadowDoesNotCoverUnderlyingWindow();
+#endif
   void siblingPopoversReopenAfterOverdueHoverTasks();
   void siblingPopoversReopenAfterScopeRecreation();
   void popoverReleasesAndRecreatesNativeResources();
   void popupTriggerTooltipsRequireOptIn();
   void popupOptionTooltipsRemainVisible();
+  void unrelatedLeaveDoesNotDismissTooltip();
   void popupTriggerTooltipsAvoidPopoverAtScreenEdges();
   void popupTriggerTooltipsRequireSpaceBelow();
   void warmTooltipSurvivesGroupPopoverOpening();
+  void hoveringFromTooltipToAdjacentPopoverOpensPopover();
   void pendingTooltipSurvivesGroupRouteRegistration();
   void selectReleasesAndRecreatesNativeResources();
   void selectSurvivesPopupContainerDestructionOrder();
@@ -111,7 +128,376 @@ class QtToolPopupTest final : public QObject {
   void recreateFactoryContentIsReleasedAfterHide();
   void directContentRemainsCompatibleWithFactoryApi();
   void colorPickerPrewarmCanBeDisabled();
+  void stationaryPopoverStopsRelayout();
+  void visiblePopoverRelayoutDoesNotRaise();
 };
+
+void QtToolPopupTest::stationaryPopoverStopsRelayout() {
+  using adqt::widgets::detail::OverlayPopupController;
+  for (auto layer : {AdPopover::PopupLayerMode::InWindow, AdPopover::PopupLayerMode::QtTool}) {
+    QWidget host;
+    host.resize(640, 400);
+    QPushButton trigger(QStringLiteral("Open"), &host);
+    trigger.setGeometry(200, 200, 100, 32);
+    AdPopover popover;
+    popover.setSourceWidget(&trigger);
+    popover.setPopupLayerMode(layer);
+    popover.setText(QStringLiteral("Stationary popup"));
+    host.show();
+    popover.show();
+    QVERIFY(popover.isVisible());
+    // Allow the bounded opening geometry tail to finish, then require quiescence.
+    QTest::qWait(250);
+    OverlayPopupController::resetSyncPopupGeometryCountersForTesting();
+    QTest::qWait(100);
+    QCOMPARE(OverlayPopupController::syncPopupGeometryCallCountForTesting(), 0);
+    popover.hide();
+  }
+}
+
+void QtToolPopupTest::visiblePopoverRelayoutDoesNotRaise() {
+  class StackingObserver final : public QObject {
+   public:
+    int changes = 0;
+    bool eventFilter(QObject*, QEvent* event) override {
+      if (event->type() == QEvent::ZOrderChange) ++changes;
+      return false;
+    }
+  };
+  QWidget host;
+  host.resize(800, 600);
+  QPushButton trigger(QStringLiteral("Open"), &host);
+  trigger.setGeometry(250, 300, 100, 32);
+  AdPopover popover;
+  popover.setSourceWidget(&trigger);
+  popover.setPopupLayerMode(AdPopover::PopupLayerMode::QtTool);
+  auto* content = new QWidget;
+  content->setFixedSize(100, 40);
+  popover.setContentWidget(content);
+  host.show();
+  popover.show();
+  QTest::qWait(250);
+  QWidget* surface = content->window();
+  QVERIFY(surface && surface->isVisible());
+  StackingObserver observer;
+  surface->installEventFilter(&observer);
+  const QRect original = surface->geometry();
+  content->setFixedSize(180, 80);
+  QTRY_VERIFY(surface->size().width() > original.width());
+  const QPoint beforeMove = surface->pos();
+  trigger.move(trigger.pos() + QPoint(30, 0));
+  QTRY_COMPARE(surface->pos(), beforeMove + QPoint(30, 0));
+  content->setFixedSize(100, 40);
+  QTRY_COMPARE(surface->size(), original.size());
+  popover.refreshPopupLayout();
+  QTest::qWait(200);
+  QCOMPARE(observer.changes, 0);
+}
+
+void QtToolPopupTest::customButtonHitAreaIgnoresNativeBevel() {
+  class InsetButtonStyle final : public QProxyStyle {
+   public:
+    QRect subElementRect(SubElement element, const QStyleOption* option,
+                         const QWidget* widget = nullptr) const override {
+      if (element == SE_PushButtonBevel) {
+        return option->rect.adjusted(6, 6, -6, -6);
+      }
+      return QProxyStyle::subElementRect(element, option, widget);
+    }
+  };
+  adqt::widgets::AdButton button;
+  auto* style = new InsetButtonStyle;
+  style->setParent(&button);
+  button.setStyle(style);
+  button.setShape(adqt::widgets::AdButton::Shape::Rounded);
+  button.resize(32, 32);
+  button.show();
+  QSignalSpy clicked(&button, &adqt::widgets::AdButton::clicked);
+  int expected = 0;
+  for (const QPoint point :
+       {QPoint(16, 1), QPoint(16, 16), QPoint(16, 30), QPoint(1, 16), QPoint(30, 16)}) {
+    QTest::mouseClick(&button, Qt::LeftButton, Qt::NoModifier, point);
+    QCOMPARE(clicked.count(), ++expected);
+  }
+  button.setShape(adqt::widgets::AdButton::Shape::Circle);
+  QTest::mouseClick(&button, Qt::LeftButton, Qt::NoModifier, QPoint(1, 1));
+  QCOMPARE(clicked.count(), expected);
+  QTest::mouseClick(&button, Qt::LeftButton, Qt::NoModifier, QPoint(16, 16));
+  QCOMPARE(clicked.count(), ++expected);
+  button.setDisabled(true);
+  QTest::mouseClick(&button, Qt::LeftButton, Qt::NoModifier, QPoint(16, 16));
+  QCOMPARE(clicked.count(), expected);
+}
+
+#if defined(Q_OS_MACOS)
+void QtToolPopupTest::popupShadowDoesNotCoverUnderlyingWindow() {
+  if (QGuiApplication::platformName() != QStringLiteral("cocoa")) {
+    QSKIP("Requires the Cocoa window server");
+  }
+  QVERIFY2(macCanPostMouseEvents(),
+           "Native click test requires Accessibility event-posting access");
+  MacCursorRestore restoreCursor;
+  using namespace adqt::widgets::detail;
+  QWidget host;
+  host.resize(500, 300);
+  host.move(QApplication::primaryScreen()->availableGeometry().center() - host.rect().center());
+  auto* underlying = new QPushButton(QStringLiteral("Underlying"), &host);
+  underlying->setGeometry(host.rect());
+  QSignalSpy clicked(underlying, &QPushButton::clicked);
+  host.show();
+  host.raise();
+  macRaiseTestWindow(&host, 1100);
+  macActivateApplication();
+  host.activateWindow();
+  QTRY_VERIFY(host.isActiveWindow());
+  OverlayPopupSurface surface;
+  surface.setWindowFlags(overlayPopupSurfaceWindowFlags(adqt::widgets::adQtToolWindowFlags()));
+  surface.setAttribute(Qt::WA_TranslucentBackground);
+  surface.setAttribute(Qt::WA_ShowWithoutActivating);
+  OverlayPopupSurfaceStyle style;
+  style.background = Qt::white;
+  surface.setSurfaceStyle(style);
+  surface.resize(240, 120);
+  auto* option = new QPushButton(QStringLiteral("Popup option"), surface.bodyWidget());
+  option->setGeometry(surface.bodyWidget()->rect().adjusted(16, 16, -16, -16));
+  QSignalSpy optionClicked(option, &QPushButton::clicked);
+  surface.move(host.mapToGlobal(QPoint(80, 60)));
+  syncTopLevelToolTransientParent(&surface, &host);
+  int expectedUnderlyingClicks = 0;
+  int expectedOptionClicks = 0;
+  for (int cycle = 0; cycle < 3; ++cycle) {
+    surface.setArrowVisible(cycle < 2);
+    surface.show();
+    surface.raise();
+    macRaiseTestWindow(&surface, 1101);
+    for (const auto placement : {OverlayPopupPlacement::Top, OverlayPopupPlacement::Bottom,
+                                 OverlayPopupPlacement::Left, OverlayPopupPlacement::Right}) {
+      surface.setPlacement(placement);
+      surface.setArrowCenter(80);
+      option->setGeometry(surface.bodyWidget()->rect().adjusted(16, 16, -16, -16));
+      const QPoint body = option->mapToGlobal(option->rect().center());
+      QCOMPARE(surface.shadowMargins(), QMargins());
+      QVERIFY(!surface.windowFlags().testFlag(Qt::NoDropShadowWindowHint));
+      QTRY_VERIFY(macWindowReceivesPoint(&surface, body));
+      QVERIFY(macWindowHasShadow(&surface));
+      // Test real delivery outside the frame, in a rounded corner, and in the
+      // transparent strip beside the arrow. No mouse events are replayed.
+      const QPoint gutter =
+          placement == OverlayPopupPlacement::Top      ? QPoint(20, surface.height() - 2)
+          : placement == OverlayPopupPlacement::Bottom ? QPoint(20, 1)
+          : placement == OverlayPopupPlacement::Left   ? QPoint(surface.width() - 2, 20)
+                                                       : QPoint(1, 20);
+      QVector<QPoint> transparentPoints{QPoint(surface.width() / 2, surface.height() + 4),
+                                        QPoint(0, 0)};
+      if (surface.arrowVisible()) {
+        transparentPoints.push_back(gutter);
+      }
+      for (const QPoint local : transparentPoints) {
+        const QPoint point = surface.mapToGlobal(local);
+        macPostClick(point);
+        ++expectedUnderlyingClicks;
+        QTRY_VERIFY2(
+            clicked.count() == expectedUnderlyingClicks,
+            qPrintable(
+                QStringLiteral(
+                    "click did not reach underlying button: placement %1, local %2,%3, cycle %4")
+                    .arg(static_cast<int>(placement))
+                    .arg(local.x())
+                    .arg(local.y())
+                    .arg(cycle)));
+      }
+      macPostClick(body);
+      ++expectedOptionClicks;
+      QTRY_COMPARE(optionClicked.count(), expectedOptionClicks);
+      QCOMPARE(clicked.count(), expectedUnderlyingClicks);
+    }
+    surface.hide();
+    surface.releaseTopLevelToolResources();
+    syncTopLevelToolTransientParent(&surface, &host);
+  }
+}
+#endif
+
+void QtToolPopupTest::popupSurfacePreservesAntialiasedEdges() {
+#if defined(Q_OS_MACOS)
+  using namespace adqt::widgets::detail;
+  OverlayPopupSurface surface;
+  surface.setWindowFlags(overlayPopupSurfaceWindowFlags(adqt::widgets::adQtToolWindowFlags()));
+  surface.setAttribute(Qt::WA_TranslucentBackground);
+  OverlayPopupSurfaceStyle style;
+  style.background = Qt::white;
+  style.borderColor = Qt::black;
+  style.metrics.borderRadius = 12;
+  surface.setSurfaceStyle(style);
+  surface.resize(240, 120);
+  surface.show();
+  const auto verifyRendering = [&surface]() {
+    for (const qreal dpr : {1.0, 1.5, 2.0}) {
+      const auto render = [&surface, dpr](QWidget::RenderFlags flags) {
+        QImage image(QSize(qRound(surface.width() * dpr), qRound(surface.height() * dpr)),
+                     QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(dpr);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        surface.render(&painter, QPoint(), QRegion(), flags);
+        return image;
+      };
+      const QImage expected = render(QWidget::DrawChildren | QWidget::IgnoreMask);
+      const QImage actual = render(QWidget::DrawChildren);
+      int blendedPixels = 0;
+      for (int y = 0; y < expected.height(); ++y) {
+        for (int x = 0; x < expected.width(); ++x) {
+          const int alpha = qAlpha(expected.pixel(x, y));
+          blendedPixels += alpha > 0 && alpha < 255;
+        }
+      }
+      if (surface.arrowVisible() || surface.surfaceStyle().metrics.borderRadius > 0) {
+        QVERIFY(blendedPixels > 0);
+      }
+      QVERIFY2(
+          actual == expected,
+          qPrintable(
+              QStringLiteral("native surface clipping loses painted edges at DPR %1").arg(dpr)));
+    }
+  };
+  for (const auto placement : {OverlayPopupPlacement::Top, OverlayPopupPlacement::Bottom,
+                               OverlayPopupPlacement::Left, OverlayPopupPlacement::Right}) {
+    surface.setPlacement(placement);
+    for (const qreal center : {42.0, 83.5}) {
+      surface.setArrowCenter(center);
+      for (const int borderWidth : {0, 1, 3}) {
+        style.metrics.borderWidth = borderWidth;
+        style.arrowBackground = QColor(230, 240, 255);
+        style.arrowBorderColor = QColor(30, 60, 90);
+        surface.setSurfaceStyle(style);
+        verifyRendering();
+      }
+    }
+    surface.resize(surface.width() + 10, surface.height() + 10);
+    verifyRendering();
+  }
+  surface.setArrowVisible(false);
+  verifyRendering();
+  style.metrics.borderRadius = 0;
+  surface.setSurfaceStyle(style);
+  verifyRendering();
+  surface.hide();
+  surface.releaseTopLevelToolResources();
+  surface.setArrowVisible(true);
+  surface.show();
+  verifyRendering();
+  QWidget parent;
+  parent.resize(500, 300);
+  surface.hide();
+  surface.setParent(&parent);
+  parent.show();
+  surface.show();
+  verifyRendering();
+  surface.hide();
+  surface.setParent(nullptr, overlayPopupSurfaceWindowFlags(adqt::widgets::adQtToolWindowFlags()));
+  surface.show();
+  verifyRendering();
+#endif
+}
+
+void QtToolPopupTest::popupHoverShapeTracksPaintedSurface() {
+#if defined(Q_OS_MACOS)
+  using namespace adqt::widgets::detail;
+  OverlayPopupSurface surface;
+  surface.setWindowFlags(overlayPopupSurfaceWindowFlags(adqt::widgets::adQtToolWindowFlags()));
+  surface.setAttribute(Qt::WA_TranslucentBackground);
+  OverlayPopupSurfaceStyle style;
+  style.background = Qt::white;
+  style.metrics.borderRadius = 12;
+  surface.setSurfaceStyle(style);
+  surface.resize(240, 120);
+  const auto verifyShape = [&surface]() {
+    QImage image(surface.size(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    surface.render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+    painter.end();
+    QVERIFY(surface.containsInteractiveLocalPos(surface.bodyWidget()->geometry().center()));
+    QCOMPARE(surface.shadowMargins(), QMargins());
+    // Sample away from rasterized edges: input must follow the bubble and arrow,
+    // never the surrounding painted-shadow frame.
+    for (int y = 2; y < surface.height(); y += 5) {
+      for (int x = 2; x < surface.width(); x += 5) {
+        const QPoint point(x, y);
+        const bool inside = surface.containsInteractiveLocalPos(point);
+        bool awayFromEdge = true;
+        for (int dy = -2; dy <= 2; ++dy) {
+          for (int dx = -2; dx <= 2; ++dx) {
+            awayFromEdge &= inside == surface.containsInteractiveLocalPos(point + QPoint(dx, dy));
+          }
+        }
+        if (awayFromEdge) {
+          QVERIFY2((qAlpha(image.pixel(point)) > 0) == inside,
+                   qPrintable(QStringLiteral("shape mismatch at %1,%2").arg(x).arg(y)));
+        }
+      }
+    }
+  };
+  surface.show();
+  QCoreApplication::processEvents();
+  verifyShape();
+  for (auto placement : {OverlayPopupPlacement::Bottom, OverlayPopupPlacement::Left,
+                         OverlayPopupPlacement::Right, OverlayPopupPlacement::Top}) {
+    surface.setPlacement(placement);
+    surface.setArrowCenter(42);
+    verifyShape();
+    surface.resize(surface.width() + 20, surface.height() + 10);
+    verifyShape();
+  }
+  surface.setArrowVisible(false);
+  verifyShape();
+  style.metrics.borderRadius = 0;
+  surface.setSurfaceStyle(style);
+  verifyShape();
+  surface.hide();
+  surface.releaseTopLevelToolResources();
+  surface.setArrowVisible(true);
+  surface.show();
+  QCoreApplication::processEvents();
+  verifyShape();
+  QWidget parent;
+  parent.resize(500, 300);
+  surface.hide();
+  surface.setParent(&parent);
+  parent.show();
+  surface.show();
+  QCoreApplication::processEvents();
+  QVERIFY(surface.mask().isEmpty());
+  surface.setParent(nullptr, overlayPopupSurfaceWindowFlags(adqt::widgets::adQtToolWindowFlags()));
+  surface.show();
+  QCoreApplication::processEvents();
+  verifyShape();
+#endif
+}
+
+void QtToolPopupTest::unrelatedLeaveDoesNotDismissTooltip() {
+  AdTooltip::installApplicationTooltips();
+  QWidget host;
+  host.resize(400, 300);
+  QPushButton target(QStringLiteral("Target"), &host);
+  target.setGeometry(30, 30, 100, 30);
+  target.setToolTip(QStringLiteral("Target help"));
+  QWidget unrelated(&host);
+  unrelated.setGeometry(250, 200, 50, 50);
+  host.show();
+  host.activateWindow();
+  QCoreApplication::processEvents();
+  const QPoint local = target.rect().center();
+  QHelpEvent help(QEvent::ToolTip, local, target.mapToGlobal(local));
+  QApplication::sendEvent(&target, &help);
+  QTRY_VERIFY(findSurface(QStringLiteral("adtooltip-surface"), true));
+  QEvent leave(QEvent::Leave);
+  QApplication::sendEvent(&unrelated, &leave);
+  QTest::qWait(400);
+  QVERIFY(findSurface(QStringLiteral("adtooltip-surface"), true));
+  target.hide();
+  QTRY_VERIFY(!findSurface(QStringLiteral("adtooltip-surface"), true));
+}
 
 void QtToolPopupTest::popupOptionTooltipsRemainVisible() {
   AdTooltip::installApplicationTooltips();
@@ -339,6 +725,41 @@ void QtToolPopupTest::warmTooltipSurvivesGroupPopoverOpening() {
   }
   QCOMPARE(visibility.count(), 0);
   tip->hide();
+}
+
+void QtToolPopupTest::hoveringFromTooltipToAdjacentPopoverOpensPopover() {
+  AdTooltip::installApplicationTooltips();
+  QWidget host(nullptr, Qt::FramelessWindowHint);
+  host.resize(400, 120);
+  host.move(QApplication::primaryScreen()->availableGeometry().center() - host.rect().center());
+  auto* previous = new QPushButton(QStringLiteral("Scroll"), &host);
+  previous->setGeometry(80, 55, 100, 32);
+  previous->setToolTip(QStringLiteral("Scrolling screenshot"));
+  auto* trigger = new QPushButton(QStringLiteral("Save"), &host);
+  trigger->setGeometry(180, 55, 100, 32);
+  trigger->setToolTip(QStringLiteral("Save as file"));
+  trigger->setProperty(adqt::widgets::detail::kPopupTriggerTooltipEnabledProperty, true);
+  AdPopover popover;
+  popover.setSourceWidget(trigger);
+  popover.setPopupLayerMode(AdPopover::PopupLayerMode::QtTool);
+  popover.setPlacement(AdPopover::Placement::Top);
+  popover.setTriggers(AdPopover::Trigger::Hover);
+  popover.setHoverOpenDelayMs(30);
+  auto* content = new QWidget;
+  content->setFixedSize(160, 40);
+  popover.setContentWidget(content);
+  host.show();
+  QVERIFY(QTest::qWaitForWindowExposed(&host));
+  host.raise();
+
+  QTest::mouseMove(previous, previous->rect().center());
+  AdTooltip::showText(previous, previous->toolTip());
+  QTRY_VERIFY(findSurface(QStringLiteral("adtooltip-surface"), true));
+  QTest::mouseMove(trigger, trigger->rect().center());
+  AdTooltip::showText(trigger, trigger->toolTip());
+  QTRY_VERIFY(findSurface(QStringLiteral("adtooltip-surface"), true));
+  QTRY_VERIFY(popover.isVisible());
+  QTRY_VERIFY(content->window()->isVisible());
 }
 
 void QtToolPopupTest::pendingTooltipSurvivesGroupRouteRegistration() {

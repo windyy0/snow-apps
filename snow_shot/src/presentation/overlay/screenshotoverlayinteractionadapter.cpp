@@ -11,6 +11,10 @@ void ScreenshotOverlayEventAdapter::setEventTargets(
     m_raiseToolbarForCanvasInteraction = std::move(raiseToolbarForCanvasInteraction);
 }
 
+bool ScreenshotOverlayEventAdapter::acceptOverlayInput(bool genuine) {
+    return m_inputHandler && m_inputHandler->acceptInput(genuine);
+}
+
 void ScreenshotOverlayEventAdapter::clearEventTargets() {
     m_inputHandler = nullptr;
     m_raiseToolbarForCanvasInteraction = nullptr;
@@ -91,4 +95,9 @@ void ScreenshotOverlayEventAdapter::raiseToolbarForCanvasInteraction() {
     if (m_raiseToolbarForCanvasInteraction) {
         m_raiseToolbarForCanvasInteraction();
     }
+}
+
+bool ScreenshotOverlayEventAdapter::handleRegionDoubleClick(ScreenshotOverlayWindow* overlay,
+                                                            const QPointF& position) {
+    return m_inputHandler && m_inputHandler->handleRegionDoubleClick(overlay, position);
 }

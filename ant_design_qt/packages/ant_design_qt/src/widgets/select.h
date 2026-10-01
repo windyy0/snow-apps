@@ -365,6 +365,7 @@ class AdSelect final : public QWidget,
   SizeAdjustPolicy sizeAdjustPolicy() const;
   void setSizeAdjustPolicy(SizeAdjustPolicy policy);
   QSize minimumSizeHint() const override;
+  void setReferenceFont(const QFont& font);
   void prepareControlScale(const AdControlScaleContext& context) override;
   void commitControlScale(const AdControlScaleContext& context) override;
 
@@ -413,6 +414,7 @@ class AdSelect final : public QWidget,
  protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
   void paintEvent(QPaintEvent* event) override;
+  bool event(QEvent* event) override;
   void enterEvent(QEnterEvent* event) override;
   void leaveEvent(QEvent* event) override;
   void mousePressEvent(QMouseEvent* event) override;
@@ -625,8 +627,6 @@ class AdSelect final : public QWidget,
   QVector<ModelRow> rows_;
   bool suffixSpinnerSubscribed_ = false;
 
-  bool hovered_ = false;
-  bool clearHovered_ = false;
   bool hasFocusWithin_ = false;
   bool suppressLineEditChange_ = false;
   bool suppressPopupHideClose_ = false;

@@ -36,6 +36,10 @@ typedef enum SnowError {
 
 SnowError snow_runtime_serialize_document_session(SnowRuntime runtime, uint8_t* buffer,
                                                   size_t buffer_capacity, size_t* out_size);
+SnowError snow_runtime_serialize_selected_draw_template(SnowRuntime runtime, uint8_t* buffer,
+                                                        size_t buffer_capacity, size_t* out_size);
+SnowError snow_runtime_serialize_selected_element_ids(SnowRuntime runtime, uint8_t* buffer,
+                                                      size_t buffer_capacity, size_t* out_size);
 SnowError snow_runtime_create_from_document_session_with_config(const uint8_t* bytes, size_t size,
                                                                 const SnowRuntimeConfig* config,
                                                                 SnowRuntime* out_runtime);
@@ -118,7 +122,8 @@ typedef enum SnowFilterType {
     SNOW_FILTER_TYPE_GRAYSCALE = 2,
     SNOW_FILTER_TYPE_INVERSION = 3,
     SNOW_FILTER_TYPE_EMBOSS = 4,
-    SNOW_FILTER_TYPE_SMART_ERASE = 5
+    SNOW_FILTER_TYPE_SMART_ERASE = 5,
+    SNOW_FILTER_TYPE_BRIGHTNESS = 6
 } SnowFilterType;
 
 typedef struct SnowFilterStyle {
@@ -139,6 +144,7 @@ typedef struct SnowFilterStyle {
 #define SNOW_TEXT_STYLE_MIXED_HORIZONTAL_ALIGN (1u << 8)
 #define SNOW_TEXT_STYLE_MIXED_VERTICAL_ALIGN (1u << 9)
 #define SNOW_TEXT_STYLE_MIXED_OPACITY (1u << 10)
+#define SNOW_TEXT_STYLE_ALL_PROPERTIES ((1u << 11) - 1u)
 
 #define SNOW_SERIAL_NUMBER_STYLE_MIXED_NUMBER (1u << 0)
 #define SNOW_SERIAL_NUMBER_STYLE_MIXED_COLOR (1u << 1)
@@ -283,8 +289,14 @@ typedef enum SnowArrowhead {
     SNOW_ARROWHEAD_CROWFOOT_MANY = 11,
     SNOW_ARROWHEAD_CROWFOOT_ONE_OR_MANY = 12,
     SNOW_ARROWHEAD_SQUARE = 13,
-    SNOW_ARROWHEAD_INVERTED_TRIANGLE = 14
+    SNOW_ARROWHEAD_INVERTED_TRIANGLE = 14,
+    SNOW_ARROWHEAD_INDENTED_TRIANGLE = 15
 } SnowArrowhead;
+
+typedef enum SnowArrowShaftType {
+    SNOW_ARROW_SHAFT_TYPE_PLAIN = 0,
+    SNOW_ARROW_SHAFT_TYPE_TAPERED = 1,
+} SnowArrowShaftType;
 
 typedef enum SnowArrowType {
     SNOW_ARROW_TYPE_STRAIGHT = 0,
@@ -442,6 +454,8 @@ typedef struct SnowShapeStyle {
     SnowArrowhead end_arrowhead;
     SnowStrokeStyle stroke_style;
     SnowArrowType arrow_type;
+    SnowArrowShaftType arrow_shaft_type;
+    double arrow_ratio;
     SnowFillStyle fill_style;
     double opacity;
     SnowHighlightShape highlight_shape;
@@ -467,6 +481,8 @@ typedef enum SnowShapeKind {
 #define SNOW_SHAPE_STYLE_PROPERTY_START_ARROWHEAD (1u << 5)
 #define SNOW_SHAPE_STYLE_PROPERTY_END_ARROWHEAD (1u << 6)
 #define SNOW_SHAPE_STYLE_PROPERTY_STROKE_STYLE (1u << 7)
+#define SNOW_SHAPE_STYLE_PROPERTY_ARROW_RATIO (1u << 13)
+#define SNOW_SHAPE_STYLE_PROPERTY_ARROW_SHAFT_TYPE (1u << 12)
 #define SNOW_SHAPE_STYLE_PROPERTY_ARROW_TYPE (1u << 8)
 #define SNOW_SHAPE_STYLE_PROPERTY_OPACITY (1u << 9)
 #define SNOW_SHAPE_STYLE_PROPERTY_HIGHLIGHT_SHAPE (1u << 10)
@@ -474,6 +490,7 @@ typedef enum SnowShapeKind {
 #define SNOW_SHAPE_STYLE_PROPERTY_LINE                                                             \
     (SNOW_SHAPE_STYLE_PROPERTY_FILL | SNOW_SHAPE_STYLE_PROPERTY_FILL_STYLE |                       \
      SNOW_SHAPE_STYLE_PROPERTY_STROKE | SNOW_SHAPE_STYLE_PROPERTY_STROKE_WIDTH |                   \
+     SNOW_SHAPE_STYLE_PROPERTY_ARROW_RATIO | SNOW_SHAPE_STYLE_PROPERTY_ARROW_SHAFT_TYPE |          \
      SNOW_SHAPE_STYLE_PROPERTY_STROKE_STYLE | SNOW_SHAPE_STYLE_PROPERTY_ARROW_TYPE |               \
      SNOW_SHAPE_STYLE_PROPERTY_OPACITY)
 #define SNOW_SHAPE_STYLE_PROPERTY_FREE_DRAW                                                        \
@@ -497,6 +514,8 @@ typedef struct SnowArrowStyle {
     SnowArrowhead end_arrowhead;
     SnowStrokeStyle stroke_style;
     SnowArrowType arrow_type;
+    SnowArrowShaftType arrow_shaft_type;
+    double arrow_ratio;
     uint8_t reserved0[4];
 } SnowArrowStyle;
 
@@ -703,6 +722,8 @@ typedef struct SnowTextElementInfo {
     double center_y;
     double width;
     double height;
+    double content_width;
+    double content_height;
     double rotation;
     double font_size;
     uint32_t text_utf8_len;
@@ -732,6 +753,19 @@ typedef struct SnowArrowTextLayoutResult {
     SnowTextLayoutSize size;
 } SnowArrowTextLayoutResult;
 
+typedef struct SnowArrowTextLayoutMetrics {
+    SnowElementId text_id;
+    uint64_t key;
+    SnowTextLayoutSize size;
+    /* Natural layout width; size.width must be min(natural_width, max_width).
+       Zero means
+     * unknown and restricts reuse to the original constraint. */
+    double natural_width;
+} SnowArrowTextLayoutMetrics;
+
+/* Call before requesting replacement layouts after host font or DPI changes. */
+SnowError snow_viewport_invalidate_arrow_text_layouts(SnowRuntime runtime, SnowViewport viewport);
+
 /* Pending host measurement for the empty label attached by an active serial
    number drag; measure the empty draft for this font and apply the result. */
 typedef struct SnowSerialLabelLayoutRequest {
@@ -751,6 +785,9 @@ SnowError snow_viewport_apply_arrow_text_layouts_ex(SnowRuntime runtime, SnowVie
                                                     const SnowArrowTextLayoutResult* layouts,
                                                     uint32_t count,
                                                     SnowChangedViewportList* out_changed_viewports);
+SnowError snow_viewport_apply_arrow_text_layout_metrics_ex(
+    SnowRuntime runtime, SnowViewport viewport, const SnowArrowTextLayoutMetrics* layouts,
+    uint32_t count, SnowChangedViewportList* out_changed_viewports);
 SnowError snow_viewport_get_serial_label_layout_request(SnowRuntime runtime, SnowViewport viewport,
                                                         SnowSerialLabelLayoutRequest* out_request,
                                                         uint8_t* out_has_request);
@@ -1034,6 +1071,8 @@ typedef struct SnowSceneDisplayItem {
     SnowCornerRadii corner_radii;
     uint32_t arrow_point_count;
     SnowArrowType arrow_type;
+    SnowArrowShaftType arrow_shaft_type;
+    double arrow_ratio;
     uint8_t is_free_draw;
     uint8_t reserved1[2];
     SnowArrowhead arrow_start_head;
@@ -1109,6 +1148,8 @@ typedef struct SnowOverlayDisplayItem {
     SnowCornerRadii corner_radii;
     uint32_t arrow_point_count;
     SnowArrowType arrow_type;
+    SnowArrowShaftType arrow_shaft_type;
+    double arrow_ratio;
     uint8_t reserved1[3];
     SnowArrowhead arrow_start_head;
     SnowArrowhead arrow_end_head;
@@ -1200,6 +1241,15 @@ SnowError snow_viewport_fill_auto_filter_category(SnowRuntime runtime, SnowViewp
 
 SnowError snow_runtime_get_history_state(SnowRuntime runtime, SnowHistoryState* out_state);
 
+/* Apply one validated versioned annotation batch as one history entry. Output bytes are
+   owned by
+ * the caller and released with snow_annotation_result_destroy, even on empty result. */
+SnowError snow_runtime_apply_annotation_json(SnowRuntime runtime, const uint8_t* bytes, size_t size,
+                                             uint8_t** out_json, size_t* out_size,
+                                             SnowChangedViewportList* out_changed);
+void snow_annotation_result_destroy(uint8_t* bytes, size_t size);
+uint64_t snow_runtime_document_revision(SnowRuntime runtime);
+
 SnowError
 snow_runtime_clear_document_preserving_viewports(SnowRuntime runtime,
                                                  SnowChangedViewportList* out_changed_viewports);
@@ -1241,7 +1291,18 @@ SnowError snow_viewport_set_text_style_ex(SnowRuntime runtime, SnowViewport view
                                           const SnowTextLayoutOverride* layouts,
                                           uint32_t layout_count,
                                           SnowChangedViewportList* out_changed_viewports);
+SnowError snow_viewport_patch_text_style_ex(SnowRuntime runtime, SnowViewport viewport,
+                                            const SnowTextStyle* style, uint32_t properties,
+                                            const SnowTextLayoutOverride* layouts,
+                                            uint32_t layout_count,
+                                            SnowChangedViewportList* out_changed_viewports);
 
+SnowError snow_viewport_set_text_creation_style_ex(SnowRuntime runtime, SnowViewport viewport,
+                                                   const SnowTextStyle* style, uint32_t properties,
+                                                   SnowChangedViewportList* out_changed_viewports);
+SnowError snow_viewport_set_serial_number_style_patch_ex(
+    SnowRuntime runtime, SnowViewport viewport, const SnowSerialNumberStyle* style,
+    uint32_t properties, SnowChangedViewportList* out_changed_viewports);
 SnowError snow_viewport_set_serial_number_style_ex(SnowRuntime runtime, SnowViewport viewport,
                                                    const SnowSerialNumberStyle* style,
                                                    SnowChangedViewportList* out_changed_viewports);
@@ -1323,6 +1384,10 @@ SnowError snow_viewport_delete_all_elements_ex(SnowRuntime runtime, SnowViewport
 SnowError snow_viewport_duplicate_selected_ex(SnowRuntime runtime, SnowViewport viewport,
                                               double offset_x, double offset_y,
                                               SnowChangedViewportList* out_changed_viewports);
+SnowError snow_viewport_insert_draw_template_ex(SnowRuntime runtime, SnowViewport viewport,
+                                                const uint8_t* bytes, size_t size, double center_x,
+                                                double center_y,
+                                                SnowChangedViewportList* out_changed_viewports);
 
 SnowError snow_viewport_reorder_selected_ex(SnowRuntime runtime, SnowViewport viewport,
                                             uint32_t action,
@@ -1444,6 +1509,24 @@ SnowError snow_viewport_set_spotlight_config_ex(SnowRuntime runtime, SnowViewpor
 SnowError snow_patch_get_decoration_dirty_rects(SnowPatchHandle patch,
                                                 const SnowDirtyRect** out_rects,
                                                 uint32_t* out_count);
+
+// Stateful shared freehand stabilization. Input batches contain only new points.
+typedef struct SnowStrokeFilter SnowStrokeFilter;
+SnowError snow_stroke_filter_create(SnowArrowPoint start, double sample_spacing,
+                                    double response_distance, SnowStrokeFilter** output);
+void snow_stroke_filter_free(SnowStrokeFilter* filter);
+// Each batch is limited to 65536 input points and 65536 resampled points of work.
+// Invalid batches leave filter state unchanged.
+// Output borrows from filter until its next append/free; copy before another call.
+// finish recovers the exact endpoint. An empty finish-only batch is valid.
+SnowError snow_stroke_filter_append(SnowStrokeFilter* filter, const SnowArrowPoint* points,
+                                    size_t count, uint8_t finish, const SnowArrowPoint** output,
+                                    size_t* output_count);
+
+// Stateless curve construction; null commands queries the required count.
+SnowError snow_build_catmull_rom_path(const SnowArrowPoint* vertices, size_t vertex_count,
+                                      uint8_t closed, SnowArrowPathCommand* commands,
+                                      size_t capacity, size_t* count);
 
 #ifdef __cplusplus
 }

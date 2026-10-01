@@ -156,10 +156,10 @@ function Assert-SnowShotStaticDependencies {
     })
     $expectedFfmpegComponents = [ordered]@{
         BSF = @("AAC_ADTSTOASC", "H264_MP4TOANNEXB", "PGS_FRAME_MERGE", "VP9_SUPERFRAME")
-        DECODER = @("APNG", "GIF", "H264", "PNG", "VP8", "WEBP", "WEBP_ANIM")
+        DECODER = @("APNG", "GIF", "H264", "HEVC", "PNG", "VP8", "WEBP", "WEBP_ANIM")
         ENCODER = @("AAC", "APNG", "GIF", "H263", "H264_MF", "H264_AMF", "H264_NVENC", "H264_QSV", "LIBWEBP_ANIM", "LIBX264", "LIBX265", "MP3_MF", "MPEG4")
         HWACCEL = @("H264_D3D11VA", "H264_D3D11VA2", "H264_DXVA2")
-        PARSER = @("AAC", "AC3", "H264", "MPEGAUDIO")
+        PARSER = @("AAC", "AC3", "H264", "HEVC", "MPEGAUDIO")
         DEMUXER = @("APNG", "GIF", "MATROSKA", "MOV", "WEBP_ANIM")
         MUXER = @("APNG", "AVI", "GIF", "MATROSKA", "MOV", "MP4", "WEBP")
         PROTOCOL = @("FILE")
@@ -173,6 +173,18 @@ function Assert-SnowShotStaticDependencies {
             ForEach-Object { $_.Name })
         Assert-ExactStringSet -Description "Enabled FFmpeg $($entry.Key) components" `
             -Expected $entry.Value -Actual $actual
+    }
+
+    $main10CapabilityPath = Join-Path $Prefix "share\x265\snow-main10-capability.json"
+    if (-not (Test-Path -LiteralPath $main10CapabilityPath -PathType Leaf)) {
+        throw "The audited x265 Main10 capability metadata was not found: $main10CapabilityPath"
+    }
+    $main10Capability = Get-Content -LiteralPath $main10CapabilityPath -Raw | ConvertFrom-Json
+    if ($main10Capability.schemaVersion -ne 1 -or
+        $main10Capability.bitDepth8 -ne $true -or
+        $main10Capability.bitDepth10 -ne $true -or
+        $main10Capability.singlePublicApi -ne $true) {
+        throw "The Snow Shot x265 build must provide both 8-bit and Main10 encoding."
     }
 
     $libraryDirectory = Join-Path $Prefix "lib"
@@ -230,7 +242,9 @@ $qtStamp = Get-ValidatedStaticQtStamp -Prefix $qtPrefix `
 
 $cachePath = Join-Path $buildDirectory "CMakeCache.txt"
 if (-not $SkipBuild) {
-    & cmake --fresh --preset snow-shot-msvc-release
+    $configureArguments = @(Get-SnowConfigureArguments -Preset "snow-shot-msvc-release" `
+        -BuildDirectory $buildDirectory)
+    & cmake @configureArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Snow Shot release configuration failed."
     }
@@ -245,6 +259,7 @@ $requiredCacheEntries = @(
     "SNOW_APPS_RELEASE_STATIC:BOOL=ON",
     "SNOW_APPS_QT_STATIC:BOOL=ON",
     "SNOW_APPS_PACKAGE_SNOW_SHOT:BOOL=ON",
+    "SNOW_APPS_BUILD_SNOW_SHOT_MINI:BOOL=ON",
     "SNOW_SHOT_IMAGE_CODEC_BACKEND_STATIC:INTERNAL=ON",
     "QT_FEATURE_static:INTERNAL=ON"
 )
@@ -256,17 +271,17 @@ foreach ($entry in $requiredCacheEntries) {
 }
 
 if (-not $SkipBuild) {
-    & cmake --build --preset build-snow-shot-msvc-release --parallel $Parallelism
+    & cmake --build $buildDirectory --config Release --target snow_shot snow_shot_mini --parallel $Parallelism
     if ($LASTEXITCODE -ne 0) {
         throw "Snow Shot release build failed."
     }
 }
 
 $updaterSizeReporter = Join-Path $PSScriptRoot 'report-snow-shot-updater-size.ps1'
-$updaterBuildExecutable = Join-Path $BuildDirectory 'snow_shot\Release\snow-shot-updater.exe'
+$updaterBuildExecutable = Join-Path $buildDirectory 'snow_shot\Release\snow-shot-updater.exe'
 $updaterCargoProfileDirectory =
-    Join-Path $BuildDirectory 'cargo\x86_64-pc-windows-msvc\release-size'
-$updaterSizeEvidence = Join-Path $BuildDirectory 'release-evidence\snow-shot-updater-size.json'
+    Join-Path $buildDirectory 'cargo\x86_64-pc-windows-msvc\release-size'
+$updaterSizeEvidence = Join-Path $buildDirectory 'release-evidence\snow-shot-updater-size.json'
 & $updaterSizeReporter -Executable $updaterBuildExecutable `
     -CargoProfileDirectory $updaterCargoProfileDirectory -Output $updaterSizeEvidence
 if ($LASTEXITCODE -ne 0) {
@@ -283,9 +298,13 @@ $updaterCargoManifest = Join-Path $repoRoot "snow_shot\rust\snow-shot-updater\Ca
     -VcpkgPrefix $staticVcpkgPrefix `
     -QtPrefix $qtPrefix `
     -CargoManifest @((Join-Path $repoRoot "snow_rust_ffi\Cargo.toml"), $ocrCargoManifest,
-        $updaterCargoManifest) `
-    -CargoOptions @{ $ocrCargoManifest = @('--no-default-features', '--features',
-        'static-onnx-runtime,directml-provider,crash-diagnostics') } `
+        $updaterCargoManifest, (Join-Path $repoRoot "snow_shot\rust\snow-shot-mcp\Cargo.toml")) `
+    -CargoOptions @{ (Join-Path $repoRoot "snow_rust_ffi\Cargo.toml") = @('--features', 'selected-text');
+        # The immutable published 1.0.8 worker still contains RapidOCR's former
+        # convenience dependencies. Collect its notices even though the local
+        # raw-pixel worker no longer enables those features.
+        $ocrCargoManifest = @('--no-default-features', '--features',
+        'static-onnx-runtime,directml-provider,crash-diagnostics,rapid-ocr-rs/cli') } `
     -AntDesignNotice (Join-Path $repoRoot "ant_design_qt\THIRD_PARTY_NOTICES.md") `
     -FallbackLicenseDirectory (Join-Path $repoRoot "licenses")
 if ($LASTEXITCODE -ne 0) {
@@ -297,7 +316,7 @@ if (Test-Path -LiteralPath $installDirectory) {
 }
 New-Item -ItemType Directory -Force -Path $installDirectory | Out-Null
 
-& cmake --install $buildDirectory --config Release --prefix $installDirectory
+& cmake --install $buildDirectory --config Release --component SnowShot --prefix $installDirectory
 if ($LASTEXITCODE -ne 0) {
     throw "Snow Shot install step failed."
 }
@@ -322,6 +341,10 @@ foreach ($property in $expectedBinaryMetadata.Keys) {
     }
 }
 
+$mcpExecutable = Join-Path $installDirectory 'bin\snow-shot-mcp.exe'
+if (-not (Test-Path -LiteralPath $mcpExecutable -PathType Leaf)) {
+    throw "The staged Rust MCP bridge was not found: $mcpExecutable"
+}
 $updaterExecutable = Join-Path $installDirectory 'bin\snow-shot-updater.exe'
 if (-not (Test-Path -LiteralPath $updaterExecutable -PathType Leaf)) {
     throw "The staged Rust updater was not found: $updaterExecutable"
@@ -388,7 +411,7 @@ if (Test-Path -LiteralPath $stagedQtPluginDirectory -PathType Container) {
 }
 
 $stagedExecutables = @(Get-ChildItem -LiteralPath $installDirectory -Recurse -File -Filter "*.exe")
-$expectedExecutables = @("snow_shot.exe", "snow-ocr-process.exe", "crashpad_handler.exe", "snow-shot-updater.exe")
+$expectedExecutables = @("snow_shot.exe", "snow-ocr-process.exe", "crashpad_handler.exe", "snow-shot-updater.exe", "snow-shot-mcp.exe")
 $unexpectedExecutables = @($stagedExecutables | Where-Object { $_.Name -notin $expectedExecutables })
 if ($unexpectedExecutables.Count -gt 0) {
     throw "Release staging contains unexpected executables: $($unexpectedExecutables.FullName -join ', ')"
@@ -411,6 +434,7 @@ $stagedBinaries = @(Get-ChildItem -LiteralPath $installDirectory -Recurse -File 
 $expectedBinaryPaths = @(
     "bin\snow_shot.exe",
     "bin\snow-shot-updater.exe",
+    "bin\snow-shot-mcp.exe",
     "bin\crashpad_handler.exe",
     "bin\snow-ocr-process.exe",
     "bin\DirectML.dll"
@@ -494,6 +518,7 @@ $allowedSystemImports = @(
 $allowedLocalImports = @{
     "snow_shot.exe" = @()
     "snow-shot-updater.exe" = @()
+    "snow-shot-mcp.exe" = @()
     "crashpad_handler.exe" = @()
     "snow-ocr-process.exe" = @("directml.dll")
     "directml.dll" = @()
@@ -570,6 +595,7 @@ $expectedFfmpegRegistrations = @(
     "ff_apng_decoder",
     "ff_gif_decoder",
     "ff_h264_decoder",
+    "ff_hevc_decoder",
     "ff_png_decoder",
     "ff_vp8_decoder",
     "ff_webp_decoder",
@@ -593,6 +619,7 @@ $expectedFfmpegRegistrations = @(
     "ff_aac_parser",
     "ff_ac3_parser",
     "ff_h264_parser",
+    "ff_hevc_parser",
     "ff_mpegaudio_parser",
     "ff_apng_demuxer",
     "ff_gif_demuxer",
@@ -670,7 +697,7 @@ if ($versionInfo.FileVersion -ne "$packageVersionNumeric.0" -or
     throw "Snow Shot binary version '$($versionInfo.FileVersion)'/'$($versionInfo.ProductVersion)' does not match package version '$packageVersion'."
 }
 
-$ocrRuntimeVersion = "1.0.7"
+$ocrRuntimeVersion = "1.0.8"
 $ocrPlatform = "windows-x64"
 $ocrDefaultModelType = "small"
 $ocrDefaultModelId = "ppocrv6-small-463ea9f"
@@ -937,18 +964,18 @@ foreach ($binary in @(Get-ChildItem -LiteralPath $runtimeWork -File | Where-Obje
 
 $ocrVersionOutput = & (Join-Path $runtimeWork $ocrRuntimeFileName) --version 2>$null
 if ($LASTEXITCODE -ne 0 -or $ocrVersionOutput -cne
-    "snow-ocr-process $ocrRuntimeVersion windows-x86_64 protocol 3") {
+    "snow-ocr-process $ocrRuntimeVersion windows-x86_64 protocol 4") {
     throw "The staged OCR runtime reported an unexpected version: $ocrVersionOutput"
 }
 $ocrRuntimeVersionInfo = (Get-Item -LiteralPath (Join-Path $runtimeWork $ocrRuntimeFileName)).VersionInfo
 $expectedOcrMetadata = @{
     CompanyName = "Snow Apps"
     FileDescription = "Snow Shot OCR runtime"
-    FileVersion = "1.0.7.0"
+    FileVersion = "1.0.8.0"
     InternalName = "snow-ocr-process"
     OriginalFilename = $ocrRuntimeFileName
     ProductName = "Snow Shot OCR Runtime"
-    ProductVersion = "1.0.7"
+    ProductVersion = "1.0.8"
 }
 foreach ($property in $expectedOcrMetadata.Keys) {
     if ($ocrRuntimeVersionInfo.$property -ne $expectedOcrMetadata[$property]) {
@@ -981,7 +1008,7 @@ $runtimeReleaseManifest = Join-Path $buildDirectory "snow-ocr-runtime-$ocrRuntim
     SchemaVersion = 1
     RuntimeVersion = $ocrRuntimeVersion
     Platform = $ocrPlatform
-    Protocol = 3
+    Protocol = 4
     UploadUrl = $ocrRuntimeUrl
     Archive = $runtimeArchive
     Files = $runtimeFiles
@@ -1133,22 +1160,8 @@ if ($manifestDrift) {
           "in the same change."
 }
 
-$publishedRuntime = Join-Path $artifactRoot "$ocrRuntimeArchiveName.remote"
-try {
-    Invoke-WebRequest -Uri $ocrRuntimeUrl -OutFile $publishedRuntime -MaximumRedirection 5
-    Assert-ReleaseFile -Path $publishedRuntime -Bytes $runtimeArchive.size `
-        -Sha256 $runtimeArchive.sha256
-}
-catch {
-    throw "OCR runtime $ocrRuntimeVersion has not been published at $ocrRuntimeUrl with the " +
-          "generated size and SHA-256. Run with -PrepareOcrRuntimeOnly, upload the emitted " +
-          "artifact, then rerun packaging. $($_.Exception.Message)"
-}
-finally {
-    if (Test-Path -LiteralPath $publishedRuntime) {
-        Remove-Item -LiteralPath $publishedRuntime -Force
-    }
-}
+# The archive came from the pinned publication URL and Expand-PinnedSnowOcrRuntime
+# already verified its size, hash, and complete file inventory.
 $runtimeArchive.sha256 | Set-Content -LiteralPath $runtimePublishedMarker -Encoding ascii
 
 $variantStages = [ordered]@{
@@ -1380,3 +1393,5 @@ Write-Output "Snow Shot audited install tree: $installDirectory"
 Write-Output "OCR runtime upload artifact: $runtimeArchivePath"
 Write-Output "OCR runtime checksum: $runtimeArchiveChecksum"
 Write-Output "OCR runtime manifest: $runtimeReleaseManifest"
+
+. (Join-Path $PSScriptRoot "package-snow-shot-mini.ps1")

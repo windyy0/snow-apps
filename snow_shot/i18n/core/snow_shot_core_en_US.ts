@@ -4,12 +4,24 @@
     <context>
         <name>AboutPageWidget</name>
         <message>
+            <source>%1 logo</source>
+            <translation>%1 logo</translation>
+        </message>
+        <message>
             <source>%1 · %2</source>
             <translation>%1 · %2</translation>
         </message>
         <message>
+            <source>%1 · Make expression clearer</source>
+            <translation>%1 · Make expression clearer</translation>
+        </message>
+        <message>
             <source>, excellent work.</source>
             <translation>, excellent work.</translation>
+        </message>
+        <message>
+            <source>About %1</source>
+            <translation>About %1</translation>
         </message>
         <message>
             <source>About Snow Shot</source>
@@ -36,6 +48,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Changelog</source>
             <translation>Changelog</translation>
+        </message>
+        <message>
+            <source>Check for a newer version of %1.</source>
+            <translation>Check for a newer version of %1.</translation>
         </message>
         <message>
             <source>Check for a newer version of Snow Shot.</source>
@@ -80,6 +96,18 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Discover more features and ways to use it</source>
             <translation>Discover more features and ways to use it</translation>
+        </message>
+        <message>
+            <source>Discussion and support · Group No. %1</source>
+            <translation>Discussion and support · Group No. %1</translation>
+        </message>
+        <message>
+            <source>Download from GitHub</source>
+            <translation>Download from GitHub</translation>
+        </message>
+        <message>
+            <source>Download from Gitee</source>
+            <translation>Download from Gitee</translation>
         </message>
         <message>
             <source>Download update</source>
@@ -144,6 +172,14 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Preview</source>
             <translation>Preview</translation>
+        </message>
+        <message>
+            <source>QQ Group 2</source>
+            <translation>QQ Group 2</translation>
+        </message>
+        <message>
+            <source>QQ Group 3</source>
+            <translation>QQ Group 3</translation>
         </message>
         <message>
             <source>Ready to install %1</source>
@@ -219,6 +255,37 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         </message>
     </context>
     <context>
+        <name>ApplicationRestart</name>
+        <message>
+            <source>Another restart operation is in progress.</source>
+            <translation>Another restart operation is in progress.</translation>
+        </message>
+        <message>
+            <source>Could not create the restart handoff.</source>
+            <translation>Could not create the restart handoff.</translation>
+        </message>
+        <message>
+            <source>Could not start the replacement application.</source>
+            <translation>Could not start the replacement application.</translation>
+        </message>
+        <message>
+            <source>Finish capturing, recording, exporting, or updating before restarting.</source>
+            <translation>Finish capturing, recording, exporting, or updating before restarting.</translation>
+        </message>
+        <message>
+            <source>The replacement application did not acknowledge the restart.</source>
+            <translation>The replacement application did not acknowledge the restart.</translation>
+        </message>
+        <message>
+            <source>The replacement application did not become ready.</source>
+            <translation>The replacement application did not become ready.</translation>
+        </message>
+        <message>
+            <source>Your settings could not be saved. Please retry before restarting.</source>
+            <translation>Your settings could not be saved. Please retry before restarting.</translation>
+        </message>
+    </context>
+    <context>
         <name>DiagnosticsService</name>
         <message>
             <source>A log file could not be read.</source>
@@ -290,6 +357,17 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         </message>
     </context>
     <context>
+        <name>EditionMetadata</name>
+        <message>
+            <source>Snow Shot</source>
+            <translation>Snow Shot</translation>
+        </message>
+        <message>
+            <source>Snow Shot Mini</source>
+            <translation>Snow Shot Mini</translation>
+        </message>
+    </context>
+    <context>
         <name>LanguageCatalog</name>
         <message>
             <source>Language name</source>
@@ -312,6 +390,13 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Grant the required permission to continue</source>
             <translation>Grant the required permission to continue</translation>
+        </message>
+    </context>
+    <context>
+        <name>McpDocumentService</name>
+        <message>
+            <source>Document request failed (%1).</source>
+            <translation>Document request failed (%1).</translation>
         </message>
     </context>
     <context>
@@ -470,6 +555,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Image conversion timed out. Try a smaller area.</translation>
         </message>
         <message>
+            <source>Invalid LaTeX recognition response</source>
+            <translation>Invalid LaTeX recognition response</translation>
+        </message>
+        <message>
             <source>Invalid model stream response</source>
             <translation>Invalid model stream response</translation>
         </message>
@@ -484,6 +573,22 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Invalid translation stream response</source>
             <translation>Invalid translation stream response</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition failed</source>
+            <translation>LaTeX recognition failed</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition request timed out</source>
+            <translation>LaTeX recognition request timed out</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition response is too large</source>
+            <translation>LaTeX recognition response is too large</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition returned no formula</source>
+            <translation>LaTeX recognition returned no formula</translation>
         </message>
         <message>
             <source>No translation services are available</source>
@@ -522,8 +627,28 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>The model returned no content</translation>
         </message>
         <message>
+            <source>The text is too large to translate.</source>
+            <translation>The text is too large to translate.</translation>
+        </message>
+        <message>
+            <source>The translation response is too large.</source>
+            <translation>The translation response is too large.</translation>
+        </message>
+        <message>
+            <source>This service does not support the selected language combination.</source>
+            <translation>This service does not support the selected language combination.</translation>
+        </message>
+        <message>
             <source>Translation failed</source>
             <translation>Translation failed</translation>
+        </message>
+        <message>
+            <source>Translation request timed out.</source>
+            <translation>Translation request timed out.</translation>
+        </message>
+        <message>
+            <source>Translation service request failed (HTTP %1, code %2).</source>
+            <translation>Translation service request failed (HTTP %1, code %2).</translation>
         </message>
         <message>
             <source>Translation service response is too large</source>
@@ -575,32 +700,52 @@ so every moment on screen can be expressed clearly and shared easily.</translati
     <context>
         <name>snow_shot::app::ApplicationController</name>
         <message>
+            <source>%1 %2 is available. Open About for update options.</source>
+            <translation>%1 %2 is available. Open About for update options.</translation>
+        </message>
+        <message>
+            <source>%1 will close and restart to install the update. Continue?</source>
+            <translation>%1 will close and restart to install the update. Continue?</translation>
+        </message>
+        <message>
+            <source>An update is ready. Open About to restart and update %1.</source>
+            <translation>An update is ready. Open About to restart and update %1.</translation>
+        </message>
+        <message>
             <source>An update is ready. Open About to restart and update Snow Shot.</source>
             <translation>An update is ready. Open About to restart and update Snow Shot.</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>Could not pin selected files</source>
+            <translation>Could not pin selected files</translation>
         </message>
         <message>
             <source>Feature unavailable</source>
             <translation>Feature unavailable</translation>
         </message>
         <message>
-            <source>Finish capturing, recording, or exporting before updating.</source>
-            <translation>Finish capturing, recording, or exporting before updating.</translation>
+            <source>Finish capturing, recording, exporting, recognizing text, or updating before changing storage.</source>
+            <translation>Finish capturing, recording, exporting, recognizing text, or updating before changing storage.</translation>
         </message>
         <message>
-            <source>Pin to screen is not available on macOS yet.</source>
-            <translation>Pin to screen is not available on macOS yet.</translation>
+            <source>Finish capturing, recording, or exporting before updating.</source>
+            <translation>Finish capturing, recording, or exporting before updating.</translation>
         </message>
         <message>
             <source>Restart and update</source>
             <translation>Restart and update</translation>
         </message>
         <message>
-            <source>Screen recording is not available on macOS yet.</source>
-            <translation>Screen recording is not available on macOS yet.</translation>
+            <source>Restart failed</source>
+            <translation>Restart failed</translation>
         </message>
         <message>
-            <source>Screenshot is not available on macOS yet.</source>
-            <translation>Screenshot is not available on macOS yet.</translation>
+            <source>Snow Shot %1 is available. Open About for update options.</source>
+            <translation>Snow Shot %1 is available. Open About for update options.</translation>
         </message>
         <message>
             <source>Snow Shot will close and restart to install the update. Continue?</source>

@@ -18,9 +18,12 @@
 #include <iostream>
 #include <memory>
 
+struct SnowCaptureDesktopLayoutImpl {};
+
 struct SnowCaptureDesktopSessionImpl {
     SnowCaptureDesktopSessionConfig config{};
     bool prepared = false;
+    QVector<std::uint32_t> excludedWindowIds;
 };
 
 struct SnowCaptureFrameLeaseImpl {
@@ -49,9 +52,11 @@ int captured = 0;
 int leases = 0;
 bool failCreation = false;
 bool failCapture = false;
+bool invalidLayout = false;
 uint8_t preparedBackend = SNOW_CAPTURE_BACKEND_AUTO;
 uint8_t refreshedBackend = SNOW_CAPTURE_BACKEND_AUTO;
 uint32_t capturedFlags = 0;
+QVector<std::uint32_t> capturedWindowIds;
 std::atomic<uint8_t> liveCursorPixel{71};
 std::atomic<int> cursorSnapshots{0};
 std::atomic<int> cursorCompositions{0};
@@ -75,10 +80,20 @@ void setMode(const char* mode) {
 
 ScreenshotCaptureResult capture(ScreenshotCaptureWorker& worker, bool restoreColors = false,
                                 bool captureCursor = false,
-                                std::shared_ptr<SnowCaptureCursorSnapshot> cursorSnapshot = {}) {
+                                std::shared_ptr<SnowCaptureCursorSnapshot> cursorSnapshot = {},
+                                const QVector<std::uint32_t>& excludedWindowIds = {}) {
     ScreenshotCaptureCoordinator coordinator;
     ScreenshotCaptureResult result;
     bool received = false;
+    int layouts = 0;
+    QObject::connect(
+        &coordinator, &ScreenshotCaptureCoordinator::layoutReady, &coordinator,
+        [&](const ScreenshotCaptureLayout& layout) {
+            require(!received && layout.requestId == 42 && layout.generation == 42 &&
+                        layout.displays.size() == 1,
+                    "native layout must be queued before frames with the same request identity");
+            ++layouts;
+        });
     QObject::connect(&coordinator, &ScreenshotCaptureCoordinator::captureFinished, &coordinator,
                      [&](const ScreenshotCaptureResult& value) {
                          result = value;
@@ -89,10 +104,49 @@ ScreenshotCaptureResult capture(ScreenshotCaptureWorker& worker, bool restoreCol
     request.restoreOriginalScreenColors = restoreColors;
     request.captureCursor = captureCursor;
     request.cursorSnapshot = std::move(cursorSnapshot);
+    request.excludedWindowIds = excludedWindowIds;
     worker.capture(request, &coordinator, nullptr);
     QCoreApplication::sendPostedEvents(&coordinator);
     require(received && result.requestId == request.requestId, "capture result was not delivered");
+    require(!result.succeeded || layouts == 1,
+            "successful initial capture must publish exactly one layout");
     return result;
+}
+
+void recaptureExclusionsReplaceSessionAndDoNotLeak() {
+    ScreenshotCaptureWorker worker;
+    worker.prepare(1, {});
+    const int before = created;
+    const QVector<std::uint32_t> windows{101, 202};
+    require(capture(worker, false, false, {}, windows).succeeded && capturedWindowIds == windows &&
+                created == before + 1,
+            "recapture must replace a prewarmed session to exclude overlay and toolbar");
+    require(capture(worker, false, false, {}, windows).succeeded && created == before + 1,
+            "unchanged exclusions must reuse the native capture session");
+    const QVector<std::uint32_t> replacedWindows{303, 404};
+    require(capture(worker, false, false, {}, replacedWindows).succeeded &&
+                capturedWindowIds == replacedWindows,
+            "recapture must replace stale native window IDs");
+    failCreation = true;
+    const int capturesBeforeFailure = captured;
+    require(!capture(worker, false, false, {}, windows).succeeded &&
+                captured == capturesBeforeFailure,
+            "failed exclusion changes must not capture using stale exclusions");
+    failCreation = false;
+    require(capture(worker, false, false, {}, windows).succeeded && capturedWindowIds == windows,
+            "recapture must recover with the requested exclusions");
+    require(capture(worker).succeeded && capturedWindowIds.isEmpty(),
+            "ordinary capture must clear recapture exclusions");
+}
+
+void invalidLayoutDoesNotAcquireFrames() {
+    ScreenshotCaptureWorker worker;
+    const int before = captured;
+    invalidLayout = true;
+    require(!capture(worker).succeeded && captured == before,
+            "invalid native layout must fail before frame acquisition");
+    invalidLayout = false;
+    require(capture(worker).succeeded, "valid layout must recover on the next invocation");
 }
 
 void requireBackend(ScreenshotCaptureWorker& worker, uint8_t expected) {
@@ -219,7 +273,7 @@ void modeChangeAfterCaptureFailurePreservesRetainedFrame() {
 }
 
 #if defined(Q_OS_WIN) || defined(_WIN32)
-void recaptureOwnsCursorBeforeDispatch(bool cancel) {
+void captureOwnsCursorBeforeDispatch(ScreenshotCapturePurpose purpose, bool cancel) {
     setMode("dxgi");
     ScreenshotCaptureResult result;
     bool received = false;
@@ -235,12 +289,12 @@ void recaptureOwnsCursorBeforeDispatch(bool cancel) {
                          });
         ScreenshotCaptureRequest request;
         request.requestId = 91;
-        request.purpose = ScreenshotCapturePurpose::Recapture;
+        request.purpose = purpose;
         request.captureCursor = true;
         liveCursorPixel = 71;
         blockCapture = true;
         coordinator.captureAsync(request);
-        require(cursorSnapshots == 1, "recapture must own its cursor before returning to the UI");
+        require(cursorSnapshots == 1, "capture must own its cursor before returning to the UI");
         require(captureEntered.tryAcquire(1, 3000), "capture worker did not reach the barrier");
         require((capturedFlags & SNOW_CAPTURE_SCREENSHOT_REQUEST_INCLUDE_CURSOR) == 0,
                 "snapshot capture must disable backend cursor composition");
@@ -255,9 +309,8 @@ void recaptureOwnsCursorBeforeDispatch(bool cancel) {
         coordinator.shutdown();
         blockCapture = false;
     }
-    require(received && result.requestId == 91 &&
-                result.purpose == ScreenshotCapturePurpose::Recapture,
-            "asynchronous recapture must deliver its original identity");
+    require(received && result.requestId == 91 && result.purpose == purpose,
+            "asynchronous capture must deliver its original identity");
     require(cursorSnapshots == 0, "completion and cancellation must release the owned cursor");
     if (cancel) {
         require(!result.succeeded && cursorCompositions == compositionsBefore,
@@ -270,21 +323,25 @@ void recaptureOwnsCursorBeforeDispatch(bool cancel) {
 }
 
 void cursorSnapshotFailureDoesNotDispatchCapture() {
-    ScreenshotCaptureCoordinator coordinator;
-    bool failed = false;
-    QObject::connect(&coordinator, &ScreenshotCaptureCoordinator::captureFinished, &coordinator,
-                     [&](const ScreenshotCaptureResult& result) {
-                         failed = !result.succeeded && !result.errorMessage.isEmpty();
-                     });
-    ScreenshotCaptureRequest request;
-    request.purpose = ScreenshotCapturePurpose::Recapture;
-    request.captureCursor = true;
-    const int capturedBefore = captured;
-    failCursorSnapshot = true;
-    coordinator.captureAsync(request);
-    failCursorSnapshot = false;
-    require(failed && captured == capturedBefore && cursorSnapshots == 0,
-            "snapshot failure must not fall back to a stale live/backend cursor");
+    for (const auto purpose :
+         {ScreenshotCapturePurpose::Initial, ScreenshotCapturePurpose::Recapture}) {
+        ScreenshotCaptureCoordinator coordinator;
+        bool failed = false;
+        QObject::connect(&coordinator, &ScreenshotCaptureCoordinator::captureFinished, &coordinator,
+                         [&](const ScreenshotCaptureResult& result) {
+                             failed = !result.succeeded && result.purpose == purpose &&
+                                      !result.errorMessage.isEmpty();
+                         });
+        ScreenshotCaptureRequest request;
+        request.purpose = purpose;
+        request.captureCursor = true;
+        const int capturedBefore = captured;
+        failCursorSnapshot = true;
+        coordinator.captureAsync(request);
+        failCursorSnapshot = false;
+        require(failed && captured == capturedBefore && cursorSnapshots == 0,
+                "snapshot failure must not fall back to a stale live/backend cursor");
+    }
 }
 #endif
 
@@ -306,13 +363,53 @@ void cursorCompositionFailureDoesNotPublishAnImage() {
 // Substitute only the native API; settings, policy, worker, and result delivery are production
 // code.
 extern "C" {
+SnowCaptureDesktopLayout*
+snow_capture_desktop_session_layout_snapshot(SnowCaptureDesktopSession* session, uint8_t refresh) {
+    if (refresh)
+        snow_capture_desktop_session_refresh_layout(session);
+    return new SnowCaptureDesktopLayout;
+}
+void snow_capture_desktop_layout_destroy(SnowCaptureDesktopLayout* layout) {
+    delete layout;
+}
+size_t snow_capture_desktop_layout_count(const SnowCaptureDesktopLayout*) {
+    return 1;
+}
+uint8_t snow_capture_desktop_layout_display(const SnowCaptureDesktopLayout*, size_t,
+                                            SnowCaptureDisplayDescriptor* d) {
+    d->stable_id = "test";
+    d->name = "test";
+    d->x = 0;
+    d->y = 0;
+    d->width = 1;
+    d->height = 1;
+    d->pixel_width = 1;
+    d->pixel_height = 1;
+    d->backing_scale = invalidLayout ? 0 : 1;
+#ifdef Q_OS_MACOS
+    d->coordinate_space = 1;
+    d->display_id = 1;
+#endif
+    return 1;
+}
+SnowCaptureScreenshotResult*
+snow_capture_desktop_session_capture_with_layout(SnowCaptureDesktopSession* session,
+                                                 const SnowCaptureScreenshotRequest* request,
+                                                 const SnowCaptureDesktopLayout*) {
+    return snow_capture_desktop_session_capture(session, request);
+}
+
 SnowCaptureDesktopSession*
 snow_capture_desktop_session_create(const SnowCaptureDesktopSessionConfig* config) {
     if (failCreation) {
         return nullptr;
     }
     ++created;
-    return new SnowCaptureDesktopSession{*config, false};
+    auto* session = new SnowCaptureDesktopSession{*config, false, {}};
+    for (size_t index = 0; index < config->exclusions.window_count; ++index) {
+        session->excludedWindowIds.push_back(config->exclusions.windows[index]);
+    }
+    return session;
 }
 
 void snow_capture_desktop_session_destroy(SnowCaptureDesktopSession* session) {
@@ -347,6 +444,7 @@ SnowCaptureScreenshotResult*
 snow_capture_desktop_session_capture(SnowCaptureDesktopSession* session,
                                      const SnowCaptureScreenshotRequest* request) {
     capturedFlags = request->flags;
+    capturedWindowIds = session->excludedWindowIds;
     ++captured;
     if (blockCapture) {
         captureEntered.release();
@@ -456,6 +554,8 @@ int main(int argc, char** argv) {
     auto& storage = snow_shot::storage::ApplicationStorage::instance();
     static_cast<void>(storage.initialize({temporary.filePath(QStringLiteral("bin")),
                                           temporary.filePath(QStringLiteral("data")), 60000}));
+    recaptureExclusionsReplaceSessionAndDoNotLeak();
+    invalidLayoutDoesNotAcquireFrames();
     changedModeReplacesPrewarmedSession();
     allModeTransitionsApplyWithoutRestart();
     colorRestorationAppliesAcrossBackendChanges();
@@ -464,8 +564,10 @@ int main(int argc, char** argv) {
     failedReplacementDoesNotCaptureWithOldBackend();
     modeChangeAfterCaptureFailurePreservesRetainedFrame();
 #if defined(Q_OS_WIN) || defined(_WIN32)
-    recaptureOwnsCursorBeforeDispatch(false);
-    recaptureOwnsCursorBeforeDispatch(true);
+    captureOwnsCursorBeforeDispatch(ScreenshotCapturePurpose::Initial, false);
+    captureOwnsCursorBeforeDispatch(ScreenshotCapturePurpose::Initial, true);
+    captureOwnsCursorBeforeDispatch(ScreenshotCapturePurpose::Recapture, false);
+    captureOwnsCursorBeforeDispatch(ScreenshotCapturePurpose::Recapture, true);
     cursorSnapshotFailureDoesNotDispatchCapture();
 #endif
     cursorCompositionFailureDoesNotPublishAnImage();

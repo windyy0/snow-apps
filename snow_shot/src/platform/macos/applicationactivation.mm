@@ -1,4 +1,5 @@
 #include "snow_shot/platform/macos/applicationactivation.h"
+#include "snow_shot/platform/macos/loginitemservice.h"
 
 #import <AppKit/AppKit.h>
 
@@ -49,6 +50,8 @@
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication*)application
                     hasVisibleWindows:(BOOL)hasVisibleWindows {
+    if (snow_shot::platform::macos::isNativeLoginItemLaunch())
+        return YES;
     if ([m_forwardDelegate
             respondsToSelector:@selector(applicationShouldHandleReopen:hasVisibleWindows:)]) {
         [m_forwardDelegate applicationShouldHandleReopen:application
@@ -114,6 +117,9 @@ void configureMainWindowTitleBar(QWidget* window, int titleBarHeight) {
         return;
     }
 
+    // The main interface is an ordinary app window, even if its native surface
+    // previously acquired a floating level. Reapply this on show and state changes.
+    nativeWindow.level = NSNormalWindowLevel;
     nativeWindow.titleVisibility = NSWindowTitleHidden;
     nativeWindow.titlebarSeparatorStyle = NSTitlebarSeparatorStyleNone;
     nativeWindow.movableByWindowBackground = NO;

@@ -1,6 +1,8 @@
 #include "button.h"
+#include "detail/pointer_region.h"
 
 #include "detail/popup_geometry.h"
+#include "detail/top_level_popup_window.h"
 
 #include "button_style.h"
 #include "detail/button_grouping.h"
@@ -452,12 +454,13 @@ struct AdButton::Private {
   IconPosition iconPosition = IconPosition::Leading;
   detail::SegmentPosition segmentPosition = detail::SegmentPosition::Standalone;
   bool interactionBackgroundVisible = true;
+  bool checkedUsesActiveStyle = true;
 
   bool busy = false;
   int busyDelayMs = -1;
   BusyIndicatorPresentation busyIndicatorPresentation = BusyIndicatorPresentation::Inline;
   bool busyIndicatorVisible = false;
-  bool hovered = false;
+
   bool focusVisible = false;
   bool enterPressed = false;
   bool busyDefaultSuspended = false;
@@ -528,10 +531,7 @@ class BusyIndicatorSurface final : public QWidget {
     if (owner) {
       owner->winId();
       winId();
-      if (windowHandle() && owner->windowHandle() &&
-          windowHandle()->transientParent() != owner->windowHandle()) {
-        windowHandle()->setTransientParent(owner->windowHandle());
-      }
+      setTopLevelToolTransientParent(this, owner);
     }
 
     const auto placement = PopupWidgetRect{button_, indicatorRect}.onScreen();
@@ -557,6 +557,11 @@ class BusyIndicatorSurface final : public QWidget {
   }
 
  protected:
+  bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override {
+    constrainTopLevelToolStackingToOwner(this, message);
+    return QWidget::nativeEvent(eventType, message, result);
+  }
+
   void paintEvent(QPaintEvent* event) override {
     Q_UNUSED(event)
     if (!button_) {
@@ -644,6 +649,17 @@ void AdButton::setSizeClass(SizeClass value) {
 
 bool AdButton::interactionBackgroundVisible() const { return d_->interactionBackgroundVisible; }
 
+bool AdButton::checkedUsesActiveStyle() const { return d_->checkedUsesActiveStyle; }
+
+void AdButton::setCheckedUsesActiveStyle(bool value) {
+  if (d_->checkedUsesActiveStyle == value) {
+    return;
+  }
+  d_->checkedUsesActiveStyle = value;
+  refreshAfterPropertyChange(false);
+  emit checkedUsesActiveStyleChanged(value);
+}
+
 void AdButton::setInteractionBackgroundVisible(bool value) {
   if (d_->interactionBackgroundVisible == value) {
     return;
@@ -730,6 +746,7 @@ void AdButton::setBusyIconRef(const adqt::icons::IconRef& value) {
 }
 
 bool AdButton::event(QEvent* event) {
+  detail::resetWidgetHoverOnLifecycle(this, event);
   if (event) {
     if (interactionBlocked() && event->type() == QEvent::Shortcut) {
       event->accept();
@@ -943,9 +960,9 @@ void AdButton::paintEvent(QPaintEvent* event) {
       }
     } else if (iconState.hasFallbackIcon) {
       const QIcon::Mode iconMode =
-          !isEnabled()
-              ? QIcon::Disabled
-              : (isDown() ? QIcon::Selected : (d_->hovered ? QIcon::Active : QIcon::Normal));
+          !isEnabled() ? QIcon::Disabled
+                       : (isDown() ? QIcon::Selected
+                                   : (detail::widgetHovered(this) ? QIcon::Active : QIcon::Normal));
       const QIcon::State fallbackIconState = isChecked() ? QIcon::On : QIcon::Off;
       const QPixmap pixmap = QAbstractButton::icon().pixmap(layout.iconRect.size().toSize(),
                                                             iconMode, fallbackIconState);
@@ -1052,6 +1069,32 @@ QSize AdButton::sizeHint() const {
 
 QSize AdButton::minimumSizeHint() const { return sizeHint(); }
 
+void AdButton::setReferenceFont(const QFont& font) {
+  if (!d_->referenceMetricsCaptured) {
+    d_->referenceIconSize = iconSize();
+    d_->referenceMetricsCaptured = true;
+  }
+  if (d_->referenceFont == font) return;
+  d_->referenceFont = font;
+  prepareControlScale(d_->controlScale);
+  commitControlScale(d_->controlScale);
+  updateGeometry();
+  update();
+}
+
+void AdButton::setReferenceIconSize(const QSize& size) {
+  if (!d_->referenceMetricsCaptured) {
+    d_->referenceFont = font();
+    d_->referenceMetricsCaptured = true;
+  }
+  if (d_->referenceIconSize == size) return;
+  d_->referenceIconSize = size;
+  prepareControlScale(d_->controlScale);
+  commitControlScale(d_->controlScale);
+  updateGeometry();
+  update();
+}
+
 void AdButton::prepareControlScale(const AdControlScaleContext& context) {
   Q_UNUSED(context)
   d_->sizeHintCacheValid = false;
@@ -1065,17 +1108,9 @@ void AdButton::commitControlScale(const AdControlScaleContext& context) {
     d_->referenceMetricsCaptured = true;
   }
   d_->controlScale = context;
-  const qreal scale = context.logicalScale;
-  QFont scaledFont = d_->referenceFont;
-  if (scaledFont.pixelSize() > 0) {
-    scaledFont.setPixelSize(qMax(1, qRound(scaledFont.pixelSize() * scale)));
-  } else if (scaledFont.pointSizeF() > 0.0) {
-    scaledFont.setPointSizeF(scaledFont.pointSizeF() * scale);
-  }
-  setFont(scaledFont);
+  setFont(scaleControlFont(d_->referenceFont, d_->controlScale.logicalScale));
   if (d_->referenceIconSize.isValid()) {
-    setIconSize(QSize(qMax(1, qRound(d_->referenceIconSize.width() * scale)),
-                      qMax(1, qRound(d_->referenceIconSize.height() * scale))));
+    setIconSize(scaleControlSize(d_->referenceIconSize, d_->controlScale.logicalScale));
   }
   d_->sizeHintCacheValid = false;
   syncIsolatedBusyIndicatorSurface();
@@ -1114,7 +1149,6 @@ void AdButton::changeEvent(QEvent* event) {
 
 void AdButton::enterEvent(QEnterEvent* event) {
   QPushButton::enterEvent(event);
-  d_->hovered = true;
   updateCursorForRole();
   bumpSegmentZOrder();
   update();
@@ -1122,7 +1156,6 @@ void AdButton::enterEvent(QEnterEvent* event) {
 
 void AdButton::leaveEvent(QEvent* event) {
   QPushButton::leaveEvent(event);
-  d_->hovered = false;
   update();
 }
 
@@ -1133,8 +1166,9 @@ void AdButton::mousePressEvent(QMouseEvent* event) {
   }
   d_->focusVisible = false;
   updateInteractionFocusOverlay();
+  const QPointer<AdButton> lifetime(this);
   QPushButton::mousePressEvent(event);
-  bumpSegmentZOrder();
+  if (lifetime) bumpSegmentZOrder();
 }
 
 void AdButton::mouseReleaseEvent(QMouseEvent* event) {
@@ -1144,7 +1178,10 @@ void AdButton::mouseReleaseEvent(QMouseEvent* event) {
   }
   const bool shouldTriggerWave =
       event && event->button() == Qt::LeftButton && isDown() && hitButton(mouseEventPos(event));
+  // Activation callbacks (including nested modal loops) may destroy this button.
+  const QPointer<AdButton> lifetime(this);
   QPushButton::mouseReleaseEvent(event);
+  if (!lifetime) return;
   if (shouldTriggerWave && isEnabled() && !interactionBlocked()) {
     triggerInteractionWaveOverlay();
   }
@@ -1196,7 +1233,9 @@ void AdButton::keyReleaseEvent(QKeyEvent* event) {
     d_->enterPressed = false;
     setDown(false);
     if (triggerClick) {
+      const QPointer<AdButton> lifetime(this);
       click();
+      if (!lifetime) return;
       triggerInteractionWaveOverlay();
     }
     event->accept();
@@ -1204,7 +1243,9 @@ void AdButton::keyReleaseEvent(QKeyEvent* event) {
     return;
   }
 
+  const QPointer<AdButton> lifetime(this);
   QPushButton::keyReleaseEvent(event);
+  if (!lifetime) return;
   if (activationKey && !event->isAutoRepeat() && isEnabled() && !interactionBlocked()) {
     triggerInteractionWaveOverlay();
   }
@@ -1213,7 +1254,10 @@ void AdButton::keyReleaseEvent(QKeyEvent* event) {
 bool AdButton::hitButton(const QPoint& pos) const {
   const Shape visualShape = effectiveShape(renderText());
   if (visualShape != Shape::Circle) {
-    return QPushButton::hitButton(pos);
+    // AdButton paints its own surface across the widget, independent of the
+    // platform style. QPushButton uses the native SE_PushButtonBevel instead,
+    // which leaves visibly painted edges unclickable on macOS.
+    return rect().contains(pos);
   }
 
   const detail::ButtonVisualStyle style = resolvedStyle();
@@ -1274,9 +1318,6 @@ void AdButton::showEvent(QShowEvent* event) {
 
 void AdButton::hideEvent(QHideEvent* event) {
   QPushButton::hideEvent(event);
-  // Retained popup children can be hidden without receiving a matching Leave.
-  // Hover belongs to the current visible interaction, not the next popup session.
-  d_->hovered = false;
   d_->enterPressed = false;
   setDown(false);
   updateSpinnerState();
@@ -1367,14 +1408,15 @@ detail::ButtonStateStyle AdButton::currentStateStyle(const detail::ButtonVisualS
     state = style.disabled;
   } else if (isDown()) {
     state = style.active;
-  } else if (isChecked()) {
+  } else if (isChecked() && d_->checkedUsesActiveStyle) {
     state = style.checked;
-  } else if (d_->hovered) {
+  } else if (detail::widgetHovered(this)) {
     state = style.hover;
   } else {
     state = style.normal;
   }
-  if (!d_->interactionBackgroundVisible && (d_->hovered || isDown() || isChecked())) {
+  if (!d_->interactionBackgroundVisible &&
+      (detail::widgetHovered(this) || isDown() || isChecked())) {
     state.background = QColor(0, 0, 0, 0);
   }
   return state;

@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <QRect>
+#include <QJsonObject>
 
 #include <memory>
 #include <functional>
@@ -20,12 +21,26 @@ class ScreenRecordingController final : public QObject {
     ScreenRecordingController(EffectsSourceFactory effectsSourceFactory, QObject* parent = nullptr);
     ~ScreenRecordingController() override;
 
-    void open(const QRect& physicalRegion);
+    // The region is in desktop points on macOS and physical pixels on Windows.
+    void open(const QRect& recordingRegion);
+    using PermissionCheck = std::function<bool(bool microphone, bool input, bool notify)>;
+    void setPermissionCheck(PermissionCheck check);
     bool isOpen() const;
     bool isRecording() const;
     void startRecording();
     void stopRecordingAndCopy();
     void openRecordingFolder();
+    // The same recording lifecycle as the UI, with per-session options that do not
+    // overwrite user preferences. Errors are reported in state instead of modal dialogs.
+    [[nodiscard]] QJsonObject automationState() const;
+    [[nodiscard]] bool startAutomation(const QRect& region, const QJsonObject& options,
+                                       QString* error);
+    [[nodiscard]] bool controlAutomation(const QString& action, const QJsonObject& payload,
+                                         QString* error);
+    void detachAutomation();
+
+  signals:
+    void finalized();
 
   private:
     struct Impl;

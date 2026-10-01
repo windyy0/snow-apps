@@ -5,8 +5,11 @@
 #include "snow_shot/presentation/screenshotoverlayeventsink.h"
 #include "snow_shot/presentation/screenshotselectiongeometry.h"
 
+#include "snow_shot/image/screenshotregiongeometry.h"
+#include "snow_draw_engine_qt/snow_canvas_path_geometry.h"
 #include <QPoint>
 #include <QPointF>
+#include <QTimer>
 #include <Qt>
 
 #include <functional>
@@ -63,6 +66,7 @@ struct ScreenshotOverlayInputActions {
         [](const QPointF&) {};
     std::function<bool()> copyColorPickerColorToClipboard = []() { return false; };
     std::function<bool()> cycleColorPickerFormat = []() { return false; };
+    std::function<bool()> toggleColorPickerCoordinateMode = []() { return false; };
     std::function<bool(snow_shot::platform::PhysicalCursorDirection direction)> moveCursorOnePixel =
         [](snow_shot::platform::PhysicalCursorDirection) { return false; };
 
@@ -90,8 +94,8 @@ struct ScreenshotOverlayInputActions {
     std::function<void()> pauseScrollingCapture = []() {};
     std::function<void()> resumeScrollingCapture = []() {};
 
-    // Tool-switch shortcuts mirror the main toolbar's availability. Contextual
-    // screenshot shortcuts remain active while the toolbar is temporarily hidden.
+    // Confirmed-session tool shortcuts follow toolbar visibility. Selection-stage
+    // shortcuts prepare the current region before using the same toolbar commands.
     std::function<bool()> mainToolbarVisible = []() { return true; };
 
     std::function<void(ScreenshotOverlayWindow* overlay, const QPointF& localPosition)>
@@ -103,6 +107,16 @@ struct ScreenshotOverlayInputActions {
         [](ScreenshotIntelligentSelectionTarget) {};
     std::function<bool()> recaptureAvailable = []() { return false; };
     std::function<bool()> cancelCaptureViaShortcut = []() { return false; };
+    std::function<void(const QPoint&, quint32)> requestUiSelectorHitTestOnDisplay;
+    std::function<bool(const QString&)> canActivateScreenshotShortcut = [](const QString&) {
+        return true;
+    };
+    std::function<bool(const QString&)> canActivateDrawingShortcut = [](const QString&) {
+        return true;
+    };
+    // Suppress automatic tool restoration and pending quick actions before an
+    // explicit command confirms the selection and shows the toolbar.
+    std::function<void()> prepareExplicitSelectionCommand = []() {};
 };
 
 struct ScreenshotOverlayInputHandlerContext {
@@ -131,6 +145,7 @@ class ScreenshotOverlayInputHandler final {
     [[nodiscard]] bool externalDragActive() const {
         return m_externalDragActive;
     }
+    [[nodiscard]] bool acceptInput(bool genuine = true);
     void beginExternalSelectionDrag(const QPointF& canvasPosition);
     void updateExternalSelectionDrag(const QPointF& canvasPosition);
 
@@ -149,6 +164,11 @@ class ScreenshotOverlayInputHandler final {
     [[nodiscard]] ScreenshotOverlayRightClickResult
     handleRightClick(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
     void handleUnhandledLeftDoubleClick();
+    bool handleRegionDoubleClick(ScreenshotOverlayWindow* overlay, const QPointF& position);
+    void setRegionType(ScreenshotRegionType type);
+    bool cycleRegionType(bool reverse);
+    bool removeRegionVertex();
+    bool customRegionInputActive() const;
     void handleUnhandledMiddleClick();
     [[nodiscard]] bool handleWheel(ScreenshotOverlayWindow* overlay, const QPointF& localPosition,
                                    const QPoint& angleDelta, const QPoint& pixelDelta);
@@ -186,8 +206,15 @@ class ScreenshotOverlayInputHandler final {
     // This is also used by non-interactive quick actions that select a whole
     // monitor or a focused window after the capture frame arrives.
     void confirmSelection();
+    [[nodiscard]] bool canPrepareSelectionForToolbarShortcut() const;
+    // Commit the region, activate the command, then present its resulting tool.
+    [[nodiscard]] bool activateToolbarShortcutForSelection(const std::function<bool()>& activate);
+    void beginRegionOperation(bool subtract);
+    bool cancelRegionOperation();
+    [[nodiscard]] bool regionOperationActive() const;
 
   private:
+    void confirmSelection(const std::function<void()>& beforePresentation);
     [[nodiscard]] QPointF virtualPositionForOverlay(const ScreenshotOverlayWindow* overlay,
                                                     const QPointF& localPosition) const;
     [[nodiscard]] QPoint physicalPositionForCanvasPoint(const QPointF& point) const;
@@ -196,12 +223,24 @@ class ScreenshotOverlayInputHandler final {
     [[nodiscard]] ScreenshotSelectionDragMode
     dragModeForPosition(const ScreenshotOverlayWindow* overlay, const QPointF& localPosition,
                         bool borderOnly) const;
+    [[nodiscard]] bool outsideClickRecreatesSelection() const;
     [[nodiscard]] QRectF selectionRectForDrag(ScreenshotSelectionDragMode dragMode,
                                               const QPointF& position) const;
     void restoreToolAfterSelectionResize();
     void restoreScrollingCaptureAfterFailedResize();
     void finishTransientDrag();
 
+    void flushFreehandPoints(bool finish = false);
+    void updateRegionDraft(const QPointF& pointer, bool includePointer);
+    bool finishRegionDraft();
+    QVector<QPointF> m_regionPoints;
+    qsizetype m_freehandRawStart = 0;
+    SnowCanvasStrokeFilter m_freehandFilter;
+    QTimer m_regionPreviewTimer;
+    QPointF m_pendingRegionPointer;
+    bool m_pendingRegionEdge = false;
+    bool m_freehandPressed = false;
+    bool m_consumeRegionRelease = false;
     ScreenshotOverlayInputHandlerContext m_context;
     bool m_externalDragActive = false;
     std::optional<ScreenshotActiveTool> m_toolBeforeSelectionResize;

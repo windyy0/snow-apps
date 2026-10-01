@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <new>
 
 #include <QFile>
@@ -18,19 +19,6 @@ namespace snow_shot::image_codec {
 namespace {
 
 constexpr std::size_t kBackendErrorCapacity = 1024;
-
-class BackendBuffer final {
-  public:
-    BackendBuffer() = default;
-    ~BackendBuffer() {
-        snow_shot_image_codec_release_buffer(&value);
-    }
-
-    BackendBuffer(const BackendBuffer&) = delete;
-    BackendBuffer& operator=(const BackendBuffer&) = delete;
-
-    SnowShotImageCodecBuffer value{};
-};
 
 void releaseBackendBuffer(void* rawBuffer) {
     auto* buffer = static_cast<SnowShotImageCodecBuffer*>(rawBuffer);
@@ -185,6 +173,11 @@ uint32_t bridgeFormat(snow::image::Format format) noexcept {
     return SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN;
 }
 
+snow::image::EncoderOptionRange
+encoderOptionRange(const SnowShotImageCodecEncoderOptionRange& range) noexcept {
+    return {range.minimum, range.maximum, range.default_value};
+}
+
 uint8_t bridgeChromaSubsampling(snow::image::ChromaSubsampling value) noexcept {
     switch (value) {
     case snow::image::ChromaSubsampling::none:
@@ -259,93 +252,119 @@ QByteArray encodeImage(const QImage& image, snow::image::Format format,
     return encoded;
 }
 
-QImage decodeBytes(const QByteArray& encoded, snow::image::Format expectedFormat) {
-    const uint32_t bridgeExpectedFormat = bridgeFormat(expectedFormat);
-    if (!backendAbiIsCompatible() || encoded.isEmpty() ||
-        bridgeExpectedFormat == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN) {
-        return {};
+QColorSpace decodedColorSpace(const SnowShotImageCodecColorEncoding& color) {
+    if (color.icc_profile != nullptr && color.icc_profile_size != 0 &&
+        color.icc_profile_size <= static_cast<uint64_t>(std::numeric_limits<qsizetype>::max())) {
+        // QColorSpace must own the ICC bytes independently of the native pixel buffer.
+        const QByteArray profile(reinterpret_cast<const char*>(color.icc_profile),
+                                 static_cast<qsizetype>(color.icc_profile_size));
+        const QColorSpace space = QColorSpace::fromIccProfile(profile);
+        if (space.isValid())
+            return space;
     }
 
-    BackendBuffer output;
-    std::array<char, kBackendErrorCapacity> backendError{};
-    const int32_t succeeded = snow_shot_image_codec_decode_rgba8(
-        reinterpret_cast<const uint8_t*>(encoded.constData()),
-        static_cast<uint64_t>(encoded.size()), bridgeExpectedFormat, &output.value,
-        backendError.data(), static_cast<uint64_t>(backendError.size()));
-    if (succeeded == 0 || output.value.data == nullptr || output.value.width == 0 ||
-        output.value.height == 0 ||
-        output.value.width > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-        output.value.height > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+    QColorSpace::Primaries primaries;
+    switch (color.primaries) {
+    case SNOW_SHOT_IMAGE_CODEC_PRIMARIES_SRGB:
+        primaries = QColorSpace::Primaries::SRgb;
+        break;
+    case SNOW_SHOT_IMAGE_CODEC_PRIMARIES_DISPLAY_P3:
+        primaries = QColorSpace::Primaries::DciP3D65;
+        break;
+    case SNOW_SHOT_IMAGE_CODEC_PRIMARIES_ADOBE_RGB:
+        primaries = QColorSpace::Primaries::AdobeRgb;
+        break;
+    case SNOW_SHOT_IMAGE_CODEC_PRIMARIES_REC2020:
+        primaries = QColorSpace::Primaries::Bt2020;
+        break;
+    default:
         return {};
     }
-
-    const uint64_t rowBytes = static_cast<uint64_t>(output.value.width) * 4U;
-    if (output.value.row_stride != rowBytes ||
-        output.value.height > std::numeric_limits<uint64_t>::max() / rowBytes) {
+    QColorSpace::TransferFunction transfer;
+    switch (color.transfer) {
+    case SNOW_SHOT_IMAGE_CODEC_TRANSFER_LINEAR:
+        transfer = QColorSpace::TransferFunction::Linear;
+        break;
+    case SNOW_SHOT_IMAGE_CODEC_TRANSFER_SRGB:
+        transfer = QColorSpace::TransferFunction::SRgb;
+        break;
+    case SNOW_SHOT_IMAGE_CODEC_TRANSFER_GAMMA:
+        transfer = QColorSpace::TransferFunction::Gamma;
+        break;
+    case SNOW_SHOT_IMAGE_CODEC_TRANSFER_PQ:
+        transfer = QColorSpace::TransferFunction::St2084;
+        break;
+    case SNOW_SHOT_IMAGE_CODEC_TRANSFER_HLG:
+        transfer = QColorSpace::TransferFunction::Hlg;
+        break;
+    default:
         return {};
     }
-    const uint64_t requiredSize = rowBytes * output.value.height;
-    if (requiredSize > output.value.size ||
-        requiredSize > static_cast<uint64_t>(std::numeric_limits<std::size_t>::max())) {
-        return {};
-    }
-
-    QImage result(static_cast<int>(output.value.width), static_cast<int>(output.value.height),
-                  QImage::Format_RGBA8888);
-    if (result.isNull() || static_cast<uint64_t>(result.bytesPerLine()) < rowBytes) {
-        return {};
-    }
-    const std::size_t sourceStride = static_cast<std::size_t>(rowBytes);
-    for (uint32_t row = 0; row < output.value.height; ++row) {
-        std::memcpy(result.scanLine(static_cast<int>(row)),
-                    output.value.data + static_cast<std::size_t>(row) * sourceStride, sourceStride);
-    }
-    return result;
+    return QColorSpace(primaries, transfer);
 }
 
-QImage decodeBgraBytes(const QByteArray& encoded, snow::image::Format expectedFormat) {
-    const uint32_t bridgeExpectedFormat = bridgeFormat(expectedFormat);
-    if (!backendAbiIsCompatible() || encoded.isEmpty() ||
-        bridgeExpectedFormat == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN) {
-        return {};
-    }
+using OwnedBackendBuffer =
+    std::unique_ptr<SnowShotImageCodecBuffer, decltype(&releaseBackendBuffer)>;
 
-    auto* output = new (std::nothrow) SnowShotImageCodecBuffer{};
-    if (output == nullptr) {
-        return {};
-    }
-    std::array<char, kBackendErrorCapacity> backendError{};
-    const int32_t succeeded = snow_shot_image_codec_decode_bgra8(
-        reinterpret_cast<const uint8_t*>(encoded.constData()),
-        static_cast<uint64_t>(encoded.size()), bridgeExpectedFormat, output, backendError.data(),
-        static_cast<uint64_t>(backendError.size()));
-    if (succeeded == 0 || output->data == nullptr || output->width == 0 || output->height == 0 ||
-        output->width > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+QImage takeDecodedImage(OwnedBackendBuffer output, QImage::Format format) {
+    if (!output || output->data == nullptr || output->width == 0 || output->height == 0 ||
+        output->width > static_cast<uint32_t>(std::numeric_limits<int>::max() / 4) ||
         output->height > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
-        releaseBackendBuffer(output);
         return {};
     }
-
     const uint64_t rowBytes = static_cast<uint64_t>(output->width) * 4U;
     if (output->row_stride != rowBytes ||
         output->height > std::numeric_limits<uint64_t>::max() / rowBytes) {
-        releaseBackendBuffer(output);
         return {};
     }
     const uint64_t requiredSize = rowBytes * output->height;
     if (requiredSize > output->size ||
-        requiredSize > static_cast<uint64_t>(std::numeric_limits<std::size_t>::max())) {
-        releaseBackendBuffer(output);
+        requiredSize > static_cast<uint64_t>(std::numeric_limits<qsizetype>::max())) {
         return {};
     }
 
+    const QColorSpace space = decodedColorSpace(output->color);
     QImage result(output->data, static_cast<int>(output->width), static_cast<int>(output->height),
-                  static_cast<int>(output->row_stride), QImage::Format_ARGB32,
-                  &releaseBackendBuffer, output);
-    if (result.isNull()) {
-        releaseBackendBuffer(output);
-    }
+                  static_cast<qsizetype>(rowBytes), format, &releaseBackendBuffer, output.get());
+    if (result.isNull())
+        return {};
+    // Both packed formats share this owner. Attach metadata while the QImage is unique
+    // so neither wrapping the pixels nor setting the profile introduces an image copy.
+    static_cast<void>(output.release());
+    result.setColorSpace(space);
     return result;
+}
+
+QImage decodeBytes(const QByteArray& encoded, snow::image::Format expectedFormat,
+                   uint32_t preferredIconExtent = 0,
+                   QImage::Format pixelFormat = QImage::Format_RGBA8888) {
+    const uint32_t bridgeExpectedFormat = bridgeFormat(expectedFormat);
+    if (!backendAbiIsCompatible() || encoded.isEmpty() ||
+        bridgeExpectedFormat == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN) {
+        return {};
+    }
+
+    OwnedBackendBuffer output(new (std::nothrow) SnowShotImageCodecBuffer{}, &releaseBackendBuffer);
+    if (!output)
+        return {};
+    std::array<char, kBackendErrorCapacity> backendError{};
+    const auto decoder = preferredIconExtent != 0 ? snow_shot_image_codec_decode_icon_rgba8
+                                                  : (pixelFormat == QImage::Format_ARGB32
+                                                         ? snow_shot_image_codec_decode_bgra8
+                                                         : snow_shot_image_codec_decode_rgba8);
+    const int32_t succeeded =
+        decoder(reinterpret_cast<const uint8_t*>(encoded.constData()),
+                static_cast<uint64_t>(encoded.size()),
+                preferredIconExtent != 0 ? preferredIconExtent : bridgeExpectedFormat, output.get(),
+                backendError.data(), static_cast<uint64_t>(backendError.size()));
+    if (succeeded == 0) {
+        return {};
+    }
+    return takeDecodedImage(std::move(output), pixelFormat);
+}
+
+QImage decodeBgraBytes(const QByteArray& encoded, snow::image::Format expectedFormat) {
+    return decodeBytes(encoded, expectedFormat, 0, QImage::Format_ARGB32);
 }
 
 bool inspectBytes(const QByteArray& encoded, snow::image::Format expectedFormat,
@@ -372,6 +391,27 @@ QByteArray readFile(const QString& path) {
 }
 
 } // namespace
+
+std::optional<snow::image::EncoderInfo> encoderInfo(snow::image::Format format) {
+    const uint32_t requestedFormat = bridgeFormat(format);
+    if (!backendAbiIsCompatible() || requestedFormat == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN)
+        return std::nullopt;
+    SnowShotImageCodecEncoderInfo bridge{};
+    bridge.struct_size = sizeof(bridge);
+    bridge.abi_version = SNOW_SHOT_IMAGE_CODEC_ABI_VERSION;
+    if (snow_shot_image_codec_encoder_info(requestedFormat, &bridge) == 0 ||
+        bridge.format != requestedFormat) {
+        return std::nullopt;
+    }
+    snow::image::EncoderInfo result;
+    result.format = format;
+    result.features = static_cast<snow::image::EncoderFeature>(bridge.features);
+    result.quality = encoderOptionRange(bridge.quality);
+    result.effort = encoderOptionRange(bridge.effort);
+    result.lossless_effort = encoderOptionRange(bridge.lossless_effort);
+    result.compression_level = encoderOptionRange(bridge.compression_level);
+    return result;
+}
 
 bool encodeToDevice(const ScreenshotImageRowSource& source, QIODevice* device,
                     snow::image::Format format, const snow::image::EncodeOptions& options,
@@ -496,9 +536,9 @@ bool resizeToRgba8(const ScreenshotImageRowSource& source, const QSize& outputSi
     return true;
 }
 
-QByteArray encodePng(const QImage& image) {
+QByteArray encodePng(const QImage& image, int compressionLevel) {
     snow::image::EncodeOptions options;
-    options.compression_level = 1;
+    options.compression_level = qBound(0, compressionLevel, 9);
     return encodeImage(image, snow::image::Format::png, options, nullptr);
 }
 
@@ -510,6 +550,7 @@ ScreenshotImageRowSource srgbRowSource(const QImage& image) {
     if (rgba.isNull()) {
         return {};
     }
+    rgba.setColorSpace(srgb);
     ScreenshotImageRowSource source;
     source.size = rgba.size();
     source.backingImage = rgba;
@@ -530,11 +571,11 @@ ScreenshotImageRowSource srgbRowSource(const QImage& image) {
     return source;
 }
 
-QByteArray encodePng(const ScreenshotImageRowSource& source) {
+QByteArray encodePng(const ScreenshotImageRowSource& source, int compressionLevel) {
     QByteArray bytes;
     QBuffer buffer(&bytes);
     snow::image::EncodeOptions options;
-    options.compression_level = 1;
+    options.compression_level = qBound(0, compressionLevel, 9);
     if (!buffer.open(QIODevice::WriteOnly) ||
         !encodeToDevice(source, &buffer, snow::image::Format::png, options)) {
         return {};
@@ -551,6 +592,28 @@ QByteArray encodeWebp(const QImage& image, int quality) {
 QImage decode(const QByteArray& encoded, snow::image::Format expectedFormat,
               const char* /*nameHint*/) {
     return decodeBytes(encoded, expectedFormat);
+}
+QImage decodeIconFile(const QString& path, uint32_t preferredExtent) {
+    if (preferredExtent == 0)
+        return {};
+    return decodeBytes(readFile(path), snow::image::Format::ico, preferredExtent);
+}
+
+QSize inspectSize(const QByteArray& encoded, snow::image::Format expectedFormat) {
+    const auto format = bridgeFormat(expectedFormat);
+    if (!backendAbiIsCompatible() || encoded.isEmpty() ||
+        format == SNOW_SHOT_IMAGE_CODEC_FORMAT_UNKNOWN)
+        return {};
+    SnowShotImageCodecImageInfo information{};
+    std::array<char, kBackendErrorCapacity> backendError{};
+    if (snow_shot_image_codec_inspect(reinterpret_cast<const uint8_t*>(encoded.constData()),
+                                      static_cast<uint64_t>(encoded.size()), format, &information,
+                                      backendError.data(),
+                                      static_cast<uint64_t>(backendError.size())) == 0 ||
+        information.width > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+        information.height > static_cast<uint32_t>(std::numeric_limits<int>::max()))
+        return {};
+    return QSize(static_cast<int>(information.width), static_cast<int>(information.height));
 }
 
 QImage decodeFile(const QString& path, snow::image::Format expectedFormat) {

@@ -1,14 +1,219 @@
 #!/usr/bin/env python3
 """Offscreen build-script contract tests; no compiler, Qt, or network required."""
+import hashlib
 import json
 import os
+import platform
+import plistlib
 from pathlib import Path
+import signal
 import shutil
+import struct
 import subprocess
 import tempfile
+import threading
 import unittest
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class MacOSBundleMetadata(unittest.TestCase):
+    def test_mini_product_metadata_and_native_translations(self):
+        resources = ROOT / 'snow_shot/packaging/macos'
+        plist = plistlib.loads((resources / 'Info-mini.plist.in').read_bytes())
+        self.assertEqual(plist['CFBundleName'], 'Snow Shot Mini')
+        self.assertEqual(plist['CFBundleDisplayName'], 'Snow Shot Mini')
+        self.assertEqual(plist['CFBundleIdentifier'], 'com.snowshot.snow_shot_mini')
+        self.assertEqual(plist['CFBundleExecutable'], '${MACOSX_BUNDLE_EXECUTABLE_NAME}')
+        for language in plist['CFBundleLocalizations']:
+            strings = (resources / 'mini' / (language + '.lproj') / 'InfoPlist.strings').read_text(encoding='utf-8')
+            self.assertIn('Snow Shot Mini', strings)
+        instructions = (resources / 'dmg-mini-background.svg').read_text(encoding='utf-8')
+        self.assertIn('Snow Shot Mini', instructions)
+        self.assertIn('Snow Shot Mini.app', (resources / 'dmg-mini-layout.applescript').read_text(encoding='utf-8'))
+
+    def test_dmg_instructions_cover_all_bundle_languages(self):
+        resources = ROOT / 'snow_shot/packaging/macos'
+        plist = plistlib.loads((resources / 'Info.plist.in').read_bytes())
+        background = ET.parse(resources / 'dmg-background.svg').getroot()
+        background_source = (resources / 'dmg-background.svg').read_text()
+        package_source = (ROOT / 'cmake/SnowShotMacOSPackage.cmake').read_text()
+        self.assertIn('@SNOW_DMG_WORDMARK@', background_source)
+        self.assertNotIn('>Snow Shot</', background_source)
+        self.assertIn('icons/resources/snow-shot-logo.svg', package_source)
+        self.assertIn('configure_file(', package_source)
+        language_key = '{http://www.w3.org/XML/1998/namespace}lang'
+        groups = {element.attrib[language_key]: element
+                  for element in background.iter('{http://www.w3.org/2000/svg}g')
+                  if language_key in element.attrib}
+        self.assertEqual(set(groups), set(plist['CFBundleLocalizations']))
+        for language, group in groups.items():
+            with self.subTest(language=language):
+                lines = [element.text for element in group]
+                self.assertEqual(len(lines), 2, 'Both install and launch instructions are required')
+                self.assertTrue(all(line and 'Snow Shot' in line for line in lines))
+        self.assertIn('应用程序', ''.join(groups['zh-Hans'].itertext()))
+        self.assertIn('應用程式', ''.join(groups['zh-Hant'].itertext()))
+
+    def test_product_metadata_and_native_translations(self):
+        resources = ROOT / 'snow_shot/packaging/macos'
+        plist = plistlib.loads((resources / 'Info.plist.in').read_bytes())
+        self.assertEqual(plist['CFBundleInfoDictionaryVersion'], '6.0')
+        self.assertEqual(plist['CFBundleName'], 'Snow Shot')
+        self.assertEqual(plist['CFBundleDisplayName'], 'Snow Shot')
+        self.assertEqual(plist['CFBundleIdentifier'], 'com.snowshot.snow_shot')
+        self.assertEqual(plist['LSApplicationCategoryType'], 'public.app-category.productivity')
+        self.assertIs(plist['LSUIElement'], True)
+        self.assertEqual(plist['NSHumanReadableCopyright'], '${SNOW_SHOT_COPYRIGHT}')
+        for language in plist['CFBundleLocalizations']:
+            strings = (resources / (language + '.lproj') / 'InfoPlist.strings').read_text()
+            for key in ('CFBundleName', 'CFBundleDisplayName', 'NSAppleEventsUsageDescription',
+                        'NSMicrophoneUsageDescription', 'NSAudioCaptureUsageDescription'):
+                self.assertIn('"' + key + '" = "', strings)
+        main = (ROOT / 'snow_shot/src/app/main.cpp').read_text()
+        self.assertIn('setApplicationDisplayName(', main)
+        self.assertIn('QString applicationName = snow_shot::app::edition::applicationName()', main)
+        edition = (ROOT / 'snow_shot/include/snow_shot/app/edition.h').read_text(encoding='utf-8')
+        self.assertIn('QStringLiteral("snow_shot_mini") : QStringLiteral("snow_shot")', edition)
+
+    def test_dmg_staging_preserves_bundle_contents(self):
+        cmake = ROOT / '.tools/macos-dev/bin/cmake'
+        cmake = str(cmake) if cmake.is_file() else shutil.which('cmake')
+        self.assertIsNotNone(cmake)
+        for target, product in [('snow_shot', 'Snow Shot'), ('snow_shot_mini', 'Snow Shot Mini')]:
+            with self.subTest(product=product), tempfile.TemporaryDirectory(prefix='snow dmg staging ') as directory:
+                stage = Path(directory)
+                bundle = stage / (target + '.app')
+                files = {'Contents/Info.plist': b'plist',
+                         'Contents/MacOS/' + target: b'executable',
+                         'Contents/_CodeSignature/CodeResources': b'signature'}
+                for name, content in files.items():
+                    path = bundle / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(content)
+                binary = bundle / 'Contents/MacOS' / target
+                binary.chmod(0o755)
+                result = subprocess.run([cmake, '-DCPACK_TEMPORARY_DIRECTORY=' + str(stage),
+                                         '-DCPACK_SNOW_SHOT_BUNDLE_NAME=' + target,
+                                         '-DCPACK_SNOW_SHOT_PRODUCT_NAME=' + product,
+                                         '-P', str(ROOT / 'cmake/PrepareSnowShotMacOSDmg.cmake')],
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(bundle.exists())
+                for name, content in files.items():
+                    self.assertEqual((stage / (product + '.app') / name).read_bytes(), content)
+                self.assertTrue(os.access(stage / (product + '.app') / 'Contents/MacOS' / target, os.X_OK))
+
+    def test_mini_payload_contains_only_its_helpers_without_models(self):
+        cmake = shutil.which('cmake')
+        self.assertIsNotNone(cmake)
+        manifest = ROOT / 'snow_shot/packaging/snow-shot-ocr-asset-manifest.json'
+        model = next(item for item in json.loads(manifest.read_text())['models']
+                     if item['type'] == 'small')
+        with tempfile.TemporaryDirectory(prefix='snow mini payload ') as directory:
+            bundle = Path(directory) / 'snow_shot_mini.app'
+            runtime = bundle / 'Contents/MacOS'
+            assets = bundle / 'Contents/Resources/assets'
+            files = [runtime / name for name in ('snow_shot_mini', 'snow-shot-mini-mcp',
+                                                'snow-ocr-process', 'crashpad_handler')]
+            files.extend([assets / 'ocr/asset-manifest.json',
+                          bundle / 'Contents/Resources/audios/camera_shutter.mp3',
+                          bundle / 'Contents/Resources/snow-shot.icns'])
+            files.extend(bundle / ('Contents/Resources/' + language + '.lproj/InfoPlist.strings')
+                         for language in ('en', 'zh-Hans', 'zh-Hant'))
+            files.extend(bundle / ('Contents/Resources/snow-shot-mini/licenses/' + relative)
+                         for relative in ('LICENSE', 'components/snow_rust_ffi/COPYRIGHT',
+                                          'third-party/qt/LICENSES/Qt-GPL-exception-1.0.txt',
+                                          'third-party/vcpkg/zlib/copyright'))
+            for path in files:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('fixture')
+
+            def verify(static=True):
+                return subprocess.run([
+                    cmake, '-DSNOW_SHOT_MINI_APP=' + str(bundle),
+                    '-DSNOW_SHOT_MINI_STATIC=' + ('ON' if static else 'OFF'),
+                    '-DSNOW_SHOT_MINI_MCP=ON', '-P',
+                    str(ROOT / 'cmake/AssertSnowShotMiniMacOSPayload.cmake')],
+                    text=True, capture_output=True)
+
+            result = verify()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for relative in ('Contents/MacOS/snow_shot', 'Contents/MacOS/snow-shot-mcp',
+                             'Contents/MacOS/libonnxruntime.dylib',
+                             'Contents/Frameworks/Unused.framework/Unused',
+                             'Contents/PlugIns/imageformats/unused.dylib',
+                             'Contents/Resources/assets/qrcode/detect.prototxt',
+                             'Contents/Resources/assets/ocr/models/' + model['id'] + '/' + model['files'][0]['name'],
+                             'Contents/Resources/assets/ocr/models/unused/engine.onnx',
+                             'Contents/Resources/assets/ocr/development-libraries.json',
+                             'Contents/Resources/audios/unused.mp3',
+                             'Contents/Resources/unused-model.zip',
+                             'Contents/Resources/snow_shot_en_US.qm',
+                             'Contents/Resources/en.lproj/snow_shot_en_US.qm',
+                             'Contents/Resources/snow-shot/licenses/LICENSE',
+                             'Contents/Resources/snow-shot-mini/unused-model.zip'):
+                with self.subTest(relative=relative):
+                    forbidden = bundle / relative
+                    forbidden.parent.mkdir(parents=True, exist_ok=True)
+                    forbidden.write_text('forbidden')
+                    self.assertNotEqual(verify().returncode, 0)
+                    forbidden.unlink()
+                    parent = forbidden.parent
+                    while parent != bundle:
+                        try:
+                            parent.rmdir()
+                        except OSError:
+                            break
+                        parent = parent.parent
+                    self.assertEqual(verify().returncode, 0)
+            for relative in ('Contents/Resources/models', 'Contents/Resources/assets/ocr/models'):
+                unused_directory = bundle / relative
+                unused_directory.mkdir()
+                self.assertNotEqual(verify().returncode, 0)
+                unused_directory.rmdir()
+            qt_config = bundle / 'Contents/Resources/qt.conf'
+            qt_config.write_text('[Paths]\nPlugins = PlugIns\n')
+            self.assertNotEqual(verify().returncode, 0)
+            result = verify(static=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            qt_config.unlink()
+            self.assertEqual(verify().returncode, 0)
+            files[4].unlink()
+            self.assertNotEqual(verify().returncode, 0)
+
+    def test_finder_automation_has_usage_description(self):
+        plist = plistlib.loads((ROOT / 'snow_shot/packaging/macos/Info.plist.in').read_bytes())
+        self.assertEqual(plist['NSAppleEventsUsageDescription'],
+                         'Snow Shot reads selected image files from Finder to pin them to the screen.')
+
+    def test_native_languages_match_the_application_catalogs(self):
+        plist = plistlib.loads((ROOT / 'snow_shot/packaging/macos/Info.plist.in').read_bytes())
+        native_languages = {'en_US': 'en', 'zh_CN': 'zh-Hans', 'zh_TW': 'zh-Hant'}
+        catalog_languages = {ET.parse(path).getroot().attrib['language']
+                             for path in (ROOT / 'snow_shot/i18n').rglob('*.ts')}
+        self.assertEqual(set(plist['CFBundleLocalizations']),
+                         {native_languages[language] for language in catalog_languages})
+        self.assertEqual(plist['CFBundleDevelopmentRegion'], native_languages['en_US'])
+
+    def test_pkg_config_apple_framework_options_are_removed_as_pairs(self):
+        module = ROOT / 'cmake/SnowPkgConfigAppleFrameworks.cmake'
+        managed_cmake = ROOT / '.tools/macos-dev/bin/cmake'
+        cmake = str(managed_cmake) if managed_cmake.is_file() else shutil.which('cmake')
+        self.assertIsNotNone(cmake, 'CMake is required for the framework option contract test')
+        with tempfile.TemporaryDirectory(prefix='snow cmake test ') as directory:
+            script = Path(directory) / 'test.cmake'
+            script.write_text(f'''include([[{module.as_posix()}]])
+snow_strip_pkg_config_apple_framework_options(result
+    -pthread -framework VideoToolbox -framework CoreMedia -Wl,-dead_strip)
+if(NOT result STREQUAL "-pthread;-Wl,-dead_strip")
+    message(FATAL_ERROR "Unexpected sanitized options: ${{result}}")
+endif()
+''')
+            result = subprocess.run([cmake, '-P', str(script)], text=True,
+                                    capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class MacOSBuildScripts(unittest.TestCase):
@@ -28,29 +233,101 @@ with open(os.environ['SNOW_TEST_LOG'], 'a') as log:
     log.write(json.dumps([name] + sys.argv[1:]) + '\\n')
 if name == 'uname': print('Darwin' if sys.argv[1] == '-s' else 'arm64')
 if name == 'xcode-select': print('/mock Xcode')
+if name == 'git' and 'rev-parse' in sys.argv: print('4497409a47f19db373a410a0efb84eca4747adbf')
+if name == 'cmake' and '--version' in sys.argv: print('cmake version 4.4.3')
 if name == 'cmake' and '--preset' in sys.argv and os.environ.get('FAIL_CONFIGURE'): sys.exit(17)
+if name == 'cmake' and '--preset' in sys.argv and '--build' not in sys.argv:
+    preset = sys.argv[sys.argv.index('--preset') + 1]
+    root = pathlib.Path(os.environ['SNOW_TEST_ROOT'])
+    build = root / 'build' / preset
+    build.mkdir(parents=True, exist_ok=True)
+    static = preset.endswith(('-release', '-fast'))
+    arch = 'arm64' if '-arm64-' in preset else 'x64'
+    triplet = f'{arch}-osx-snow-shot' + ('-static' if static else '')
+    installed = root / '.tools/macos/installed' / ('static' if static else 'dynamic')
+    entries = [
+        f'Qt6_DIR:UNINITIALIZED={os.environ["Qt6_DIR"]}',
+        f'VCPKG_TARGET_TRIPLET:STRING={triplet}',
+        f'VCPKG_INSTALLED_DIR:PATH={installed}',
+        f'CMAKE_HOME_DIRECTORY:INTERNAL={root}', 'CMAKE_GENERATOR:INTERNAL=Ninja',
+    ]
+    mini = 'ON' if arch == 'arm64' else 'OFF'
+    for argument in sys.argv:
+        if argument.startswith('-DSNOW_APPS_BUILD_SNOW_SHOT_MINI='):
+            mini = argument.split('=', 1)[1]
+    entries.append(f'SNOW_APPS_BUILD_SNOW_SHOT_MINI:BOOL={mini}')
+    if preset.endswith('-release'):
+        entries += ['CMAKE_BUILD_TYPE:STRING=Release', 'SNOW_APPS_BUILD_TESTS:BOOL=OFF',
+                    'SNOW_APPS_BUILD_BENCHMARKS:BOOL=OFF', 'SNOW_APPS_RELEASE_STATIC:BOOL=ON',
+                    'SNOW_APPS_QT_STATIC:BOOL=ON', 'SNOW_APPS_PACKAGE_SNOW_SHOT:BOOL=ON',
+                    'SNOW_SHOT_IMAGE_CODEC_BACKEND_STATIC:INTERNAL=ON',
+                    'QT_FEATURE_static:INTERNAL=ON']
+    (build / 'CMakeCache.txt').write_text('\\n'.join(entries) + '\\n')
+if name == 'cmake' and '--build' in sys.argv:
+    preset = sys.argv[sys.argv.index('--preset') + 1].removeprefix('build-')
+    for target in ('snow_shot', 'snow_shot_mini'):
+        if target in sys.argv:
+            binary = pathlib.Path(os.environ['SNOW_TEST_ROOT']) / 'build' / preset / target / f'{target}.app/Contents/MacOS/{target}'
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.touch()
+            binary.chmod(0o755)
+if name == 'cmake' and '--install' in sys.argv and '--prefix' in sys.argv:
+    prefix = pathlib.Path(sys.argv[sys.argv.index('--prefix') + 1])
+    component = sys.argv[sys.argv.index('--component') + 1]
+    target = 'snow_shot_mini' if component == 'SnowShotMini' else 'snow_shot'
+    binary = prefix / f'{target}.app/Contents/MacOS/{target}'
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.touch()
+    binary.chmod(0o755)
+if name == 'ps' and os.environ.get('SNOW_TEST_PS_OUTPUT'): print(os.environ['SNOW_TEST_PS_OUTPUT'])
+if name == 'security' and 'import' in sys.argv:
+    (pathlib.Path(os.environ['SNOW_TEST_ROOT']) / '.codesign-identity').touch()
+if name == 'security' and 'find-identity' in sys.argv:
+    identity = os.environ.get('SNOW_TEST_CODESIGN_IDENTITY', 'Snow Shot Development (Local)')
+    if not identity and (pathlib.Path(os.environ['SNOW_TEST_ROOT']) /
+                         '.codesign-identity').exists():
+        identity = 'Snow Shot Development (Local)'
+    if identity:
+        print(f'  1) 0123456789ABCDEF0123456789ABCDEF01234567 "{identity}" '
+              '(CSSMERR_TP_NOT_TRUSTED)')
+if name == 'openssl':
+    for option in ('-keyout', '-out'):
+        if option in sys.argv:
+            pathlib.Path(sys.argv[sys.argv.index(option) + 1]).touch()
 """
         tools = ("cmake", "cpack", "ninja", "cargo", "rustup", "pkg-config", "uname",
-                 "open", "xcode-select", "xcrun", "git", "lsregister")
+                 "open", "ps", "xcode-select", "xcrun", "git", "lsregister", "security",
+                 "openssl")
         for name in tools:
             path = self.bin / name
             path.write_text(mock)
             path.chmod(0o755)
         vcpkg = self.root / ".tools/vcpkg"
         vcpkg.mkdir()
+        (vcpkg / ".git").mkdir()
         (vcpkg / "bootstrap-vcpkg.sh").touch()
         shutil.copyfile(self.bin / "git", vcpkg / "vcpkg")
         (vcpkg / "vcpkg").chmod(0o755)
         qt = self.root / "Qt kit/lib/cmake/Qt6"
         qt.mkdir(parents=True)
         (qt / "Qt6Config.cmake").touch()
+        stamp = self.root / "Qt kit/share/snow-apps/static-qt-build.json"
+        stamp.parent.mkdir(parents=True)
+        stamp.write_text(json.dumps({"SchemaVersion": 1, "QtVersion": "6.11.1",
+                                     "Architecture": "arm64", "Configuration": "Release",
+                                     "DeploymentTarget": "14.0",
+                                     "Dup3": False,
+                                     "Ltcg": True, "SystemPng": True, "SystemZlib": True}))
+        (self.root / "Qt kit/share/snow-apps/qt-licenses").mkdir()
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
                         Qt6_DIR=str(qt), SNOW_TEST_LOG=str(self.log),
+                        SNOW_TEST_ROOT=str(self.root),
                         SNOW_LAUNCH_SERVICES_REGISTER=str(self.bin / 'lsregister'))
 
     def run_script(self, script, *args, success=True):
         result = subprocess.run(["/bin/bash", str(self.root / "scripts" / script), *args],
                                 env=self.env, text=True, capture_output=True, cwd="/")
+        self.last_result = result
         if success:
             self.assertEqual(result.returncode, 0, result.stderr)
         else:
@@ -60,15 +337,31 @@ if name == 'cmake' and '--preset' in sys.argv and os.environ.get('FAIL_CONFIGURE
     def test_build_preserves_arguments_and_clean_target(self):
         calls = self.run_script("build.sh", "snow-shot-macos-x64-debug", "--target", "some-test",
                                 "--clean", "--", "-DEXAMPLE=a path with spaces")
-        configure, build = [c for c in calls if c[0] == "cmake"]
+        configure, build = [c for c in calls if c[0] == "cmake" and '--version' not in c]
         self.assertIn("-DEXAMPLE=a path with spaces", configure)
         self.assertEqual(build, ["cmake", "--build", "--preset", "build-snow-shot-macos-x64-debug",
-                                 "--target", "some-test", "--clean-first", "--parallel"])
+                                 "--target", "some-test", "--parallel"])
 
     def test_default_build_and_empty_array_on_system_bash(self):
         calls = self.run_script("build.sh")
         self.assertIn(["cmake", "--build", "--preset", "build-snow-shot-macos-arm64-debug",
+                       "--target", "snow_shot", "snow_shot_mini", "--parallel"], calls)
+
+    def test_default_build_respects_disabled_mini(self):
+        calls = self.run_script("build.sh", "--", "-DSNOW_APPS_BUILD_SNOW_SHOT_MINI=OFF")
+        self.assertIn(["cmake", "--build", "--preset", "build-snow-shot-macos-arm64-debug",
                        "--target", "snow_shot", "--parallel"], calls)
+        self.assertFalse(any('snow_shot_mini' in call for call in calls))
+
+    def test_stale_cache_is_reconfigured_from_fresh_state(self):
+        cache = self.root / 'build/snow-shot-macos-arm64-debug/CMakeCache.txt'
+        cache.parent.mkdir(parents=True)
+        cache.write_text('Qt6_DIR:PATH=/stale/qt\n')
+        calls = self.run_script('build.sh', '--skip-bootstrap')
+        configure = next(call for call in calls if call[0] == 'cmake' and '--preset' in call
+                         and '--build' not in call)
+        self.assertEqual(configure[1], '--fresh')
+        self.assertIn('configuring from a fresh cache', self.last_result.stdout)
 
     def test_configure_failure_stops_build(self):
         self.env['FAIL_CONFIGURE'] = '1'
@@ -82,19 +375,145 @@ if name == 'cmake' and '--preset' in sys.argv and os.environ.get('FAIL_CONFIGURE
             self.assertFalse(any(c[0] == 'cmake' for c in calls))
 
     def test_bootstrap_selects_matching_rust_target(self):
+        stamp = self.root / "Qt kit/share/snow-apps/static-qt-build.json"
+        value = json.loads(stamp.read_text())
+        value['Architecture'] = 'x64'
+        stamp.write_text(json.dumps(value))
         calls = self.run_script("bootstrap-macos.sh", "snow-shot-macos-x64-release")
-        self.assertIn(["rustup", "target", "add", "x86_64-apple-darwin"], calls)
+        rustup = next(c for c in calls if c[:3] == ['rustup', 'toolchain', 'install'])
+        self.assertIn('x86_64-apple-darwin', rustup)
 
     def test_package_builds_before_cpack(self):
+        stale = self.root / 'build/snow-shot-macos-arm64-release/stale-bundle-file'
+        stale.parent.mkdir(parents=True)
+        stale.touch()
         calls = self.run_script("package-snow-shot.sh")
         build = next(i for i, c in enumerate(calls) if '--build' in c)
         pack = next(i for i, c in enumerate(calls) if c[0] == 'cpack')
         self.assertLess(build, pack)
+        symbols = next(i for i, c in enumerate(calls)
+                       if any(arg.endswith('GenerateSnowShotDiagnosticsSymbols-Release.cmake') for arg in c))
+        self.assertLess(build, symbols)
+        self.assertLess(symbols, pack)
         self.assertEqual(calls[pack], ['cpack', '--preset', 'package-snow-shot-macos-arm64-release'])
+        self.assertTrue(any(call[0] == 'cpack' and
+                            any(arg.endswith('CPackSnowShotMiniConfig.cmake') for arg in call)
+                            for call in calls))
+        self.assertFalse(stale.exists())
+
+    def test_arm_release_rejects_disabled_mini_before_packaging(self):
+        self.run_script("package-snow-shot.sh")
+        cache = self.root / 'build/snow-shot-macos-arm64-release/CMakeCache.txt'
+        cache.write_text(cache.read_text().replace('SNOW_APPS_BUILD_SNOW_SHOT_MINI:BOOL=ON',
+                                                  'SNOW_APPS_BUILD_SNOW_SHOT_MINI:BOOL=OFF'))
+        self.log.unlink()
+        calls = self.run_script("package-snow-shot.sh", "--skip-build", success=False)
+        self.assertFalse(any(call[0] == 'cpack' for call in calls))
+        self.assertIn('Coordinated ARM64 packaging requires', self.last_result.stderr)
+
+    def test_skip_build_packages_existing_symbols_without_rebuilding(self):
+        # Provision the fixture's release cache, then package it without a build.
+        self.run_script("package-snow-shot.sh")
+        self.log.unlink()
+        calls = self.run_script("package-snow-shot.sh", "--skip-build")
+        self.assertFalse(any('--build' in call for call in calls))
+        self.assertTrue(any(any(arg.endswith('GenerateSnowShotMiniDiagnosticsSymbols-Release.cmake')
+                               for arg in call) for call in calls))
+        self.assertTrue(any(any(arg.endswith('GenerateSnowShotDiagnosticsSymbols-Release.cmake')
+                                    for arg in call) for call in calls))
+
+    def test_arm_assembler_objects_keep_the_macos_deployment_target(self):
+        x264 = (ROOT / 'cmake/vcpkg-overlay-ports/x264/portfile.cmake').read_text()
+        x265 = (ROOT / 'cmake/vcpkg-overlay-ports/x265/portfile.cmake').read_text()
+        x265_patch = (ROOT / 'cmake/vcpkg-overlay-ports/x265/'
+                      'macos-arm64-deployment-target.patch').read_text()
+        self.assertIn('--extra-asflags=-mmacosx-version-min=', x264)
+        self.assertIn('macos-arm64-deployment-target.patch', x265)
+        self.assertIn('-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}', x265_patch)
 
     def test_package_rejects_nonrelease(self):
         calls = self.run_script("package-snow-shot.sh", "snow-shot-macos-arm64-debug", success=False)
         self.assertFalse(any(c[0] in ('cmake', 'cpack') for c in calls))
+
+    def test_release_presets_use_static_qt_and_isolated_dependencies(self):
+        presets = json.loads((ROOT / 'CMakePresets.json').read_text())['configurePresets']
+        by_name = {preset['name']: preset for preset in presets}
+        release_base = by_name['macos-release-base']['cacheVariables']
+        self.assertEqual(by_name['macos-base']['cacheVariables']
+                         ['SNOW_MACOS_CODESIGN_IDENTITY'], 'AUTO')
+        self.assertEqual(release_base['SNOW_MACOS_CODESIGN_IDENTITY'], '-')
+        self.assertEqual(release_base['SNOW_APPS_RELEASE_STATIC'], 'ON')
+        self.assertEqual(release_base['SNOW_APPS_QT_STATIC'], 'ON')
+        self.assertTrue(release_base['VCPKG_INSTALLED_DIR'].endswith('/static'))
+        for arch in ('arm64', 'x64'):
+            release = by_name[f'snow-shot-macos-{arch}-release']
+            fast = by_name[f'snow-shot-macos-{arch}-fast']
+            self.assertEqual(release['inherits'], 'macos-release-base')
+            self.assertEqual(fast['inherits'], 'macos-release-base')
+            self.assertEqual(release['cacheVariables']['VCPKG_TARGET_TRIPLET'],
+                             f'{arch}-osx-snow-shot-static')
+
+    def test_static_package_contract_avoids_dynamic_deployment(self):
+        macos = (ROOT / 'cmake/SnowShotMacOS.cmake').read_text()
+        deployment = (ROOT / 'cmake/DeploySnowShotMacOS.cmake.in').read_text()
+        self.assertIn('Qt6::QCocoaIntegrationPlugin',
+                      (ROOT / 'snow_shot/CMakeLists.txt').read_text())
+        self.assertIn('if(NOT SNOW_SHOT_QT_STATIC)', macos)
+        self.assertIn('if(NOT @SNOW_SHOT_QT_STATIC@)', deployment)
+        self.assertIn('Static package contains a non-system dependency', deployment)
+        self.assertIn('--static-runtime', deployment)
+
+    def test_development_builds_provision_and_sign_a_stable_debug_identity(self):
+        macos = (ROOT / 'cmake/SnowShotMacOS.cmake').read_text()
+        self.assertIn('SNOW_MACOS_CODESIGN_IDENTITY STREQUAL "AUTO"', macos)
+        self.assertIn('ensure-macos-codesign-identity.sh', macos)
+        self.assertIn('--identifier com.snowshot.snow_shot', macos)
+        self.assertIn('$<TARGET_FILE:snow_shot>', macos)
+        self.assertIn('$<TARGET_FILE:snow_shot>.snow-signing', macos)
+
+    def test_static_qt_builder_reuses_an_audited_matching_installation(self):
+        dependencies = self.root / 'dependencies'
+        abi_files = [dependencies / 'share/zlib/vcpkg_abi_info.txt',
+                     dependencies / 'share/libpng/vcpkg_abi_info.txt']
+        for path in abi_files:
+            path.parent.mkdir(parents=True)
+            path.write_text(path.parent.name)
+        for name in ('include/zlib.h', 'include/png.h'):
+            path = dependencies / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        abi_files = [path.resolve() for path in abi_files]
+        lines = ''.join(f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path}\n'
+                        for path in abi_files)
+        fingerprint = hashlib.sha256(lines.encode()).hexdigest()
+        prefix = self.root / 'static Qt'
+        config = prefix / 'lib/cmake/Qt6/Qt6Config.cmake'
+        config.parent.mkdir(parents=True)
+        config.touch()
+        (prefix / 'share/snow-apps/qt-licenses').mkdir(parents=True)
+        stamp = prefix / 'share/snow-apps/static-qt-build.json'
+        stamp.write_text(json.dumps({
+            'SchemaVersion': 1, 'QtVersion': '6.11.1', 'Architecture': 'arm64',
+            'Configuration': 'Release', 'DeploymentTarget': '14.0',
+            'Dup3': False,
+            'DependencyFingerprint': fingerprint,
+            'Ltcg': True, 'SystemPng': True, 'SystemZlib': True,
+        }, indent=2))
+        calls = self.run_script('build-static-qt.sh', '--install-prefix', str(prefix),
+                                '--dependency-prefix', str(dependencies))
+        self.assertFalse(any(call[0] == 'cmake' for call in calls))
+        self.assertIn('Validated static Qt 6.11.1 (arm64)', self.last_result.stdout)
+
+    def test_static_qt_builder_supports_command_line_tools_without_full_xcode(self):
+        builder = (ROOT / 'scripts/build-static-qt.sh').read_text()
+        self.assertIn('if ! xcodebuild -version >/dev/null 2>&1; then', builder)
+        self.assertIn('xcrun --show-sdk-path', builder)
+        self.assertIn('qt_apple_options+=(-DQT_NO_XCODE_MIN_VERSION_CHECK=ON)', builder)
+        self.assertIn('"${qt_apple_options[@]}"', builder)
+        self.assertIn('qt_deployment_target=14.0', builder)
+        self.assertIn('-DCMAKE_OSX_DEPLOYMENT_TARGET="$qt_deployment_target"', builder)
+        self.assertIn('-DFEATURE_dup3=OFF', builder)
+        self.assertIn("'FEATURE_dup3:BOOL=OFF' 'QT_FEATURE_dup3:INTERNAL=OFF'", builder)
 
     def test_launch_bundle_with_arguments(self):
         app = self.root / 'build/snow-shot-macos-arm64-debug/snow_shot/snow_shot.app'
@@ -110,6 +529,50 @@ if name == 'cmake' and '--preset' in sys.argv and os.environ.get('FAIL_CONFIGURE
         self.assertEqual(calls[-1], ['open', '-n', str(deployed), '--args', '--example', 'a path'])
         self.assertIn('--install', calls[-3])
         self.assertEqual(calls[-2], ['lsregister', '-f', str(deployed)])
+
+    def test_launch_mini_builds_and_deploys_the_selected_edition(self):
+        deployed = self.root / 'build/snow-shot-macos-arm64-debug/run/snow_shot_mini.app'
+        calls = self.run_script('run-snow-shot.sh', '--edition', 'mini', '--', '--example', 'a path')
+        self.assertIn(['cmake', '--build', '--preset', 'build-snow-shot-macos-arm64-debug',
+                       '--target', 'snow_shot_mini', '--parallel'], calls)
+        self.assertIn(['cmake', '--install', str(deployed.parent.parent), '--component',
+                       'SnowShotMini', '--prefix', str(deployed.parent)], calls)
+        self.assertEqual(calls[-2], ['lsregister', '-f', str(deployed)])
+        self.assertEqual(calls[-1], ['open', '-n', str(deployed), '--args', '--example', 'a path'])
+        self.log.unlink()
+        calls = self.run_script('run-snow-shot.sh', '--edition', 'mini', '--no-build')
+        self.assertFalse(any(call[0] == 'cmake' for call in calls))
+        self.assertEqual(calls[-1], ['open', '-n', str(deployed), '--args'])
+
+    def test_launch_stops_selected_build_instances_before_rebuilding(self):
+        app = self.root / 'build/snow-shot-macos-arm64-debug/snow_shot/snow_shot.app'
+        binary = app / 'Contents/MacOS/snow_shot'
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        binary.chmod(0o755)
+        running = app.parent.parent / 'run/snow_shot.app/Contents/MacOS/snow_shot'
+        running.parent.mkdir(parents=True)
+        unrelated = self.root / 'other/snow_shot'
+        process = subprocess.Popen(['/bin/sleep', '60'])
+        reaper = threading.Thread(target=process.wait)
+        reaper.start()
+        self.env['SNOW_TEST_PS_OUTPUT'] = f'{process.pid} {running}\n2147483646 {unrelated}'
+
+        try:
+            calls = self.run_script('run-snow-shot.sh')
+        finally:
+            if process.poll() is None:
+                process.kill()
+            reaper.join(timeout=2)
+
+        inspect = calls.index(['ps', '-axww', '-o', 'pid=', '-o', 'comm='])
+        build = next(i for i, call in enumerate(calls) if '--build' in call)
+        self.assertLess(inspect, build)
+        self.assertIn(f'Stopping the running development instance (PID {process.pid})...',
+                      self.last_result.stdout)
+        self.assertNotIn('2147483646', self.last_result.stdout)
+        self.assertFalse(reaper.is_alive())
+        self.assertEqual(process.returncode, -signal.SIGTERM)
 
     def test_launch_can_skip_or_clean_the_automatic_build(self):
         app = self.root / 'build/snow-shot-macos-arm64-debug/snow_shot/snow_shot.app'
@@ -130,7 +593,7 @@ if name == 'cmake' and '--preset' in sys.argv and os.environ.get('FAIL_CONFIGURE
         self.log.unlink()
         calls = self.run_script('run-snow-shot.sh', '--clean')
         self.assertIn(['cmake', '--build', '--preset', 'build-snow-shot-macos-arm64-debug',
-                       '--target', 'snow_shot', '--clean-first', '--parallel'], calls)
+                       '--target', 'snow_shot', '--parallel'], calls)
 
     def test_launch_can_cache_a_persistent_codesign_identity(self):
         app = self.root / 'build/snow-shot-macos-arm64-debug/snow_shot/snow_shot.app'
@@ -147,6 +610,50 @@ if name == 'cmake' and '--preset' in sys.argv and os.environ.get('FAIL_CONFIGURE
         self.assertIn('-DSNOW_MACOS_CODESIGN_IDENTITY=' + identity, configure)
         self.assertIn(['cmake', '--build', '--preset', 'build-snow-shot-macos-arm64-debug',
                        '--target', 'snow_shot', '--parallel'], calls)
+
+    def test_launch_automatically_reuses_a_stable_local_codesign_identity(self):
+        app = self.root / 'build/snow-shot-macos-arm64-debug/snow_shot/snow_shot.app'
+        binary = app / 'Contents/MacOS/snow_shot'
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        binary.chmod(0o755)
+        (app.parent.parent / 'run/snow_shot.app').mkdir(parents=True)
+
+        calls = self.run_script('run-snow-shot.sh')
+        configure = next(c for c in calls if c[0] == 'cmake' and '--preset' in c)
+        self.assertIn('-DSNOW_MACOS_CODESIGN_IDENTITY='
+                      '0123456789ABCDEF0123456789ABCDEF01234567', configure)
+        self.assertFalse(any(c[0] == 'openssl' for c in calls))
+
+    def test_launch_creates_the_local_codesign_identity_once_when_missing(self):
+        app = self.root / 'build/snow-shot-macos-arm64-debug/snow_shot/snow_shot.app'
+        binary = app / 'Contents/MacOS/snow_shot'
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        binary.chmod(0o755)
+        (app.parent.parent / 'run/snow_shot.app').mkdir(parents=True)
+        self.env['SNOW_TEST_CODESIGN_IDENTITY'] = ''
+
+        calls = self.run_script('run-snow-shot.sh')
+        self.assertTrue(any(c[:2] == ['openssl', 'req'] for c in calls))
+        self.assertTrue(any(c[:2] == ['openssl', 'pkcs12'] for c in calls))
+        self.assertTrue(any(c[:2] == ['security', 'import'] for c in calls))
+        configure = next(c for c in calls if c[0] == 'cmake' and '--preset' in c)
+        self.assertIn('-DSNOW_MACOS_CODESIGN_IDENTITY='
+                      '0123456789ABCDEF0123456789ABCDEF01234567', configure)
+
+    def test_explicit_adhoc_signing_does_not_provision_an_identity(self):
+        app = self.root / 'build/snow-shot-macos-arm64-debug/snow_shot/snow_shot.app'
+        binary = app / 'Contents/MacOS/snow_shot'
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        binary.chmod(0o755)
+        (app.parent.parent / 'run/snow_shot.app').mkdir(parents=True)
+
+        calls = self.run_script('run-snow-shot.sh', '--codesign-identity', '-')
+        configure = next(c for c in calls if c[0] == 'cmake' and '--preset' in c)
+        self.assertIn('-DSNOW_MACOS_CODESIGN_IDENTITY=-', configure)
+        self.assertFalse(any(c[0] in ('security', 'openssl') for c in calls))
 
     def test_no_build_requires_deployment_and_rejects_clean(self):
         for args in (('--no-build',), ('--no-build', '--clean'),
@@ -194,6 +701,7 @@ class MacOSSigningDeployment(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 deploy = next(c for c in calls if c[0] == 'macdeployqt')
                 self.assertIn('-codesign=' + identity, deploy)
+                self.assertTrue(any(arg.endswith('/Contents/MacOS/crashpad_handler') for arg in deploy))
                 sign = next(c for c in calls if c[0] == 'codesign' and '--sign' in c)
                 self.assertEqual(sign[sign.index('--sign') + 1], identity)
                 finalize = next(i for i, c in enumerate(calls) if 'finalize' in c)
@@ -206,7 +714,65 @@ class MacOSSigningDeployment(unittest.TestCase):
         self.assertEqual(sum(c[0] == 'macdeployqt' for c in calls), 1)
         self.assertFalse(any(c[0] == 'codesign' for c in calls))
 
-    def deploy(self, identity, fail=False):
+    def test_static_deployment_skips_macdeployqt_and_marks_the_ocr_runtime(self):
+        calls, result = self.deploy('-', static=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(any(call[0] == 'macdeployqt' for call in calls))
+        for command in ('finalize', 'verify'):
+            call = next(call for call in calls if command in call)
+            self.assertIn('--static-runtime', call)
+        self.assertEqual(calls[-1][0:4], ['codesign', '--verify', '--deep', '--strict'])
+
+    def test_release_deployment_strips_both_editions_before_signing_and_ocr_hashing(self):
+        for mini in (False, True):
+            with self.subTest(mini=mini):
+                calls, result = self.deploy('-', static=True, config='Release', mini=mini)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                strips = [(index, call) for index, call in enumerate(calls) if call[0] == 'strip']
+                self.assertEqual(len(strips), 4)
+                finalize = next(index for index, call in enumerate(calls) if 'finalize' in call)
+                for index, call in strips:
+                    self.assertEqual(call[1:3], ['-S', '-x'])
+                    self.assertNotIn('helper-link', call[-1])
+                    self.assertNotIn('note.txt', call[-1])
+                    self.assertEqual(calls[index + 1], ['codesign', '--force', '--sign', '-', call[-1]])
+                    self.assertLess(index + 1, finalize)
+                for command in ('prepare-bundle', 'finalize', 'verify'):
+                    call = next(call for call in calls if command in call)
+                    self.assertEqual('--runtime-only' in call, mini)
+                product = 'snow_shot_mini.app' if mini else 'snow_shot.app'
+                self.assertTrue(all('/' + product + '/Contents/' in call[-1] for _, call in strips))
+                outer_sign = next(index for index, call in enumerate(calls)
+                                  if call[0] == 'codesign' and call[-1].endswith(product))
+                self.assertLess(finalize, outer_sign)
+
+    def test_development_deployment_preserves_symbols(self):
+        for static, config, release_static in ((True, 'Debug', True),
+                                               (True, 'RelWithDebInfo', True),
+                                               (True, 'Release', False),
+                                               (False, 'Release', False)):
+            with self.subTest(static=static, config=config, release_static=release_static):
+                calls, result = self.deploy('-', static=static, config=config,
+                                            release_static=release_static)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(any(call[0] == 'strip' for call in calls))
+
+    def test_strip_failure_stops_before_signing_and_ocr_hashing(self):
+        calls, result = self.deploy('-', static=True, config='Release', strip_fail=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(sum(call[0] == 'strip' for call in calls), 1)
+        self.assertFalse(any(call[0] == 'codesign' or 'finalize' in call for call in calls))
+
+    def test_repeated_release_deployment_reseals_each_worker(self):
+        calls, result = self.deploy('-', static=True, config='Release', repeat=2)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(sum(call[0] == 'strip' for call in calls), 8)
+        self.assertEqual(sum('finalize' in call for call in calls), 2)
+        self.assertEqual(sum(call[:4] == ['codesign', '--verify', '--deep', '--strict']
+                             for call in calls), 2)
+
+    def deploy(self, identity, fail=False, static=False, config='Debug', release_static=None,
+               mini=False, strip_fail=False, repeat=1):
         with tempfile.TemporaryDirectory(prefix='snow signing tests ') as temp:
             root = Path(temp)
             log = root / 'calls.jsonl'
@@ -216,21 +782,45 @@ name = pathlib.Path(sys.argv[0]).name
 with open(os.environ['SNOW_TEST_LOG'], 'a') as log:
     log.write(json.dumps([name] + sys.argv[1:]) + '\\n')
 if name == 'macdeployqt' and os.environ.get('SNOW_TEST_FAIL_SIGN'): sys.exit(1)
+if name == 'file':
+    print('ASCII text' if sys.argv[-1].endswith('.txt') else 'Mach-O 64-bit executable arm64')
+if name == 'otool':
+    print(sys.argv[-1] + ':\\n\\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)')
+if name == 'strip' and os.environ.get('SNOW_TEST_FAIL_STRIP'): sys.exit(37)
 """
-            for name in ('macdeployqt', 'codesign', 'install_name_tool', 'ocr'):
+            for name in ('macdeployqt', 'codesign', 'install_name_tool', 'ocr', 'file', 'otool', 'strip'):
                 tool = root / name
                 tool.write_text(mock)
                 tool.chmod(0o755)
+            product = 'snow_shot_mini' if mini else 'snow_shot'
+            bridge = 'snow-shot-mini-mcp' if mini else 'snow-shot-mcp'
+            runtime = root / (product + '.app') / 'Contents/MacOS'
+            runtime.mkdir(parents=True)
+            for name in (product, bridge, 'snow-ocr-process', 'crashpad_handler'):
+                (runtime / name).write_text('executable fixture')
+            (runtime / 'helper-link').symlink_to('snow-ocr-process')
+            resources = runtime.parent / 'Resources'
+            resources.mkdir()
+            (resources / 'note.txt').write_text('resource fixture')
             script = (ROOT / 'cmake/DeploySnowShotMacOS.cmake.in').read_text()
+            if mini:
+                script = script.replace('snow_shot.app', 'snow_shot_mini.app')
+                script = script.replace('snow-shot-mcp', 'snow-shot-mini-mcp')
             values = {'SNOW_MACOS_CODESIGN_IDENTITY': identity,
                       'SNOW_MACDEPLOYQT': str(root / 'macdeployqt'),
                       'SNOW_MACOS_OCR_ASSETS_ENABLED': 'ON',
+                      'SNOW_MACOS_OCR_RUNTIME_ONLY': 'ON' if mini else 'OFF',
+                      'SNOW_SHOT_ENABLE_MCP': 'ON',
+                      'SNOW_SHOT_RELEASE_STATIC': 'ON' if (static if release_static is None
+                                                          else release_static) else 'OFF',
+                      'SNOW_SHOT_QT_STATIC': 'ON' if static else 'OFF',
+                      'SNOW_SHOT_OCR_STATIC_ONNXRUNTIME': 'ON' if static else 'OFF',
                       'Python3_EXECUTABLE': str(root / 'ocr'),
                       'SNOW_MACOS_OCR_TOOL': 'ocr.py', 'SNOW_MACOS_OCR_MANIFEST': 'manifest.json',
                       'SNOW_FFMPEG_ROOT': str(root / 'ffmpeg'), 'CMAKE_BINARY_DIR': str(root)}
             for key, value in values.items():
                 script = script.replace('@' + key + '@', value)
-            for name in ('codesign', 'install_name_tool'):
+            for name in ('codesign', 'install_name_tool', 'file', 'otool', 'strip'):
                 script = script.replace('/usr/bin/' + name, '"' + str(root / name) + '"')
             path = root / 'deploy.cmake'
             path.write_text(script)
@@ -238,18 +828,159 @@ if name == 'macdeployqt' and os.environ.get('SNOW_TEST_FAIL_SIGN'): sys.exit(1)
             env = dict(os.environ, SNOW_TEST_LOG=str(log))
             if fail:
                 env['SNOW_TEST_FAIL_SIGN'] = '1'
-            result = subprocess.run([cmake, '-DCMAKE_INSTALL_PREFIX=' + str(root),
-                                     '-DCMAKE_INSTALL_CONFIG_NAME=Debug', '-P', str(path)],
-                                    env=env, text=True, capture_output=True)
+            if strip_fail:
+                env['SNOW_TEST_FAIL_STRIP'] = '1'
+            for _ in range(repeat):
+                result = subprocess.run([cmake, '-DCMAKE_INSTALL_PREFIX=' + str(root),
+                                         '-DCMAKE_INSTALL_CONFIG_NAME=' + config, '-P', str(path)],
+                                        env=env, text=True, capture_output=True)
+                if result.returncode:
+                    break
             return [json.loads(line) for line in log.read_text().splitlines()], result
+
+
+@unittest.skipUnless(os.environ.get('SNOW_TEST_MACOS_BUNDLE') == '1',
+                     'Set SNOW_TEST_MACOS_BUNDLE=1 for the native stripping fixture')
+class MacOSPackageStripping(unittest.TestCase):
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Mach-O stripping requires macOS')
+    def test_release_copies_preserve_code_exports_uuids_and_external_dsyms(self):
+        """Use small native binaries without Qt, OCR models, network, or a running UI."""
+        def run(*args):
+            result = subprocess.run(args, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result.stdout
+
+        def uuid(path):
+            return run('xcrun', 'dwarfdump', '--uuid', str(path)).split()[1]
+
+        def sections(binary):
+            data = binary.read_bytes()
+            self.assertEqual(struct.unpack_from('<I', data)[0], 0xfeedfacf)
+            hashes = {}
+            offset = 32
+            for _ in range(struct.unpack_from('<I', data, 16)[0]):
+                command, length = struct.unpack_from('<II', data, offset)
+                if command == 0x19:  # LC_SEGMENT_64
+                    for index in range(struct.unpack_from('<I', data, offset + 64)[0]):
+                        section = offset + 72 + index * 80
+                        name = data[section:section + 16].split(b'\0')[0].decode()
+                        segment = data[section + 16:section + 32].split(b'\0')[0].decode()
+                        size, start = struct.unpack_from('<QI', data, section + 40)
+                        flags = struct.unpack_from('<I', data, section + 64)[0]
+                        if (segment in ('__TEXT', '__DATA', '__DATA_CONST')
+                                and (flags & 0xff) not in (1, 12, 18)):
+                            hashes[(segment, name)] = hashlib.sha256(data[start:start + size]).hexdigest()
+                offset += length
+            self.assertTrue(hashes)
+            return hashes
+
+        cmake = shutil.which('cmake') or str(ROOT / '.tools/macos-dev/bin/cmake')
+        with tempfile.TemporaryDirectory(prefix='snow native strip ') as temp:
+            root = Path(temp)
+            source = root / 'fixture.c'
+            names = [f'snow_fixture_internal_function_with_private_debug_symbol_{index:03}'
+                     for index in range(64)]
+            expression = 'value'
+            for name in names:
+                expression = name + '(' + expression + ')'
+            source.write_text('\n'.join('static int ' + name + '(int value) { return value + 1; }'
+                                        for name in names) + '\n'
+                              'int snow_fixture_exported(int value) { return ' + expression + '; }\n'
+                              'int main(void) { return snow_fixture_exported(0) == 64 ? 0 : 1; }\n')
+            binary = root / 'fixture'
+            run('xcrun', 'clang', '-g', '-O0', str(source), '-o', str(binary))
+            symbols = root / 'fixture.dSYM'
+            run('xcrun', 'dsymutil', str(binary), '-o', str(symbols))
+            original_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
+            original_sections = sections(binary)
+            original_exports = run('/usr/bin/nm', '-gUj', str(binary))
+            original_uuid = uuid(binary)
+            self.assertEqual(uuid(symbols), original_uuid)
+            ocr = root / 'ocr'
+            ocr.write_text('#!/usr/bin/env python3\n')
+            ocr.chmod(0o755)
+            for product in ('snow_shot', 'snow_shot_mini'):
+                app = root / (product + '.app')
+                runtime = app / 'Contents/MacOS'
+                runtime.mkdir(parents=True)
+                resources = app / 'Contents/Resources'
+                resources.mkdir()
+                note = resources / 'note.txt'
+                note.write_text('resource fixture')
+                (runtime / 'helper-link').symlink_to('snow-ocr-process')
+                (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({
+                    'CFBundleExecutable': product, 'CFBundleIdentifier': 'com.snowshot.' + product,
+                    'CFBundlePackageType': 'APPL', 'CFBundleName': 'Snow Shot Fixture',
+                    'CFBundleVersion': '1.0'}))
+                script = (ROOT / 'cmake/DeploySnowShotMacOS.cmake.in').read_text()
+                script = script.replace('snow_shot.app', product + '.app')
+                values = {'SNOW_MACOS_CODESIGN_IDENTITY': '-', 'SNOW_SHOT_ENABLE_MCP': 'OFF',
+                          'SNOW_MACDEPLOYQT': '', 'SNOW_MACOS_OCR_ASSETS_ENABLED': 'OFF',
+                          'SNOW_MACOS_OCR_RUNTIME_ONLY': 'ON' if product == 'snow_shot_mini' else 'OFF',
+                          'SNOW_SHOT_QT_STATIC': 'ON', 'SNOW_SHOT_RELEASE_STATIC': 'ON',
+                          'SNOW_SHOT_OCR_STATIC_ONNXRUNTIME': 'ON', 'Python3_EXECUTABLE': str(ocr),
+                          'SNOW_MACOS_OCR_TOOL': 'ocr.py', 'SNOW_MACOS_OCR_MANIFEST': 'manifest.json',
+                          'SNOW_FFMPEG_ROOT': str(root / 'ffmpeg'), 'CMAKE_BINARY_DIR': str(root)}
+                for key, value in values.items():
+                    script = script.replace('@' + key + '@', value)
+                deployment = root / 'deploy.cmake'
+                deployment.write_text(script)
+                # Reinstalling replaces stripped staging copies with build bytes.
+                for attempt in range(2):
+                    with self.subTest(product=product, attempt=attempt):
+                        for name in (product, 'snow-ocr-process', 'crashpad_handler'):
+                            shutil.copy2(binary, runtime / name)
+                        run(cmake, '-DCMAKE_INSTALL_PREFIX=' + str(root),
+                            '-DCMAKE_INSTALL_CONFIG_NAME=Release', '-P', str(deployment))
+                        run('/usr/bin/codesign', '--verify', '--deep', '--strict', str(app))
+                        for name in (product, 'snow-ocr-process', 'crashpad_handler'):
+                            deployed = runtime / name
+                            self.assertEqual(sections(deployed), original_sections)
+                            self.assertEqual(run('/usr/bin/nm', '-gUj', str(deployed)), original_exports)
+                            self.assertEqual(uuid(deployed), original_uuid)
+                            self.assertLess(deployed.stat().st_size, binary.stat().st_size)
+                            run(str(deployed))
+                        self.assertEqual(hashlib.sha256(binary.read_bytes()).hexdigest(), original_hash)
+                        self.assertEqual(note.read_text(), 'resource fixture')
+                        self.assertTrue((runtime / 'helper-link').is_symlink())
+                        self.assertEqual(uuid(symbols), original_uuid)
 
 
 @unittest.skipUnless(os.environ.get("SNOW_TEST_MACOS_BUNDLE") == "1",
                      "Set SNOW_TEST_MACOS_BUNDLE=1 for the native deployment fixture")
 class MacOSBundle(unittest.TestCase):
+    @unittest.skipUnless(platform.system() == 'Darwin' and platform.machine() == 'arm64',
+                         'Mini requires Apple Silicon macOS')
+    def test_mini_deploys_its_codec_backend_and_starts_offscreen(self):
+        def run(*args, **kwargs):
+            result = subprocess.run(args, text=True, capture_output=True, **kwargs)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result.stdout
+
+        preset = 'snow-shot-macos-arm64-debug'
+        run(str(ROOT / 'scripts/build.sh'), preset, '--target', 'snow_shot_mini')
+        with tempfile.TemporaryDirectory(prefix='snow mini deployment ') as temp:
+            stage = Path(temp)
+            app = stage / 'snow_shot_mini.app'
+            backend = 'libsnow_shot_image_codec_backend.dylib'
+            stale_backend = app / 'Contents/MacOS' / backend
+            stale_backend.parent.mkdir(parents=True)
+            shutil.copy2(ROOT / 'build' / preset / 'snow_shot' / backend, stale_backend)
+            run('cmake', '--install', str(ROOT / 'build' / preset), '--component',
+                'SnowShotMini', '--prefix', str(stage))
+            self.assertTrue((app / 'Contents/Frameworks' / backend).is_file())
+            self.assertFalse(stale_backend.exists())
+            run('codesign', '--verify', '--deep', '--strict', str(app))
+            env = dict(os.environ, QT_QPA_PLATFORM='offscreen')
+            for name in ('QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'DYLD_LIBRARY_PATH',
+                         'DYLD_FRAMEWORK_PATH'):
+                env.pop(name, None)
+            run(str(app / 'Contents/MacOS/snow_shot_mini'), '--startup-probe',
+                env=env, cwd=temp, timeout=30)
+
     def test_deploy_helpers_and_package(self):
         arch = "arm64" if os.uname().machine == "arm64" else "x64"
-        prefix = ROOT / f".tools/macos/installed/{arch}-osx-snow-shot"
+        prefix = ROOT / f".tools/macos/installed/dynamic/{arch}-osx-snow-shot"
         qt = os.environ.get("Qt6_DIR", str(Path.home() / "Qt/6.11.1/macos/lib/cmake/Qt6"))
         with tempfile.TemporaryDirectory(prefix="snow bundle test ") as temp:
             out = Path(temp) / "build"
@@ -263,14 +994,22 @@ class MacOSBundle(unittest.TestCase):
                 f"-DQt6_DIR={qt}", "-DCMAKE_BUILD_TYPE=Release",
                 f"-DCMAKE_OSX_ARCHITECTURES={os.uname().machine}")
             run("cmake", "--build", str(out))
+            run(str(out / "snow_shot.app/Contents/MacOS/crashpad_handler"), "--version", cwd="/")
+            stale_helper = stage / "snow_shot.app/Contents/MacOS/snow-shot-updater"
+            stale_helper.parent.mkdir(parents=True, exist_ok=True)
+            stale_helper.write_text("obsolete helper")
             run("cmake", "--install", str(out), "--component", "SnowShot", "--prefix", str(stage))
+            self.assertFalse(stale_helper.exists())
             app = stage / "snow_shot.app"
             info = run("plutil", "-extract", "CFBundleIconFile", "raw", "-o", "-",
                        str(app / "Contents/Info.plist")).strip()
             self.assertEqual(info, "snow-shot.icns")
             self.assertTrue((app / "Contents/Resources/snow-shot.icns").is_file())
             self.assertTrue((app / "Contents/PlugIns/platforms/libqoffscreen.dylib").is_file())
-            for name in ("snow_shot", "snow-ocr-process", "snow-shot-updater"):
+            collector = app / "Contents/MacOS/crashpad_handler"
+            self.assertTrue(collector.is_file())
+            run(str(collector), "--version", cwd="/")
+            for name in ("snow_shot", "snow-ocr-process"):
                 binary = app / "Contents/MacOS" / name
                 run(str(binary), cwd="/")
                 rpaths = run("otool", "-l", str(binary))
@@ -282,6 +1021,28 @@ class MacOSBundle(unittest.TestCase):
             self.assertEqual(len(list(out.glob("*.dmg.sha256"))), 1)
             dmg = next(out.glob("*.dmg"))
             run("codesign", "--verify", "--strict", str(dmg))
+            mount = Path(temp) / "mounted"
+            mount.mkdir()
+            run("hdiutil", "attach", "-readonly", "-nobrowse", "-noautoopen",
+                "-mountpoint", str(mount), str(dmg))
+            try:
+                packaged = mount / "Snow Shot.app"
+                self.assertTrue(packaged.is_dir())
+                self.assertFalse((mount / "snow_shot.app").exists())
+                self.assertEqual(os.readlink(mount / "Applications"), "/Applications")
+                self.assertTrue((mount / ".background/background.png").is_file())
+                self.assertTrue((mount / ".DS_Store").is_file())
+                metadata = plistlib.loads((packaged / "Contents/Info.plist").read_bytes())
+                self.assertEqual(metadata['CFBundleDisplayName'], 'Snow Shot')
+                self.assertIs(metadata['LSUIElement'], True)
+                self.assertEqual(metadata['NSHumanReadableCopyright'],
+                                 'Copyright (C) 2025-2026 mg-chao')
+                for language in metadata['CFBundleLocalizations']:
+                    self.assertTrue((packaged / 'Contents/Resources' /
+                                     (language + '.lproj') / 'InfoPlist.strings').is_file())
+                run("codesign", "--verify", "--deep", "--strict", str(packaged))
+            finally:
+                run("hdiutil", "detach", str(mount))
             import hashlib
             checksum = dmg.with_suffix(".dmg.sha256").read_text().split()[0]
             self.assertEqual(checksum, hashlib.sha256(dmg.read_bytes()).hexdigest())

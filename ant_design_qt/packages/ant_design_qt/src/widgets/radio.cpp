@@ -1,4 +1,5 @@
 #include "radio.h"
+#include "detail/pointer_region.h"
 
 #include "interaction_overlay_manager.h"
 #include "radio_button_group.h"
@@ -688,7 +689,7 @@ AdRadio::ComponentTokenContext AdRadio::currentComponentTokenContext() const {
   state.buttonStyle = effectiveButtonStyle();
   state.checked = isChecked();
   state.disabled = !isEnabled();
-  state.hovered = hovered_;
+  state.hovered = detail::widgetHovered(this);
   state.pressed = pressed_;
   state.focused = hasFocus() && focusVisible_;
   state.block = effectiveFill();
@@ -857,6 +858,32 @@ QSize AdRadio::sizeHint() const {
 
 QSize AdRadio::minimumSizeHint() const { return sizeHint(); }
 
+void AdRadio::setReferenceFont(const QFont& font) {
+  if (!referenceFontCaptured_) {
+    referenceIconSize_ = iconSize();
+    referenceFontCaptured_ = true;
+  }
+  if (referenceFont_ == font) return;
+  referenceFont_ = font;
+  prepareControlScale(controlScale_);
+  commitControlScale(controlScale_);
+  updateGeometry();
+  update();
+}
+
+void AdRadio::setReferenceIconSize(const QSize& size) {
+  if (!referenceFontCaptured_) {
+    referenceFont_ = font();
+    referenceFontCaptured_ = true;
+  }
+  if (referenceIconSize_ == size) return;
+  referenceIconSize_ = size;
+  prepareControlScale(controlScale_);
+  commitControlScale(controlScale_);
+  updateGeometry();
+  update();
+}
+
 void AdRadio::prepareControlScale(const AdControlScaleContext& context) {
   Q_UNUSED(context)
   styleCache_.reset();
@@ -869,21 +896,15 @@ void AdRadio::commitControlScale(const AdControlScaleContext& context) {
     referenceFontCaptured_ = true;
   }
   controlScale_ = context;
-  QFont scaledFont = referenceFont_;
-  if (scaledFont.pixelSize() > 0) {
-    scaledFont.setPixelSize(qMax(1, qRound(scaledFont.pixelSize() * context.logicalScale)));
-  } else if (scaledFont.pointSizeF() > 0.0) {
-    scaledFont.setPointSizeF(scaledFont.pointSizeF() * context.logicalScale);
-  }
-  setFont(scaledFont);
+  setFont(scaleControlFont(referenceFont_, controlScale_.logicalScale));
   if (referenceIconSize_.isValid()) {
-    setIconSize(QSize(qMax(1, qRound(referenceIconSize_.width() * context.logicalScale)),
-                      qMax(1, qRound(referenceIconSize_.height() * context.logicalScale))));
+    setIconSize(scaleControlSize(referenceIconSize_, controlScale_.logicalScale));
   }
   styleCache_.reset();
 }
 
 bool AdRadio::event(QEvent* event) {
+  detail::resetWidgetHoverOnLifecycle(this, event);
   const bool handled = QRadioButton::event(event);
   if (!event) {
     return handled;
@@ -926,8 +947,8 @@ void AdRadio::paintButtonVariant(QPainter* painter) const {
   }
 
   const detail::RadioButtonVisualStyle& style = resolvedRadioButtonStyle();
-  const detail::RadioButtonStateStyle state =
-      resolveButtonStateStyle(style, isEnabled(), isChecked(), hovered_, pressed_);
+  const detail::RadioButtonStateStyle state = resolveButtonStateStyle(
+      style, isEnabled(), isChecked(), detail::widgetHovered(this), pressed_);
 
   painter->setFont(style.metrics.font);
 
@@ -984,7 +1005,7 @@ void AdRadio::paintDefaultVariant(QPainter* painter) const {
 
   const detail::RadioVisualStyle& style = resolvedRadioStyle();
   const detail::RadioDotStateStyle dotState =
-      resolveDotStateStyle(style, isEnabled(), isChecked(), hovered_, pressed_);
+      resolveDotStateStyle(style, isEnabled(), isChecked(), detail::widgetHovered(this), pressed_);
 
   painter->setFont(style.metrics.font);
 
@@ -1038,14 +1059,12 @@ void AdRadio::paintDefaultVariant(QPainter* painter) const {
 }
 
 void AdRadio::enterEvent(QEnterEvent* event) {
-  hovered_ = true;
   bumpGroupZOrder();
   update();
   QRadioButton::enterEvent(event);
 }
 
 void AdRadio::leaveEvent(QEvent* event) {
-  hovered_ = false;
   pressed_ = false;
   update();
   QRadioButton::leaveEvent(event);

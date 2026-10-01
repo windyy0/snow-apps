@@ -12,3 +12,7 @@ pub mod streaming;
 pub mod timestamp;
 
 pub mod cancellation;
+
+pub mod keycap_layout;
+
+pub mod qos;

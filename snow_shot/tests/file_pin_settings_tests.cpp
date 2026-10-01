@@ -1,3 +1,5 @@
+#include "snow_shot/presentation/screenshotpinsourcetracker.h"
+#include <QClipboard>
 #include "snow_shot/presentation/globalshortcutmanager.h"
 #include "snow_shot/presentation/settings/settingsbackend.h"
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
@@ -84,10 +86,77 @@ void textSelectionSettings() {
             "pin behavior reset restores default selection policy");
 }
 
+void clipboardSourceIdentity() {
+    auto* clipboard = QApplication::clipboard();
+    ScreenshotPinSourceTracker tracker(clipboard);
+    const auto first = tracker.clipboardIdentity();
+    require(first.isValid() && tracker.clipboardIdentity() == first,
+            "reading a clipboard identity neither reads nor changes its content");
+    clipboard->setText(QStringLiteral("duplicate pin fixture"));
+    const auto second = tracker.clipboardIdentity();
+    require(second != first, "a clipboard change creates a new identity");
+    clipboard->setText(QStringLiteral("duplicate pin fixture"));
+    require(tracker.clipboardIdentity() != second, "copying identical text creates a new source");
+    ScreenshotPinSourceTracker nextSession(clipboard);
+    require(nextSession.clipboardIdentity() != tracker.clipboardIdentity(),
+            "clipboard identities cannot match a different application session");
+}
+
+void duplicateContentSettings() {
+    const storage::PinToScreenSettings stored;
+    const auto binding = settings::SettingsSelectBinding::PinDuplicateContentAction;
+    GlobalShortcutManager manager(std::make_unique<Backend>(), nullptr, [] { return false; });
+    settings::BuiltInSettingsBackend backend(manager);
+    settings::SettingsRuntimeSession session(settings::builtInSettingsRegistry(), backend);
+    require(stored.duplicateContentAction() == QStringLiteral("shake_window"),
+            "duplicate pins default to shaking");
+    const auto* field = settings::builtInSettingsRegistry().fieldForSelect(binding);
+    require(field && field->id == QStringLiteral("pin-to-screen.duplicate-content-action") &&
+                field->reset == settings::SettingsSectionReset::PinToScreenBehavior &&
+                field->definition->title.translated() ==
+                    QStringLiteral("When pinning duplicate content"),
+            "duplicate policy belongs to Pin to screen behavior");
+    const auto& select = std::get<settings::SettingsSelectDefinition>(field->definition->payload);
+    const QStringList values{QStringLiteral("none"), QStringLiteral("shake_window"),
+                             QStringLiteral("restore_last_closed_window"),
+                             QStringLiteral("repeat_action")};
+    const QStringList labels{QStringLiteral("None"), QStringLiteral("Shake Window"),
+                             QStringLiteral("Restore Last Closed Window"),
+                             QStringLiteral("Repeat Action")};
+    require(select.options.size() == values.size(), "duplicate policy has four choices");
+    for (int i = 0; i < values.size(); ++i) {
+        require(select.options[i].value == values[i] &&
+                    select.options[i].label.translated() == labels[i],
+                "duplicate choices retain their specified order and labels");
+        require(session.applySelectValue(binding, values[i]) &&
+                    stored.duplicateContentAction() == values[i],
+                "every duplicate policy persists through the settings backend");
+    }
+    require(!stored.setDuplicateContentAction(QStringLiteral("invalid")) &&
+                stored.duplicateContentAction() == QStringLiteral("repeat_action"),
+            "invalid duplicate policies are rejected");
+    require(backend.resetSection(settings::SettingsSectionReset::PinToScreenBehavior) &&
+                stored.duplicateContentAction() == QStringLiteral("shake_window"),
+            "pin behavior reset restores shake policy");
+}
+
 void shortcutSettings() {
     const auto action = GlobalShortcutAction::PinSelectedFiles;
     const QString id = QStringLiteral("quick.pin-selected-files");
     const storage::ShortcutSettings stored;
+    const auto* item = settings::builtInSettingsRegistry().catalog().item(
+        {QStringLiteral("global-hotkeys"), QStringLiteral("pin-to-screen"), id});
+    require(item != nullptr, "file pin action must remain in global shortcut settings");
+#ifdef Q_OS_MACOS
+    require(item->description.translated() ==
+                QStringLiteral("Pin selected image files from Finder or the desktop to the screen"),
+            "macOS file pin description must identify Finder");
+#else
+    require(item->description.translated() ==
+                QStringLiteral(
+                    "Pin selected image files from File Explorer or the desktop to the screen"),
+            "Windows file pin description must identify File Explorer");
+#endif
     require(stored.pinSelectedFiles().isEmpty(), "selected files starts unassigned");
     const storage::TraySettings tray;
     const auto defaultMenu = tray.menuOptions();
@@ -122,17 +191,33 @@ void shortcutSettings() {
                          });
         input->handler(input->registrations.key(keys.first()));
         require(activated == 1, "native activation must dispatch selected-file action");
-        require(session.applyShortcuts(action, {QStringLiteral("F3")}),
-                "conflicting binding is stored");
+        const auto clipboardBindings = stored.pinClipboardContent();
+        require(!clipboardBindings.isEmpty(), "clipboard pinning must have a default shortcut");
+        require(session.applyShortcuts(action, clipboardBindings), "conflicting binding is stored");
         require(manager.state(action).status == GlobalShortcutStatus::Failed &&
                     manager.state(action).bindings.first().failureReason ==
                         GlobalShortcutFailureReason::AlreadyInUse,
                 "clipboard shortcut conflict must be reported");
+        const auto managementAction = GlobalShortcutAction::OpenPinToScreenManagement;
+        const snow_shot::shortcuts::ShortcutBindingList managementKeys{
+            QStringLiteral("Ctrl+Alt+Shift+M")};
+        require(session.applyShortcuts(managementAction, managementKeys),
+                "management shortcut must be configurable");
+        require(backend.resetSection(settings::SettingsSectionReset::OtherShortcuts) &&
+                    manager.state(managementAction).shortcuts == managementKeys,
+                "Other reset must preserve the management shortcut in Pin to screen");
+        require(session.applyShortcuts(GlobalShortcutAction::SwitchWindowGroup,
+                                       {QStringLiteral("Ctrl+Alt+F8")}),
+                "assign group switch shortcut");
         require(backend.resetSection(settings::SettingsSectionReset::GlobalPinToScreenShortcuts),
                 "Pin to screen reset succeeds");
         require(stored.pinSelectedFiles().isEmpty() &&
                     manager.state(action).status == GlobalShortcutStatus::Unset,
                 "Pin to screen reset must clear the new shortcut");
+        require(manager.state(GlobalShortcutAction::SwitchWindowGroup).shortcuts.isEmpty(),
+                "pin section reset clears group switch shortcut");
+        require(manager.state(managementAction).shortcuts.isEmpty(),
+                "Pin to screen reset must clear the management shortcut");
         require(session.applyShortcuts(action, keys), "prepare reload");
     }
     {
@@ -152,6 +237,8 @@ int main(int argc, char** argv) {
         storage.initialize({directory.filePath(QStringLiteral("bin")), directory.path()}).success,
         "temporary storage must initialize");
     textSelectionSettings();
+    duplicateContentSettings();
+    clipboardSourceIdentity();
     shortcutSettings();
     storage.shutdown();
     return 0;

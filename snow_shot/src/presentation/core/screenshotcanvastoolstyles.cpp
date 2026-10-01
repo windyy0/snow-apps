@@ -158,6 +158,8 @@ QJsonObject shapeValue(const SnowCanvasShapeStyle& style) {
     putEnum(&value, QStringLiteral("end_arrowhead"), style.endArrowhead);
     putEnum(&value, QStringLiteral("stroke_style"), style.strokeStyle);
     putEnum(&value, QStringLiteral("arrow_type"), style.arrowType);
+    putDouble(&value, QStringLiteral("arrow_ratio"),
+              std::isfinite(style.arrowRatio) ? std::clamp(style.arrowRatio, 1.0, 3.0) : 1.0);
     putDouble(&value, QStringLiteral("opacity"), style.opacity);
     putEnum(&value, QStringLiteral("highlight_shape"), style.highlightShape);
     putEnum(&value, QStringLiteral("shape"), style.shape);
@@ -181,12 +183,16 @@ void readShapeValue(const QJsonObject& object, SnowCanvasShapeStyle* style) {
         style->stroke = color;
     readDouble(object, QStringLiteral("stroke_width"), &style->strokeWidth);
     readCornerRadii(object, &style->cornerRadii);
+    style->arrowRatio = 1.0;
+    readDouble(object, QStringLiteral("arrow_ratio"), &style->arrowRatio);
+    style->arrowRatio =
+        std::isfinite(style->arrowRatio) ? std::clamp(style->arrowRatio, 1.0, 3.0) : 1.0;
     readEnum(object, QStringLiteral("fill_style"), static_cast<int>(SnowCanvasFillStyle::Solid),
              &style->fillStyle);
     readEnum(object, QStringLiteral("start_arrowhead"),
-             static_cast<int>(SnowCanvasArrowhead::CrowfootOneOrMany), &style->startArrowhead);
+             static_cast<int>(SnowCanvasArrowhead::IndentedTriangle), &style->startArrowhead);
     readEnum(object, QStringLiteral("end_arrowhead"),
-             static_cast<int>(SnowCanvasArrowhead::CrowfootOneOrMany), &style->endArrowhead);
+             static_cast<int>(SnowCanvasArrowhead::IndentedTriangle), &style->endArrowhead);
     readEnum(object, QStringLiteral("stroke_style"),
              static_cast<int>(SnowCanvasStrokeStyle::Dotted), &style->strokeStyle);
     readEnum(object, QStringLiteral("arrow_type"), static_cast<int>(SnowCanvasArrowType::Elbow),
@@ -224,7 +230,7 @@ QJsonObject filterValue(const SnowCanvasFilterStyle& style) {
 void readFilterValue(const QJsonObject& object, SnowCanvasFilterStyle* style) {
     if (style == nullptr)
         return;
-    readEnum(object, QStringLiteral("type"), static_cast<int>(SnowCanvasFilterType::SmartErase),
+    readEnum(object, QStringLiteral("type"), static_cast<int>(SnowCanvasFilterType::Brightness),
              &style->type);
     readDouble(object, QStringLiteral("strength"), &style->strength);
     readDouble(object, QStringLiteral("opacity"), &style->opacity);
@@ -410,7 +416,9 @@ SnowCanvasStyleDefaults screenshotCanvasToolStyleDefaults() {
     defaults.penFilter.strength = bounded(defaults.penFilter.strength, 0.0, 1.0);
     defaults.penFilter.opacity = bounded(defaults.penFilter.opacity, 0.0, 1.0);
     defaults.penFilter.strokeWidth = bounded(defaults.penFilter.strokeWidth, 1.0, 72.0);
-    defaults.text.fontSize = bounded(defaults.text.fontSize, 6.0, 256.0);
+    defaults.text.fontSize =
+        bounded(defaults.text.fontSize, snow_canvas_style_limits::minimumFontSize,
+                snow_canvas_style_limits::maximumTextFontSize);
     defaults.text.strokeWidth = bounded(defaults.text.strokeWidth, 0.0, 72.0);
     defaults.text.cornerRadii.topLeft = bounded(defaults.text.cornerRadii.topLeft, 0.0, 83.0);
     defaults.text.cornerRadii.topRight = bounded(defaults.text.cornerRadii.topRight, 0.0, 83.0);
@@ -418,10 +426,14 @@ SnowCanvasStyleDefaults screenshotCanvasToolStyleDefaults() {
         bounded(defaults.text.cornerRadii.bottomRight, 0.0, 83.0);
     defaults.text.cornerRadii.bottomLeft = bounded(defaults.text.cornerRadii.bottomLeft, 0.0, 83.0);
     defaults.text.opacity = bounded(defaults.text.opacity, 0.0, 1.0);
-    defaults.serialNumber.fontSize = bounded(defaults.serialNumber.fontSize, 6.0, 512.0);
+    defaults.serialNumber.fontSize =
+        bounded(defaults.serialNumber.fontSize, snow_canvas_style_limits::minimumFontSize,
+                snow_canvas_style_limits::maximumBadgeFontSize);
     defaults.serialNumber.strokeWidth = bounded(defaults.serialNumber.strokeWidth, 0.0, 72.0);
     defaults.serialNumber.opacity = bounded(defaults.serialNumber.opacity, 0.0, 1.0);
-    defaults.watermark.fontSize = bounded(defaults.watermark.fontSize, 6.0, 512.0);
+    defaults.watermark.fontSize =
+        bounded(defaults.watermark.fontSize, snow_canvas_style_limits::minimumFontSize,
+                snow_canvas_style_limits::maximumWatermarkFontSize);
     defaults.watermark.angle = bounded(defaults.watermark.angle, -90.0, 90.0);
     defaults.watermark.gap = bounded(defaults.watermark.gap, 10.0, 200.0);
     defaults.watermark.opacity = bounded(defaults.watermark.opacity, 0.0, 1.0);
@@ -454,6 +466,13 @@ bool persistScreenshotCanvasToolStyles(const SnowCanvasStyleDefaults& defaults) 
         return false;
     }
     return configuration.setValues(values);
+}
+
+bool persistScreenshotCanvasStyleEdit(const SnowCanvasStyleEdit& edit) {
+    // Always merge against storage, never an editor's potentially stale snapshot.
+    auto defaults = screenshotCanvasToolStyleDefaults();
+    snowCanvasMergeStyleEdit(defaults, edit);
+    return persistScreenshotCanvasToolStyles(defaults);
 }
 
 void applyScreenshotCanvasToolStyles(SnowCanvasWidget& canvas,

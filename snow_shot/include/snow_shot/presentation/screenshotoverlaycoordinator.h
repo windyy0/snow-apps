@@ -1,6 +1,7 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTOVERLAYCOORDINATOR_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTOVERLAYCOORDINATOR_H
 
+#include "snow_shot/presentation/screenshotselectiondisplayunit.h"
 #include "snow_shot/presentation/screenshottypes.h"
 #include "snow_shot/presentation/screenshotselectiongeometry.h"
 #include "snow_shot/presentation/screenshotselectorworkflowports.h"
@@ -18,11 +19,13 @@
 #include <QVector>
 
 #include <cstdint>
+#include <optional>
 
-class ScreenshotColorPickerWidget;
+class ScreenshotColorPickerWindow;
 class ScreenshotDisplaySession;
 class ScreenshotOverlayEventSink;
 class ScreenshotSelectionToolbarCommandSink;
+struct ScreenshotSelectionVisualState;
 class ScreenshotSelectionToolbarWidget;
 class ScreenshotToolbarCommandSink;
 class ScreenshotToolbarWindow;
@@ -53,12 +56,15 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
                             ScreenshotOverlayShowMode mode);
     void hideOverlayWindowsImmediately(const ScreenshotDisplaySession& displaySession);
     void hideOverlayWindows(const ScreenshotDisplaySession& displaySession);
-    void updateOverlayState(const ScreenshotDisplaySession& displaySession, const QRectF& selection,
-                            int cornerRadius, int shadowWidth, const QColor& shadowColor,
-                            bool selectionToolbarHovered, bool selectionHandlesVisible,
+    void updateOverlayState(const ScreenshotDisplaySession& displaySession,
+                            const ScreenshotSelectionVisualState& selectionState,
                             bool intelligentSelecting, bool manualSelecting, bool dragging);
     void setScrollingCaptureMode(const ScreenshotDisplaySession& displaySession,
                                  const QRectF& selection, bool enabled);
+    void setScrollingResultPreview(const ScreenshotDisplaySession& displaySession,
+                                   const QImage& image, const QRectF& canvasRect,
+                                   std::optional<Qt::Orientation> cropGuide = std::nullopt);
+    void clearScrollingResultPreview(const ScreenshotDisplaySession& displaySession);
     void updateOverlayCursors(const ScreenshotDisplaySession& displaySession, bool selecting,
                               bool dragging) const;
     void setSelectionBorderColor(const ScreenshotDisplaySession& displaySession,
@@ -100,7 +106,7 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void previewSpotlightConfig(ScreenshotDisplaySession& displaySession,
                                 const SnowCanvasSpotlightConfig& config);
     void setTextStyle(const ScreenshotDisplaySession& displaySession,
-                      const SnowCanvasTextStyle& style);
+                      const SnowCanvasTextStyle& style, quint32 properties);
     void setSerialNumberStyle(const ScreenshotDisplaySession& displaySession,
                               const SnowCanvasSerialNumberStyle& style);
     void adjustSelectedSerialNumbers(const ScreenshotDisplaySession& displaySession, qint64 delta);
@@ -122,16 +128,20 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void redoCanvasEdit();
     ScreenshotSelectionToolbarWidget* selectionToolbar() const;
     void attachSelectionToolbarToOverlay(ScreenshotOverlayWindow* overlay);
-    ScreenshotColorPickerWidget* colorPicker() const;
+    void createColorPicker(const QPoint& initialCursorGlobalPosition);
+    void prepareColorPickerSurface(const ScreenshotDisplaySession& displaySession);
+    void releaseColorPicker();
+    ScreenshotColorPickerWindow* colorPicker() const;
     void updateColorPicker(ScreenshotOverlayWindow* overlay, const QImage& image,
                            const QRect& physicalRect, const QPoint& physicalPoint,
-                           const QPointF& localPosition, qreal opacity);
+                           const QPointF& localPosition, qreal opacity,
+                           const ScreenshotCoordinateDisplayValues& displayValues);
     void hideColorPicker();
     void setColorPickerCenterGuideLineColor(const QColor& color);
     void updateShortcutHints(ScreenshotOverlayWindow* overlay,
                              const ScreenshotShortcutHintContext& context, qreal opacity,
-                             const QRectF& selectionGlobal = {});
-    [[nodiscard]] bool screenshotUiContainsGlobalCursor() const;
+                             const QRectF& selectionGlobal, const QPoint& cursorPosition);
+    [[nodiscard]] bool screenshotUiContainsGlobalPoint(const QPoint& position) const;
     [[nodiscard]] bool stepToolbarStrokeWidth(int direction);
     [[nodiscard]] bool stepToolbarSelectionOpacity(int direction);
     [[nodiscard]] bool stepToolbarSpotlightOpacity(int direction);
@@ -142,9 +152,13 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void hideToolbar();
     void showToolbar();
     void hideSelectionToolbar();
+    void setSelectionToolbarHiddenForSession(bool hidden);
     void showSelectionToolbar();
     void raiseSelectionToolbar();
     void destroyUiResources();
+
+    [[nodiscard]] QVector<QWidget*>
+    visibleRecaptureWindows(const ScreenshotDisplaySession& displaySession) const;
 
     [[nodiscard]] QVector<std::uintptr_t>
     excludedHwnds(const ScreenshotDisplaySession& displaySession) const override;
@@ -155,6 +169,7 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void flushDeferredOverlayMaintenance(const ScreenshotDisplaySession& displaySession);
 
     ScreenshotOverlayUiHost m_uiHost;
+    QPoint m_colorPickerInitialCursorGlobalPosition;
     ScreenshotOverlayPool m_overlayPool;
     ScreenshotOverlayCanvasPresenter m_canvasPresenter;
     bool m_overlayMaintenancePending = false;

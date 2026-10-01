@@ -4,8 +4,10 @@ use crate::{
     MacError, MacResult,
     capture::{CaptureConfig, NativeFrame, Target, VideoStream},
     compositor::{Compositor, Layer},
-    content::{self, DisplayInfo},
+    content::{self, DisplayInfo, SharedSnapshot, WindowProbe},
+    exclusion_update::{NativeUpdateBarrier, NativeUpdateProgress},
 };
+use objc2_screen_capture_kit::SCShareableContent;
 use snow_media::{
     CursorMode, DynamicRange, PixelFormat,
     geometry::{DesktopRect, DesktopSpace, DesktopTransform, PixelRect, PixelSize},
@@ -14,7 +16,7 @@ use snow_media::{
 };
 use std::{
     sync::{
-        OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -25,6 +27,94 @@ pub struct DisplayId(pub u32);
 /// A WindowServer session identifier; never persist it as a durable identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WindowId(pub u32);
+
+#[derive(Clone)]
+struct ExclusionRequest {
+    generation: u64,
+    windows: Vec<u32>,
+    processes: Vec<i32>,
+    required: Vec<u32>,
+}
+#[derive(Default)]
+struct ExclusionState {
+    requested: u64,
+    applied: u64,
+    failed: u64,
+    pending: Option<ExclusionRequest>,
+}
+/// Latest-request mailbox. Native content discovery and update acknowledgments
+/// are handled independently of recording commands and video encoding.
+#[derive(Clone, Default)]
+pub struct ExclusionControl(Arc<Mutex<ExclusionState>>);
+impl ExclusionControl {
+    pub fn request(
+        &self,
+        mut windows: Vec<u32>,
+        mut processes: Vec<i32>,
+        required: Vec<u32>,
+    ) -> MacResult<u64> {
+        if windows.len() > 4096 || processes.len() > 4096 || required.len() > 4096 {
+            return Err(geometry("invalid capture exclusions"));
+        }
+        windows.sort_unstable();
+        windows.dedup();
+        if required.iter().any(|id| windows.binary_search(id).is_err()) {
+            return Err(geometry("required window is not excluded"));
+        }
+        processes.sort_unstable();
+        processes.dedup();
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        state.requested = state
+            .requested
+            .checked_add(1)
+            .ok_or_else(|| geometry("exclusion generation overflow"))?;
+        let generation = state.requested;
+        state.pending = Some(ExclusionRequest {
+            generation,
+            windows,
+            processes,
+            required,
+        });
+        Ok(generation)
+    }
+    pub fn status(&self) -> (u64, u64, u32) {
+        let state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let status = if state.applied == state.requested {
+            0
+        } else if state.failed == state.requested {
+            2
+        } else {
+            1
+        };
+        (state.requested, state.applied, status)
+    }
+    fn take_pending(&self) -> Option<ExclusionRequest> {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pending
+            .take()
+    }
+    fn complete(&self, generation: u64, success: bool) {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if success {
+            state.applied = generation;
+        } else {
+            state.failed = generation;
+        }
+    }
+}
+enum ExclusionFlight {
+    Preparing {
+        request: ExclusionRequest,
+        result: crossbeam_channel::Receiver<MacResult<SharedSnapshot>>,
+    },
+    Applying {
+        request: ExclusionRequest,
+        results: Vec<crossbeam_channel::Receiver<MacResult<()>>>,
+        barrier: NativeUpdateBarrier,
+    },
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DesktopTarget {
     PrimaryDisplay,
@@ -187,18 +277,25 @@ fn region_plan(
 impl Plan {
     fn resolve(config: &DesktopConfig) -> MacResult<Self> {
         let deadline = crate::deadline::Deadline::new(config.timeout)?;
+        let content = content::shareable_content_cancelable_filtered(
+            deadline.remaining()?,
+            &config.cancellation,
+            true,
+        )?;
+        Self::resolve_with(config, &content)
+    }
+    fn resolve_with(config: &DesktopConfig, content: &SCShareableContent) -> MacResult<Self> {
         let displays = if matches!(config.target, DesktopTarget::Window(_)) {
             Vec::new()
         } else {
-            content::displays_cancelable(deadline.remaining()?, &config.cancellation)?
+            content::displays_from(content)?
         };
         if let DesktopTarget::Region(bounds) = config.target {
             return region_plan(bounds, &displays, config.output);
         }
         let (target, process_id, bounds, size) = match config.target {
             DesktopTarget::Window(WindowId(id)) => {
-                let window =
-                    content::window_cancelable(id, deadline.remaining()?, &config.cancellation)?;
+                let window = content::window_from(content, id)?;
                 if !window.on_screen {
                     return Err(MacError::TargetUnavailable);
                 }
@@ -289,13 +386,18 @@ pub struct DesktopSession {
     plan: Plan,
     streams: Vec<VideoStream>,
     latest: Vec<Option<NativeFrame>>,
-    compositor: Compositor,
+    compositor: Option<Compositor>,
     previous: Option<DesktopFrame>,
     topology: u64,
     generation: u64,
     configuration_pending: bool,
     failure: Option<MacError>,
     inspected_at: Instant,
+    window_probe: Option<WindowProbe>,
+    pending_content: Option<SharedSnapshot>,
+    exclusion_control: Option<ExclusionControl>,
+    exclusion_flight: Option<ExclusionFlight>,
+    required_excluded_windows: Vec<u32>,
 }
 impl DesktopSession {
     pub fn new(mut config: DesktopConfig) -> MacResult<Self> {
@@ -315,19 +417,27 @@ impl DesktopSession {
         {
             config.target = DesktopTarget::Display(DisplayId(id));
         }
-        let compositor = Compositor::new(plan.transform.output, output_format(&config), 4)?;
+        let window_probe = match config.target {
+            DesktopTarget::Window(WindowId(id)) => content::probe_window(id),
+            _ => None,
+        };
         Ok(Self {
             latest: vec![None; plan.sources.len()],
             config,
             plan,
             streams: Vec::new(),
-            compositor,
+            compositor: None,
             previous: None,
             topology,
             generation: 1,
             configuration_pending: true,
             failure: None,
             inspected_at: Instant::now(),
+            window_probe,
+            pending_content: None,
+            exclusion_control: None,
+            exclusion_flight: None,
+            required_excluded_windows: Vec::new(),
         })
     }
     /// Replace the cancellation token between one-shot operations. Streams must be stopped.
@@ -346,6 +456,126 @@ impl DesktopSession {
     pub fn transform(&self) -> DesktopTransform {
         self.plan.transform
     }
+    pub fn set_exclusion_control(&mut self, control: ExclusionControl) {
+        self.exclusion_control = Some(control);
+    }
+    pub fn poll_exclusions(&mut self) -> MacResult<()> {
+        let Some(control) = self.exclusion_control.clone() else {
+            return Ok(());
+        };
+        if let Some(flight) = self.exclusion_flight.take() {
+            match flight {
+                ExclusionFlight::Preparing { request, result } => match result.try_recv() {
+                    Ok(Ok(content)) => {
+                        self.config.excluded_windows.clone_from(&request.windows);
+                        self.config
+                            .excluded_processes
+                            .clone_from(&request.processes);
+                        self.required_excluded_windows.clone_from(&request.required);
+                        let mut failed = false;
+                        let results = self
+                            .streams
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, stream)| {
+                                match stream.update_exclusions(
+                                    &self.plan.capture_config(&self.config, index),
+                                    &content,
+                                ) {
+                                    Ok(result) => Some(result),
+                                    Err(_) => {
+                                        failed = true;
+                                        None
+                                    }
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        if results.is_empty() {
+                            control.complete(request.generation, !failed);
+                        } else {
+                            self.exclusion_flight = Some(ExclusionFlight::Applying {
+                                request,
+                                results,
+                                barrier: NativeUpdateBarrier::new(
+                                    Instant::now() + self.config.timeout,
+                                    failed,
+                                ),
+                            });
+                        }
+                    }
+                    Ok(Err(_)) | Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                        control.complete(request.generation, false);
+                    }
+                    Err(crossbeam_channel::TryRecvError::Empty) => {
+                        self.exclusion_flight =
+                            Some(ExclusionFlight::Preparing { request, result });
+                    }
+                },
+                ExclusionFlight::Applying {
+                    request,
+                    mut results,
+                    mut barrier,
+                } => {
+                    let mut failed = false;
+                    results.retain(|result| match result.try_recv() {
+                        Ok(Ok(())) => false,
+                        Ok(Err(_)) | Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                            failed = true;
+                            false
+                        }
+                        Err(crossbeam_channel::TryRecvError::Empty) => true,
+                    });
+                    match barrier.poll(results.len(), failed, Instant::now()) {
+                        NativeUpdateProgress::Pending { report_timeout } => {
+                            if report_timeout {
+                                control.complete(request.generation, false);
+                            }
+                            // A timeout cannot cancel a native mutation. Keep
+                            // all unfinished callbacks before issuing a newer filter.
+                            self.exclusion_flight = Some(ExclusionFlight::Applying {
+                                request,
+                                results,
+                                barrier,
+                            });
+                        }
+                        NativeUpdateProgress::Settled { success } => {
+                            self.previous = None;
+                            self.latest.fill(None);
+                            self.generation += 1;
+                            self.configuration_pending = true;
+                            control.complete(request.generation, success);
+                        }
+                    }
+                }
+            }
+        }
+        if self.exclusion_flight.is_none()
+            && let Some(request) = control.take_pending()
+        {
+            let cancellation = self.config.cancellation.clone();
+            let timeout = self.config.timeout;
+            let required = request.required.clone();
+            let (tx, result) = crossbeam_channel::bounded(1);
+            match std::thread::Builder::new()
+                .name("snow-capture-exclusions".into())
+                .spawn(move || {
+                    snow_core::qos::apply_current_thread();
+                    let _ = tx.send(content::shareable_content_with_required_windows(
+                        timeout,
+                        &cancellation,
+                        &required,
+                    ));
+                }) {
+                Ok(_) => {
+                    self.exclusion_flight = Some(ExclusionFlight::Preparing { request, result });
+                }
+                Err(_) => {
+                    control.complete(request.generation, false);
+                }
+            }
+        }
+        Ok(())
+    }
     pub fn set_cursor(&mut self, mode: CursorMode) -> MacResult<()> {
         if mode != self.config.cursor {
             for stream in &mut self.streams {
@@ -358,13 +588,41 @@ impl DesktopSession {
         Ok(())
     }
     fn refresh(&mut self) -> MacResult<()> {
+        // An acknowledgment must describe the currently active streams. Do
+        // not replace them while a native filter mutation is still in flight.
+        if matches!(
+            self.exclusion_flight,
+            Some(ExclusionFlight::Applying { .. })
+        ) {
+            return Ok(());
+        }
         let current = topology()?;
         let window_check = matches!(self.config.target, DesktopTarget::Window(_))
             && self.inspected_at.elapsed() >= Duration::from_millis(250);
         if current == self.topology && !window_check {
             return Ok(());
         }
-        let next = Plan::resolve(&self.config)?;
+        if window_check
+            && current == self.topology
+            && let DesktopTarget::Window(WindowId(id)) = self.config.target
+            && content::probe_window(id)
+                .is_some_and(|probe| self.window_probe.as_ref() == Some(&probe))
+        {
+            self.inspected_at = Instant::now();
+            return Ok(());
+        }
+        let deadline = crate::deadline::Deadline::new(self.config.timeout)?;
+        let content = content::shareable_content_cancelable(
+            deadline.remaining()?,
+            &self.config.cancellation,
+        )?;
+        // A prepared popup can disappear temporarily from discovery. Retain
+        // the existing verified streams until replacements can include every ID.
+        if !content::has_required_windows(&content, &self.required_excluded_windows) {
+            return Ok(());
+        }
+        let next = Plan::resolve_with(&self.config, &content)?;
+        self.pending_content = Some(SharedSnapshot::new(content));
         if matches!(self.config.target, DesktopTarget::Window(_))
             && self.plan.sources.first().map(|s| s.process_id)
                 != next.sources.first().map(|s| s.process_id)
@@ -372,11 +630,14 @@ impl DesktopSession {
             return Err(MacError::TargetUnavailable);
         }
         self.inspected_at = Instant::now();
+        self.window_probe = match self.config.target {
+            DesktopTarget::Window(WindowId(id)) => content::probe_window(id),
+            _ => None,
+        };
         if current != self.topology || next != self.plan {
             self.streams.clear();
             self.latest = vec![None; next.sources.len()];
-            self.compositor =
-                Compositor::new(next.transform.output, output_format(&self.config), 4)?;
+            self.compositor = None;
             self.plan = next;
             self.previous = None;
             self.generation = self
@@ -410,6 +671,7 @@ impl DesktopSession {
         self.complete(result)
     }
     fn next_event_inner(&mut self, timeout: Duration) -> MacResult<DesktopEvent> {
+        self.poll_exclusions()?;
         self.refresh()?;
         if std::mem::take(&mut self.configuration_pending) {
             return Ok(DesktopEvent::Configuration {
@@ -418,10 +680,27 @@ impl DesktopSession {
             });
         }
         if self.streams.is_empty() {
+            let deadline = crate::deadline::Deadline::new(self.config.timeout)?;
+            let shared = if let Some(content) = self.pending_content.take() {
+                Some(content)
+            } else if self.plan.sources.len() > 1 || !self.required_excluded_windows.is_empty() {
+                Some(SharedSnapshot::new(content::shareable_content_cancelable(
+                    deadline.remaining()?,
+                    &self.config.cancellation,
+                )?))
+            } else {
+                None
+            };
+            if shared.as_deref().is_some_and(|content| {
+                !content::has_required_windows(content, &self.required_excluded_windows)
+            }) {
+                return Err(MacError::Inactive);
+            }
             let mut streams = Vec::with_capacity(self.plan.sources.len());
             for i in 0..self.plan.sources.len() {
-                streams.push(VideoStream::start(
+                streams.push(VideoStream::start_with(
                     &self.plan.capture_config(&self.config, i),
+                    shared.as_deref(),
                 )?);
             }
             self.streams = streams;
@@ -475,10 +754,21 @@ impl DesktopSession {
     fn snapshot_inner(&mut self) -> MacResult<DesktopFrame> {
         let deadline = crate::deadline::Deadline::new(self.config.timeout)?;
         self.refresh()?;
+        let content = match self.pending_content.take() {
+            Some(content) => content,
+            None => SharedSnapshot::new(content::shareable_content_cancelable_filtered(
+                deadline.remaining()?,
+                &self.config.cancellation,
+                content::snapshot_uses_visible_windows(
+                    &self.config.excluded_windows,
+                    &self.config.excluded_processes,
+                ),
+            )?),
+        };
         for i in 0..self.plan.sources.len() {
             let mut options = self.plan.capture_config(&self.config, i);
             options.timeout = deadline.remaining()?;
-            self.latest[i] = Some(crate::capture::screenshot(&options)?);
+            self.latest[i] = Some(crate::capture::screenshot_with(&options, &content)?);
         }
         if topology()? != self.topology {
             return Err(MacError::Inactive);
@@ -516,10 +806,32 @@ impl DesktopSession {
             width: self.plan.transform.output.width,
             height: self.plan.transform.output.height,
         };
-        let image = if layers.len() == 1 && layers[0].destination == full && !self.config.opaque {
+        let display = matches!(
+            self.plan.sources.first().map(|source| source.target),
+            Some(Target::Display(_))
+        );
+        let image = if layers.len() == 1
+            && should_clone_source(
+                layers[0].source,
+                layers[0].destination,
+                frames[0].image.size(),
+                full,
+                self.config.opaque,
+                display,
+            ) {
             frames[0].image.clone()
         } else {
-            self.compositor.compose(&layers, self.config.opaque)?
+            if self.compositor.is_none() {
+                self.compositor = Some(Compositor::new(
+                    self.plan.transform.output,
+                    output_format(&self.config),
+                    4,
+                )?);
+            }
+            self.compositor
+                .as_mut()
+                .unwrap()
+                .compose(&layers, self.config.opaque)?
         };
         Ok(DesktopFrame {
             image,
@@ -552,6 +864,23 @@ fn latch_failure(slot: &mut Option<MacError>, error: &MacError) -> bool {
     } else {
         false
     }
+}
+fn should_clone_source(
+    source: PixelRect,
+    destination: PixelRect,
+    image: PixelSize,
+    output: PixelRect,
+    opaque: bool,
+    display: bool,
+) -> bool {
+    source.x == 0
+        && source.y == 0
+        && source.width == image.width
+        && source.height == image.height
+        && destination == output
+        && image.width == output.width
+        && image.height == output.height
+        && (!opaque || display)
 }
 fn output_format(config: &DesktopConfig) -> PixelFormat {
     match config.dynamic_range {
@@ -620,6 +949,40 @@ mod tests {
         ));
     }
     #[test]
+    fn exclusions_acknowledge_only_the_applied_generation() {
+        let control = ExclusionControl::default();
+        assert_eq!(control.status(), (0, 0, 0));
+        assert_eq!(
+            control.request(vec![9, 7, 9], vec![4, 4], vec![9]).unwrap(),
+            1
+        );
+        let first = control.take_pending().unwrap();
+        assert_eq!(first.windows, vec![7, 9]);
+        assert_eq!(first.processes, vec![4]);
+        assert_eq!(control.request(vec![10], vec![], vec![10]).unwrap(), 2);
+        control.complete(first.generation, true);
+        assert_eq!(control.status(), (2, 1, 1));
+        let second = control.take_pending().unwrap();
+        control.complete(second.generation, false);
+        assert_eq!(control.status(), (2, 1, 2));
+        assert!(control.request(vec![10], vec![], vec![11]).is_err());
+        assert_eq!(control.status(), (2, 1, 2));
+        assert_eq!(control.request(vec![10], vec![], vec![10]).unwrap(), 3);
+        let third = control.take_pending().unwrap();
+        control.complete(third.generation, true);
+        assert_eq!(control.status(), (3, 3, 0));
+    }
+    #[test]
+    fn exclusions_keep_only_the_latest_unstarted_request() {
+        let control = ExclusionControl::default();
+        control.request(vec![1], vec![], vec![1]).unwrap();
+        control.request(vec![2], vec![], vec![2]).unwrap();
+        let latest = control.take_pending().unwrap();
+        assert_eq!(latest.generation, 2);
+        assert_eq!(latest.windows, vec![2]);
+        assert!(control.take_pending().is_none());
+    }
+    #[test]
     fn target_loss_is_sticky_but_temporary_interruptions_are_not() {
         let mut state = None;
         assert!(!latch_failure(&mut state, &MacError::Inactive));
@@ -656,5 +1019,30 @@ mod tests {
         assert_eq!(plan.sources[1].destination.x, 300);
         bounds.space = DesktopSpace::PhysicalPixels;
         assert!(region_plan(bounds, &displays, None).is_err());
+    }
+    #[test]
+    fn opaque_display_frames_reuse_the_source_and_windows_do_not() {
+        let full = PixelRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 10,
+        };
+        let image = PixelSize::new(20, 10).unwrap();
+        assert!(should_clone_source(full, full, image, full, true, true));
+        assert!(should_clone_source(full, full, image, full, false, false));
+        assert!(!should_clone_source(full, full, image, full, true, false));
+        assert!(!should_clone_source(
+            PixelRect {
+                width: 10,
+                height: 10,
+                ..full
+            },
+            full,
+            image,
+            full,
+            false,
+            true
+        ));
     }
 }

@@ -17,6 +17,7 @@
 #include <QMouseEvent>
 #include <QDir>
 #include <QHash>
+#include <QGridLayout>
 #include <QImage>
 #include <QTemporaryDir>
 
@@ -80,6 +81,45 @@ class FakeTranslationHotkeyBackend final : public snow_shot::presentation::Globa
     QHash<int, snow_shot::shortcuts::ShortcutBinding> registrations;
 };
 
+void requireCompactTrayOptions(QWidget* widget) {
+    auto* options = widget->findChild<QWidget*>(QStringLiteral("settings-tray-menu-options-grid"));
+    auto* grid = qobject_cast<QGridLayout*>(options->layout());
+    require(grid != nullptr, "tray options use a grid");
+    widget->resize(1000, widget->sizeHint().height());
+    widget->show();
+    QCoreApplication::processEvents();
+    int row = 0;
+    bool firstGroup = true;
+    for (const auto& group :
+         snow_shot::presentation::settings::builtInSettingsRegistry().catalog().trayMenuGroups()) {
+        int visibleCount = 0;
+        for (const auto& option : group.options) {
+            auto* checkbox = widget->findChild<QAbstractButton*>(
+                QStringLiteral("settings-tray-menu-option-%1").arg(option.id));
+            require(checkbox != nullptr, "tray option retains its widget");
+            if (checkbox->isHidden()) {
+                continue;
+            }
+            if (visibleCount == 0 && !firstGroup) {
+                ++row; // Group divider.
+            }
+            int actualRow = -1;
+            int column = -1;
+            int rowSpan = 0;
+            int columnSpan = 0;
+            grid->getItemPosition(grid->indexOf(checkbox), &actualRow, &column, &rowSpan,
+                                  &columnSpan);
+            require(actualRow == row + visibleCount / 2 && column == visibleCount % 2,
+                    "visible tray options fill consecutive cells without hidden-option gaps");
+            ++visibleCount;
+        }
+        if (visibleCount > 0) {
+            row += (visibleCount + 1) / 2;
+            firstGroup = false;
+        }
+    }
+}
+
 void selectedTextShortcutSettings() {
     using namespace snow_shot::presentation;
     namespace storage = snow_shot::storage;
@@ -139,6 +179,7 @@ void selectedTextShortcutSettings() {
         require(translationCheckbox != nullptr && screenshotCheckbox != nullptr &&
                     translationCheckbox->isHidden() && translationCheckbox->isChecked(),
                 "disabled tray customization hides translation but retains its checked preference");
+        requireCompactTrayOptions(trayWidget.get());
         screenshotCheckbox->setChecked(!screenshotCheckbox->isChecked());
         require(tray.menuOptions().contains(menuId),
                 "editing another tray option preserves the hidden translation preference");
@@ -154,6 +195,7 @@ void selectedTextShortcutSettings() {
                 "enable OCR translation jump before category reset");
         require(!translationCheckbox->isHidden() && translationCheckbox->isChecked(),
                 "live enabling restores the selected tray customization checkbox");
+        requireCompactTrayOptions(trayWidget.get());
         require(tray.setMenuOptions(defaultMenu),
                 "restore tray configuration after feature checks");
         require(session.state(QStringLiteral("quick.translate-selected-text")).visible,
@@ -200,12 +242,14 @@ void selectedTextShortcutSettings() {
                         persisted.translateSelectedText() == keys,
                     "reset disables translation, refreshes UI and hotkeys, and preserves bindings");
             require(!thumbIsOnRight(toggle), "reset moves the translation thumb to the left");
+            requireCompactTrayOptions(trayWidget.get());
             for (const bool enabled : {true, false, true}) {
                 clickWidget(toggle);
                 QCoreApplication::processEvents();
                 require(toggle->isChecked() == enabled && thumbIsOnRight(toggle) == enabled &&
                             storage::ExtendedFeaturesSettings().translationPageEnabled() == enabled,
                         "clicking translation after reset updates both rendering and storage");
+                requireCompactTrayOptions(trayWidget.get());
             }
             QCoreApplication::processEvents();
         }
@@ -306,6 +350,31 @@ int main(int argc, char** argv) {
     {
         snow_shot::presentation::GlobalShortcutManager shortcuts;
         settings::BuiltInSettingsBackend backend(shortcuts);
+        require(storage::RecordingSettings().setMicrophoneGainDb(-12) &&
+                    storage::RecordingSettings().setSystemAudioGainDb(9) &&
+                    backend.resetSection(settings::SettingsSectionReset::ScreenRecording) &&
+                    storage::RecordingSettings().microphoneGainDb() == 0 &&
+                    storage::RecordingSettings().systemAudioGainDb() == 0,
+                "recording section reset restores both gains to unity");
+        const auto separateAudio = settings::SettingsSwitchBinding::SeparateRecordingAudioTracks;
+        require(backend.switchEnabled(separateAudio) && !backend.switchValue(separateAudio) &&
+                    backend.applySwitchValue(separateAudio, true) &&
+                    storage::RecordingSettings().separateAudioTracks() &&
+                    backend.switchValue(separateAudio),
+                "separate audio tracks default off and persist enabled");
+        require(backend.resetSection(settings::SettingsSectionReset::ScreenRecording) &&
+                    !backend.switchValue(separateAudio) &&
+                    !storage::RecordingSettings().separateAudioTracks(),
+                "screen recording reset restores mixed audio");
+        const storage::RecordingSettings recording;
+        require(recording.setPostProcessingEnabled(true) &&
+                    recording.setPostProcessingEffect(QStringLiteral("playback_time")) &&
+                    recording.setProgressBarColor(QColor(12, 34, 56, 78)) &&
+                    backend.resetSection(settings::SettingsSectionReset::ScreenRecording) &&
+                    !recording.postProcessingEnabled() &&
+                    recording.postProcessingEffect() == QStringLiteral("progress_bar") &&
+                    recording.progressBarColor() == QColor(22, 119, 255),
+                "screen recording reset restores automatic real-time mode and overlay defaults");
         const auto loopImages = settings::SettingsSwitchBinding::LoopAnimatedImages;
         require(backend.switchEnabled(loopImages) && backend.switchValue(loopImages) &&
                     backend.applySwitchValue(loopImages, false) &&
@@ -320,15 +389,28 @@ int main(int argc, char** argv) {
         require(backend.applySwitchValue(recognitionSave, false) &&
                     !storage::TextRecognitionSettings().saveRecognitionResultAsImage(),
                 "recognition image export persists disabled setting");
+        const auto defaultFormatting = settings::SettingsSelectBinding::OcrDefaultFormatting;
+        const auto defaultPunctuation = settings::SettingsSelectBinding::OcrDefaultPunctuation;
+        require(backend.selectValue(defaultFormatting).toString() == QStringLiteral("none") &&
+                    backend.selectValue(defaultPunctuation).toString() == QStringLiteral("none") &&
+                    backend.applySelectValue(defaultFormatting, QStringLiteral("remove")) &&
+                    backend.applySelectValue(defaultPunctuation, QStringLiteral("full")) &&
+                    storage::TextRecognitionSettings().defaultFormatting() ==
+                        QStringLiteral("remove") &&
+                    storage::TextRecognitionSettings().defaultPunctuation() ==
+                        QStringLiteral("full"),
+                "recognized-text defaults persist through the settings backend");
         const auto oldFill =
             applicationStorage.configuration().value(QStringLiteral("text_recognition/fill_style"));
         require(applicationStorage.configuration().setValue(
                     QStringLiteral("text_recognition/fill_style"), QStringLiteral("blur")) &&
                     backend.resetSection(settings::SettingsSectionReset::TextRecognitionBehavior) &&
                     backend.switchValue(recognitionSave) &&
+                    backend.selectValue(defaultFormatting).toString() == QStringLiteral("none") &&
+                    backend.selectValue(defaultPunctuation).toString() == QStringLiteral("none") &&
                     applicationStorage.configuration().value(
                         QStringLiteral("text_recognition/fill_style")) == QStringLiteral("blur"),
-                "recognition save reset restores only its own setting");
+                "recognition behavior reset restores defaults without changing appearance");
         require(applicationStorage.configuration().setValue(
                     QStringLiteral("text_recognition/fill_style"), oldFill),
                 "restore recognition appearance fixture");
@@ -460,6 +542,13 @@ int main(int argc, char** argv) {
                     backend.switchValue(binding) && translation.configuration() == languages,
                 "reset Translation should restore only the display toggle");
 
+        const auto resizeBinding = settings::SettingsSelectBinding::OcrDetectorResizePolicy;
+        require(backend.selectValue(resizeBinding).toString() == QStringLiteral("max") &&
+                    backend.applySelectValue(resizeBinding, QStringLiteral("min")) &&
+                    backend.selectValue(resizeBinding).toString() == QStringLiteral("min") &&
+                    !backend.applySelectValue(resizeBinding, QStringLiteral("unsupported")) &&
+                    backend.selectValue(resizeBinding).toString() == QStringLiteral("min"),
+                "detector scaling must default to max and persist only supported policies");
         require(backend.applySelectValue(settings::SettingsSelectBinding::OcrModelType,
                                          QStringLiteral("medium")) &&
                     backend.selectValue(settings::SettingsSelectBinding::OcrModelType).toString() ==
@@ -469,10 +558,11 @@ int main(int argc, char** argv) {
                     backend.resetSection(settings::SettingsSectionReset::TextRecognition) &&
                     backend.selectValue(settings::SettingsSelectBinding::OcrModelType).toString() ==
                         QStringLiteral("small") &&
+                    backend.selectValue(resizeBinding).toString() == QStringLiteral("max") &&
                     !applicationStorage.configuration()
                          .value(QStringLiteral("text_recognition/direct_ml_acceleration"))
                          .toBool(),
-                "reset Text Recognition should restore Small and disable DirectML acceleration");
+                "reset Text Recognition should restore Small, max scaling, and CPU mode");
     }
     require(storage::PinToScreenSettings().setDoubleClickAction(QStringLiteral("close")),
             "save pinned double-click action before restart");

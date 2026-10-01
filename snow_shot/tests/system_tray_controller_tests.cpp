@@ -8,28 +8,41 @@
 #include "snow_shot/shortcuts/shortcutdisplayservice.h"
 
 #include "widgets/context_menu.h"
+#include "widgets/modal.h"
 
 #include <QAction>
 #include <QApplication>
+#include <QBuffer>
+#include <QDataStream>
 #include <QCoreApplication>
+#include <QCursor>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileDevice>
 #include <QFileInfo>
 #include <QImage>
+#include <QImageReader>
 #include <QLineEdit>
 #include <QMenu>
+#include <QPalette>
+#include <QPainter>
 #include <QPushButton>
+#include <QScreen>
 #include <QSet>
 #include <QString>
 #include <QSystemTrayIcon>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QUuid>
 #include <QWidget>
 
 #include <cstdlib>
 #include <iostream>
+
+#ifdef Q_OS_MACOS
+int runNativeSystemTrayMenuTests(snow_shot::presentation::SystemTrayController& controller);
+#endif
 
 namespace {
 void require(bool condition, const char* message) {
@@ -62,6 +75,20 @@ void requireBalloon(const QSystemTrayIcon* trayIcon, const QString& title, const
             reason);
 }
 
+#ifdef Q_OS_MACOS
+bool containsOpaqueColor(const QImage& image, const QColor& color) {
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            if (pixel.alpha() == 255 && pixel.rgb() == color.rgb()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+#endif
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -80,13 +107,25 @@ int main(int argc, char* argv[]) {
             "English should be available from the English catalog");
 
     snow_shot::presentation::SystemTrayController controller;
+#ifdef Q_OS_MACOS
+    if (application.arguments().contains(QStringLiteral("--native-menu"))) {
+        int result = 1;
+        QTimer::singleShot(0, &application, [&]() {
+            result = runNativeSystemTrayMenuTests(controller);
+            application.exit(result);
+        });
+        application.exec();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return result;
+    }
+#endif
     auto* trayIcon =
         controller.findChild<QSystemTrayIcon*>(QStringLiteral("snowShotSystemTrayIcon"));
     require(trayIcon != nullptr, "the controller should own a system tray icon");
     require(!trayIcon->icon().isNull(), "the bundled tray icon should load");
 #ifdef Q_OS_MACOS
-    require(trayIcon->icon().isMask(),
-            "bundled macOS tray icons must use native template rendering");
+    require(!trayIcon->icon().isMask(),
+            "bundled macOS tray icons must preserve their original colors");
 #endif
     require(trayIcon->toolTip() == QStringLiteral("SnowShot"),
             "the tray tooltip should be SnowShot");
@@ -142,6 +181,57 @@ int main(int argc, char* argv[]) {
         require(trayIcon->property("resolvedIconSource").toString() ==
                     QStringLiteral(":/snow-shot/app-icons/snow-shot-tray-%1.png").arg(selection),
                 "each tray icon selection should resolve to its bundled asset");
+#ifdef Q_OS_MACOS
+        require(!trayIcon->icon().isMask(),
+                "switching bundled macOS tray icons must preserve their original colors");
+#endif
+    }
+    const auto verifyDisabledBadge = [&]() {
+        using snow_shot::presentation::GlobalShortcutAction;
+        controller.setQuickActionChecked(GlobalShortcutAction::ToggleGlobalHotkeys, false);
+        const QIcon original = trayIcon->icon();
+        controller.setQuickActionChecked(GlobalShortcutAction::ToggleGlobalHotkeys, true);
+        require(!trayIcon->icon().isMask(), "the disabled badge must retain its red color");
+        for (const int size : {16, 22, 32, 44, 64}) {
+            QImage normal(size, size, QImage::Format_ARGB32_Premultiplied);
+            normal.fill(Qt::transparent);
+            QPainter painter(&normal);
+            original.paint(&painter, QRect(0, 0, size, size));
+            painter.end();
+            const QImage disabled = trayIcon->icon().pixmap(QSize(size, size), 1.0).toImage();
+            require(disabled.size() == QSize(size, size),
+                    "badged tray icons should provide standard and high-DPI sizes");
+            const QColor red = disabled.pixelColor(size * 6 / 16, size * 6 / 16);
+            require(red.red() > 180 && red.green() < 100 && red.blue() < 100,
+                    "disabled shortcuts should display a red badge at the center");
+            const int slashX = size / 2 - 1;
+            const int slashY = size / 2;
+            const QColor slash = disabled.pixelColor(slashX, slashY);
+            require(slash.red() > 220 && slash.green() > 220 && slash.blue() > 220,
+                    "the disabled badge should have a white diagonal slash");
+            const int margin = size * 3 / 16;
+            require(normal.copy(0, 0, size, margin) == disabled.copy(0, 0, size, margin) &&
+                        normal.copy(0, size - margin, size, margin) ==
+                            disabled.copy(0, size - margin, size, margin) &&
+                        normal.copy(0, 0, margin, size) == disabled.copy(0, 0, margin, size) &&
+                        normal.copy(size - margin, 0, margin, size) ==
+                            disabled.copy(size - margin, 0, margin, size),
+                    "the centered badge must preserve artwork along every edge");
+        }
+        controller.show();
+        require(trayIcon->icon().pixmap(QSize(32, 32), 1.0).toImage() !=
+                    original.pixmap(QSize(32, 32), 1.0).toImage(),
+                "refreshing the tray must preserve the disabled badge");
+        controller.setQuickActionChecked(GlobalShortcutAction::ToggleGlobalHotkeys, false);
+        require(trayIcon->icon().pixmap(QSize(32, 32), 1.0).toImage() ==
+                    original.pixmap(QSize(32, 32), 1.0).toImage(),
+                "re-enabling shortcuts must restore the original tray artwork");
+    };
+    for (const QString& selection : bundledSelections) {
+        controller.setQuickActionChecked(
+            snow_shot::presentation::GlobalShortcutAction::ToggleGlobalHotkeys, true);
+        controller.setIconSelection(selection);
+        verifyDisabledBadge();
     }
     controller.setIconSelection(QStringLiteral("unsupported"));
     require(controller.iconSelection() == QStringLiteral("default") &&
@@ -187,6 +277,8 @@ int main(int argc, char* argv[]) {
                     QColor(17, 113, 229),
             "a changed source fingerprint should replace the retained custom raster");
 
+    verifyDisabledBadge();
+
     const QString largeIconPath = storageDirectory.filePath(QStringLiteral("large-icon.png"));
     QImage largeImage(1024, 512, QImage::Format_ARGB32_Premultiplied);
     largeImage.fill(QColor(31, 173, 91));
@@ -199,10 +291,82 @@ int main(int argc, char* argv[]) {
     const QString icoPath = QFileInfo(QString::fromUtf8(__FILE__))
                                 .dir()
                                 .absoluteFilePath(QStringLiteral("../resources/app-icon.ico"));
+    const QStringList pluginPaths = QCoreApplication::libraryPaths();
+    QCoreApplication::setLibraryPaths({});
+    require(!QImageReader::supportedImageFormats().contains(QByteArrayLiteral("ico")),
+            "the regression must run without a Qt ICO decoder");
     controller.setCustomIconPath(icoPath);
     require(trayIcon->property("customIconSourcePixelSize").toSize() == QSize(256, 256) &&
                 trayIcon->property("customIconDecodedPixelSize").toSize() == QSize(256, 256),
-            "ICO loading should select the available frame nearest 256 by 256");
+            "ICO loading should select the available frame nearest 256 by 256 without Qt plugins");
+    require(trayIcon->property("resolvedIconSource").toString() == icoPath,
+            "ICO loading without Qt plugins must use the custom icon");
+    // Build the directory explicitly: fixture creation must not need Qt's ICO plugin either.
+    const auto writeIcon = [&](const QString& name, const QList<QSize>& sizes,
+                               const QList<QByteArray>& payloads) {
+        const QString path = storageDirectory.filePath(name);
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly), "the ICO fixture should be writable");
+        QDataStream stream(&file);
+        stream.setByteOrder(QDataStream::LittleEndian);
+        stream << quint16(0) << quint16(1) << quint16(sizes.size());
+        quint32 offset = 6 + 16 * static_cast<quint32>(sizes.size());
+        for (qsizetype index = 0; index < sizes.size(); ++index) {
+            stream << quint8(sizes[index].width()) << quint8(sizes[index].height()) << quint8(0)
+                   << quint8(0) << quint16(1) << quint16(32) << quint32(payloads[index].size())
+                   << offset;
+            offset += static_cast<quint32>(payloads[index].size());
+        }
+        for (const auto& payload : payloads) {
+            require(file.write(payload) == payload.size(), "the ICO payload should be written");
+        }
+        return path;
+    };
+    const auto pngPayload = [](int extent, const QColor& color) {
+        QImage image(extent, extent, QImage::Format_RGBA8888);
+        image.fill(color);
+        QByteArray bytes;
+        QBuffer buffer(&bytes);
+        require(buffer.open(QIODevice::WriteOnly) && image.save(&buffer, "PNG"),
+                "the embedded PNG fixture should be writable");
+        return bytes;
+    };
+    const QColor selectedColor(64, 128, 255, 128);
+    const QString multiIconPath = writeIcon(
+        QStringLiteral("multi-icon.ico"), {QSize(16, 16), QSize(64, 64), QSize(32, 32)},
+        {pngPayload(16, Qt::red), pngPayload(64, selectedColor), pngPayload(32, Qt::green)});
+    controller.setCustomIconPath(multiIconPath);
+    require(trayIcon->property("customIconSourcePixelSize").toSize() == QSize(64, 64) &&
+                trayIcon->icon().pixmap(QSize(64, 64)).toImage().pixelColor(32, 32).rgba() ==
+                    selectedColor.rgba(),
+            "ICO selection must decode the nearest frame and preserve its alpha and color");
+    const auto icoDecodeCount = trayIcon->property("customIconDecodeCount").toULongLong();
+    controller.show();
+    require(trayIcon->property("customIconDecodeCount").toULongLong() == icoDecodeCount,
+            "unchanged ICO files should reuse the decoded icon");
+
+    QByteArray dib;
+    QDataStream dibStream(&dib, QIODevice::WriteOnly);
+    dibStream.setByteOrder(QDataStream::LittleEndian);
+    dibStream << quint32(40) << qint32(16) << qint32(32) << quint16(1) << quint16(32) << quint32(0)
+              << quint32(16 * 16 * 4) << qint32(0) << qint32(0) << quint32(0) << quint32(0);
+    for (int pixel = 0; pixel < 16 * 16; ++pixel) {
+        dibStream << quint32(0xff4080c0);
+    }
+    dib.append(QByteArray(16 * 4, '\0')); // DWORD-aligned AND mask rows.
+    controller.setCustomIconPath(writeIcon(QStringLiteral("dib-icon.ico"), {QSize(16, 16)}, {dib}));
+    require(trayIcon->icon().pixmap(QSize(16, 16)).toImage().pixelColor(8, 8) ==
+                QColor(64, 128, 192),
+            "DIB-backed ICO images must decode without Qt plugins");
+    controller.setCustomIconPath(
+        writeIcon(QStringLiteral("broken-icon.ico"), {QSize(16, 16)}, {QByteArray("broken")}));
+    require(trayIcon->property("resolvedIconSource").toString().startsWith(QStringLiteral(":/")),
+            "a corrupt ICO payload must fall back to the bundled icon");
+#ifdef Q_OS_MACOS
+    require(!trayIcon->icon().isMask(),
+            "a bundled fallback must preserve its colors after a custom icon fails to load");
+#endif
+    QCoreApplication::setLibraryPaths(pluginPaths);
 
     controller.setIconSelection(QStringLiteral("light"));
     const QString oversizedIconPath =
@@ -232,6 +396,7 @@ int main(int argc, char* argv[]) {
     require(trayIcon->property("resolvedIconSource").toString() ==
                 QStringLiteral(":/snow-shot/app-icons/snow-shot-tray-light.png"),
             "an invalid custom image should fall back to the selected bundled tray icon");
+    verifyDisabledBadge();
     const QString malformedIconPath =
         storageDirectory.filePath(QStringLiteral("malformed-icon.png"));
     QFile malformedIcon(malformedIconPath);
@@ -252,7 +417,19 @@ int main(int argc, char* argv[]) {
                 QStringLiteral(":/snow-shot/app-icons/snow-shot-tray-light.png"),
             "a readable custom image outside PNG and ICO should use the bundled fallback");
 
+#ifdef Q_OS_MACOS
+    require(trayIcon->contextMenu() == nullptr,
+            "macOS must not attach a native menu that also opens on left-click");
+    adqt::widgets::AdContextMenu* menu = nullptr;
+    for (QWidget* widget : QApplication::topLevelWidgets()) {
+        if (widget->objectName() == QStringLiteral("systemTrayMenu")) {
+            menu = dynamic_cast<adqt::widgets::AdContextMenu*>(widget);
+            break;
+        }
+    }
+#else
     auto* menu = dynamic_cast<adqt::widgets::AdContextMenu*>(trayIcon->contextMenu());
+#endif
     require(menu != nullptr, "the tray should use the Ant Design context menu");
     require(menu->minimumWidth() == 300,
             "tray context menu should retain its 300-pixel minimum width");
@@ -323,21 +500,27 @@ int main(int argc, char* argv[]) {
     auto* recordingToggleMenuAction = actionForId(QStringLiteral("quick.screen-record-copy"));
     auto* hotkeyToggleMenuAction = actionForId(QStringLiteral("quick.toggle-global-hotkeys"));
     auto* showMainWindowMenuAction = actionForId(QStringLiteral("tray.show-main-window"));
+    auto* restartMenuAction = actionForId(QStringLiteral("tray.restart-app"));
     auto* exitMenuAction = actionForId(QStringLiteral("tray.exit"));
     auto* windowGroupMenuAction =
         actionForObjectName(QStringLiteral("systemTrayWindowGroupAction"));
+    auto* restoreClosedAction = actionForId(QStringLiteral("quick.restore-last-closed-windows"));
+    require(restoreClosedAction && restoreClosedAction->isVisible(),
+            "restore closed pins must appear in the default tray menu");
     const QStringList normalizedDefaultMenuOptions = controller.menuOptions();
     require(
         QSet<QString>(normalizedDefaultMenuOptions.cbegin(), normalizedDefaultMenuOptions.cend()) ==
                 QSet<QString>(defaultMenuOptions.cbegin(), defaultMenuOptions.cend()) &&
-            defaultVisibleActions.size() == 15 && screenshotMenuAction != nullptr &&
+            defaultVisibleActions.size() == 16 && screenshotMenuAction != nullptr &&
             screenshotMenuAction->isVisible() && delayedScreenshotMenuAction != nullptr &&
             delayedScreenshotMenuAction->isVisible() && recordingToggleMenuAction != nullptr &&
             !recordingToggleMenuAction->isVisible() && !screenshotMenuAction->icon().isNull() &&
             hotkeyToggleMenuAction != nullptr && hotkeyToggleMenuAction->isVisible() &&
             hotkeyToggleMenuAction->isCheckable() && !hotkeyToggleMenuAction->isChecked() &&
             showMainWindowMenuAction != nullptr && showMainWindowMenuAction->isVisible() &&
-            !showMainWindowMenuAction->icon().isNull() && exitMenuAction != nullptr &&
+            !showMainWindowMenuAction->icon().isNull() && restartMenuAction != nullptr &&
+            !restartMenuAction->isVisible() && !restartMenuAction->isCheckable() &&
+            !restartMenuAction->icon().isNull() && exitMenuAction != nullptr &&
             exitMenuAction->isVisible() && !exitMenuAction->icon().isNull() &&
             windowGroupMenuAction != nullptr && windowGroupMenuAction->isVisible() &&
             actionForId(QStringLiteral("tray.window-grouping")) == windowGroupMenuAction &&
@@ -345,9 +528,19 @@ int main(int argc, char* argv[]) {
             defaultVisibleActions.contains(showMainWindowMenuAction) &&
             defaultVisibleActions.indexOf(windowGroupMenuAction) ==
                 defaultVisibleActions.indexOf(showMainWindowMenuAction) - 1,
-        "the tray menu should expose the eleven default options in five catalog groups");
+        "the tray menu should expose the twelve default options in five catalog groups");
     requireActionText(screenshotMenuAction, QStringLiteral("Screenshot"),
                       "Screenshot should use its catalog label");
+#ifdef Q_OS_MACOS
+    const QImage screenshotMenuIcon =
+        screenshotMenuAction->icon().pixmap(QSize(32, 32), QIcon::Normal).toImage();
+    require(containsOpaqueColor(screenshotMenuIcon,
+                                menu->palette().color(QPalette::Active, QPalette::Text)) &&
+                containsOpaqueColor(screenshotMenuIcon, QColor(QStringLiteral("#9254de"))) &&
+                !containsOpaqueColor(screenshotMenuIcon, QColor(QStringLiteral("#1677ff"))),
+            "the native screenshot menu icon must use menu foreground with only its fixed purple "
+            "accent");
+#endif
     requireActionText(delayedScreenshotMenuAction, QStringLiteral("Delay 3s to execute"),
                       "Delayed screenshot should use the canonical shortcut title");
     requireActionText(recordingToggleMenuAction, QStringLiteral("Record/Copy Video"),
@@ -391,7 +584,21 @@ int main(int argc, char* argv[]) {
     controller.setScreenshotDelaySeconds(3);
     requireActionText(showMainWindowMenuAction, QStringLiteral("Show main interface"),
                       "Show main interface should follow Disable global hotkeys");
+    requireActionText(restartMenuAction, QStringLiteral("Restart App"),
+                      "Restart App should use its catalog label");
     requireActionText(exitMenuAction, QStringLiteral("Exit"), "Exit should be last");
+
+    QStringList menuWithRestart = defaultMenuOptions;
+    menuWithRestart.push_back(QStringLiteral("tray.restart-app"));
+    controller.setMenuOptions(menuWithRestart);
+    const QList<QAction*> visibleWithRestart = visibleActions();
+    require(restartMenuAction->isVisible() &&
+                visibleWithRestart.indexOf(restartMenuAction) ==
+                    visibleWithRestart.indexOf(showMainWindowMenuAction) + 1 &&
+                visibleWithRestart.indexOf(exitMenuAction) ==
+                    visibleWithRestart.indexOf(restartMenuAction) + 1,
+            "Restart App should be opt-in directly below Show main interface and above Exit");
+    controller.setMenuOptions(defaultMenuOptions);
 
     snow_shot::presentation::PinnedWindowGroupManager groupManager;
     controller.setGroupManager(&groupManager);
@@ -406,11 +613,54 @@ int main(int argc, char* argv[]) {
         }
         return static_cast<QAction*>(nullptr);
     };
+    const auto deletionModalNamed = [&groupManager](const QString& name) {
+        return groupManager.findChild<adqt::widgets::AdModal*>(name);
+    };
     require(!windowGroupMenuAction->icon().isNull(),
             "the window group submenu header should carry an icon");
+    requireActionText(groupActionNamed(QStringLiteral("systemTrayGroupAction-default")),
+                      QStringLiteral("Default\t0/0"),
+                      "the tray group row should show non-ignored and total counts");
     QAction* trayNewGroup = groupActionNamed(QStringLiteral("systemTrayNewGroupAction"));
     require(trayNewGroup != nullptr && !trayNewGroup->icon().isNull() && trayNewGroup->isEnabled(),
             "tray New Group should expose an icon and stay actionable");
+    // An unrelated top-level window exercises the same implicit owner selection as a pin.
+    // Keep it away from the screen center so this also catches regressions offscreen.
+    const QPoint originalCursorPosition = QCursor::pos();
+    for (QScreen* screen : QApplication::screens()) {
+        QCursor::setPos(screen->availableGeometry().center());
+        for (const bool hasVisibleWindow : {false, true}) {
+            QWidget unrelatedWindow(nullptr, Qt::Tool | Qt::WindowStaysOnTopHint);
+            unrelatedWindow.setGeometry(
+                QRect(screen->availableGeometry().topLeft() + QPoint(20, 20), QSize(160, 100)));
+            if (hasVisibleWindow) {
+                unrelatedWindow.show();
+                unrelatedWindow.activateWindow();
+                QApplication::processEvents();
+            }
+            trayNewGroup->trigger();
+            QApplication::processEvents();
+            QWidget* dialog = nullptr;
+            for (QWidget* widget : QApplication::topLevelWidgets()) {
+                if (widget->isVisible() &&
+                    widget->objectName() == QStringLiteral("ad-modal-overlay") &&
+                    widget->findChild<QWidget*>(QStringLiteral("pinnedWindowGroupCreateForm"))) {
+                    dialog = widget;
+                    break;
+                }
+            }
+            require(dialog != nullptr, "tray New Group should show its dialog without an owner");
+            const QPoint centerOffset =
+                dialog->geometry().center() - screen->availableGeometry().center();
+            require(qAbs(centerOffset.x()) <= 1 && qAbs(centerOffset.y()) <= 1,
+                    "tray New Group must center on the cursor screen regardless of visible pins");
+            require(dialog->parentWidget() == nullptr,
+                    "tray New Group must not adopt an unrelated window as its owner");
+            dialog->close();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+    }
+    QCursor::setPos(originalCursorPosition);
     QAction* trayDeleteEmpty =
         groupActionNamed(QStringLiteral("systemTrayDeleteEmptyGroupsAction"));
     require(trayDeleteEmpty != nullptr && !trayDeleteEmpty->icon().isNull(),
@@ -432,13 +682,31 @@ int main(int argc, char* argv[]) {
         }
         return static_cast<QAction*>(nullptr);
     };
+    const auto requireTrayModalCentered = [](adqt::widgets::AdModal* modal, const char* message) {
+        QScreen* screen = QApplication::screenAt(QCursor::pos());
+        if (screen == nullptr) {
+            screen = QApplication::primaryScreen();
+        }
+        QWidget* surface = nullptr;
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (widget->isVisible() && widget->objectName() == QStringLiteral("ad-modal-overlay")) {
+                surface = widget;
+                break;
+            }
+        }
+        require(screen != nullptr && modal != nullptr && modal->centered() && surface != nullptr &&
+                    surface->isVisible() &&
+                    (surface->geometry().center() - screen->availableGeometry().center())
+                            .manhattanLength() <= 2,
+                message);
+    };
     const QList<QAction*> initialGroupActions = windowGroupMenu->actions();
     require(initialGroupActions.indexOf(trayDeleteEmpty) + 1 ==
                 initialGroupActions.indexOf(trayDeleteSpecifiedMenu->menuAction()),
             "tray Delete Specified Group should sit directly below Delete Empty Groups");
     requireActionText(
         deleteSpecifiedActionNamed(QStringLiteral("systemTrayDeleteSpecifiedGroupAction-default")),
-        QStringLiteral("Default\t0"),
+        QStringLiteral("Default\t0/0"),
         "tray Delete Specified Group should initially list only the empty Default group");
 
     const auto traySpecifiedId = groupManager.createGroup(QStringLiteral("Tray specified"));
@@ -449,21 +717,62 @@ int main(int argc, char* argv[]) {
         QStringLiteral("systemTrayDeleteSpecifiedGroupAction-%1").arg(*traySpecifiedId));
     require(trayDeleteSpecified != nullptr &&
                 trayDeleteSpecified->data().toString() == *traySpecifiedId &&
-                trayDeleteSpecified->text() == QStringLiteral("Tray specified\t0"),
+                trayDeleteSpecified->text() == QStringLiteral("Tray specified\t0/0"),
             "tray specified deletion should list every custom group with its count and id");
     trayDeleteSpecified->trigger();
     QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    auto* specifiedModal =
+        deletionModalNamed(QStringLiteral("pinnedWindowGroupDeleteSpecifiedModal"));
+    require(specifiedModal != nullptr && specifiedModal->ownerWindow() == nullptr &&
+                specifiedModal->windowModeDetached() &&
+                specifiedModal->windowModality() == Qt::ApplicationModal &&
+                specifiedModal->acceptAccentRole() == adqt::widgets::AdButton::AccentRole::Danger &&
+                specifiedModal->text().contains(QStringLiteral("Tray specified")) &&
+                specifiedModal->text().contains(QStringLiteral("including closed windows")) &&
+                groupManager.contains(*traySpecifiedId),
+            "tray specified deletion should open a detached application-modal confirmation");
+    requireTrayModalCentered(specifiedModal,
+                             "tray specified deletion should center on the cursor screen");
+    specifiedModal->reject();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(groupManager.contains(*traySpecifiedId),
+            "canceling tray specified deletion should preserve the group");
+    trayDeleteSpecified->trigger();
+    specifiedModal = deletionModalNamed(QStringLiteral("pinnedWindowGroupDeleteSpecifiedModal"));
+    require(specifiedModal != nullptr, "tray specified confirmation should reopen");
+    specifiedModal->accept();
     require(!groupManager.contains(*traySpecifiedId),
-            "triggering the tray specified-group item should delete its custom group");
+            "accepting the tray specified-group item should delete its custom group");
 
-    require(groupManager.createGroup(QStringLiteral("Tray cleanup")).has_value(),
+    const auto trayCleanupId = groupManager.createGroup(QStringLiteral("Tray cleanup"));
+    require(trayCleanupId.has_value(),
             "an empty custom group should be created for the tray cleanup state");
     QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     trayDeleteEmpty = groupActionNamed(QStringLiteral("systemTrayDeleteEmptyGroupsAction"));
     require(trayDeleteEmpty != nullptr && trayDeleteEmpty->isEnabled(),
             "tray Delete Empty Groups should enable once an empty custom group exists");
 
-    require(groupManager.deleteEmptyGroups(), "the empty tray cleanup group should be deleted");
+    trayDeleteEmpty->trigger();
+    auto* emptyModal = deletionModalNamed(QStringLiteral("pinnedWindowGroupDeleteEmptyModal"));
+    require(emptyModal != nullptr &&
+                emptyModal->acceptAccentRole() == adqt::widgets::AdButton::AccentRole::Danger &&
+                emptyModal->text().contains(
+                    QStringLiteral("no pinned windows other than closed ones")) &&
+                emptyModal->text().contains(QStringLiteral("Closed pinned windows saved")) &&
+                groupManager.contains(*trayCleanupId),
+            "tray empty-group deletion should await confirmation");
+    requireTrayModalCentered(emptyModal,
+                             "tray empty-group deletion should center on the cursor screen");
+    emptyModal->reject();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(groupManager.contains(*trayCleanupId),
+            "canceling tray empty-group deletion should preserve the group");
+    trayDeleteEmpty->trigger();
+    emptyModal = deletionModalNamed(QStringLiteral("pinnedWindowGroupDeleteEmptyModal"));
+    require(emptyModal != nullptr, "tray empty-group confirmation should reopen");
+    emptyModal->accept();
+    require(!groupManager.contains(*trayCleanupId),
+            "confirming tray empty-group deletion should remove the group");
     QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     trayDeleteEmpty = groupActionNamed(QStringLiteral("systemTrayDeleteEmptyGroupsAction"));
     require(trayDeleteEmpty != nullptr && !trayDeleteEmpty->isEnabled(),
@@ -511,8 +820,17 @@ int main(int argc, char* argv[]) {
     }
     require(trayGroupCreated, "accepting the tray New Group dialog should create the group");
 
+#ifdef Q_OS_MACOS
+    // A synthetic Qt activation has no NSStatusBarButton to present a native menu.
+    // Real status-item presentation and placement are covered by the Cocoa fixture.
+    trayIcon->activated(QSystemTrayIcon::Context);
+    require(trayIcon->contextMenu() == nullptr && !menu->isPopupVisible(),
+            "a context signal without a native status-item event must not open a detached popup");
+#endif
+
     int screenshotRequests = 0;
     int showMainWindowRequests = 0;
+    int restartRequests = 0;
     int exitRequests = 0;
     QVector<snow_shot::presentation::GlobalShortcutAction> quickActions;
     QObject::connect(&controller,
@@ -521,6 +839,8 @@ int main(int argc, char* argv[]) {
     QObject::connect(&controller,
                      &snow_shot::presentation::SystemTrayController::showMainWindowRequested,
                      [&showMainWindowRequests]() { ++showMainWindowRequests; });
+    QObject::connect(&controller, &snow_shot::presentation::SystemTrayController::restartRequested,
+                     [&restartRequests]() { ++restartRequests; });
     QObject::connect(&controller, &snow_shot::presentation::SystemTrayController::exitRequested,
                      [&exitRequests]() { ++exitRequests; });
     QObject::connect(&controller,
@@ -553,6 +873,7 @@ int main(int argc, char* argv[]) {
             screenshotRequests = showMainWindowRequests = functionSettingsRequests = 0;
             quickActions.clear();
             trayIcon->activated(reason);
+            require(!menu->isPopupVisible(), "tray click actions must not open the context menu");
             require(screenshotRequests == (action == QStringLiteral("screenshot") ? 1 : 0) &&
                         showMainWindowRequests ==
                             (action == QStringLiteral("show_main_window") ? 1 : 0) &&
@@ -577,6 +898,7 @@ int main(int argc, char* argv[]) {
             "invalid middle click must fall back to capture and pin");
     trayIcon->activated(QSystemTrayIcon::Trigger);
     trayIcon->activated(QSystemTrayIcon::Context);
+    menu->dismissPopup();
     trayIcon->activated(QSystemTrayIcon::DoubleClick);
     trayIcon->activated(QSystemTrayIcon::MiddleClick);
     trayIcon->activated(QSystemTrayIcon::Unknown);
@@ -601,12 +923,12 @@ int main(int argc, char* argv[]) {
     const int screenshotRequestsBeforeMessageClicks = screenshotRequests;
     const int showMainWindowRequestsBeforeMessageClicks = showMainWindowRequests;
     const int functionSettingsRequestsBeforeMessageClicks = functionSettingsRequests;
-    controller.showUpdateMessage(QStringLiteral("An update is ready."));
+    controller.showUpdateMessage(QStringLiteral("Snow Shot 2.0.0 is available."));
     trayIcon->messageClicked();
     require(aboutRequests == 1 && screenshotRequests == screenshotRequestsBeforeMessageClicks &&
                 showMainWindowRequests == showMainWindowRequestsBeforeMessageClicks &&
                 functionSettingsRequests == functionSettingsRequestsBeforeMessageClicks,
-            "clicking an update balloon must request only the About page");
+            "clicking a new-version system notification must request only the About page");
     controller.showCaptureMessage(QStringLiteral("Capture failed"), false);
     controller.showWarningMessage(QStringLiteral("Feature unavailable"),
                                   QStringLiteral("Screenshot is unavailable"));
@@ -622,6 +944,7 @@ int main(int argc, char* argv[]) {
 
     screenshotMenuAction->trigger();
     showMainWindowMenuAction->trigger();
+    restartMenuAction->trigger();
     exitMenuAction->trigger();
     require(quickActions ==
                 QVector<snow_shot::presentation::GlobalShortcutAction>{
@@ -629,6 +952,7 @@ int main(int argc, char* argv[]) {
             "generated tray actions should emit their catalog shortcut commands");
     require(screenshotRequests == 1 && showMainWindowRequests == 2,
             "Show main interface should emit the dedicated tray request");
+    require(restartRequests == 1, "Restart App should emit its dedicated tray request once");
     require(exitRequests == 1, "the Exit action should emit its request");
 
     hotkeyToggleMenuAction->trigger();
@@ -688,6 +1012,24 @@ int main(int argc, char* argv[]) {
     controller.setMenuOptions(defaultMenuOptions);
     require(!fullscreenToggleMenuAction->isVisible() && quickActions.size() == 4,
             "hiding the fullscreen suppression entry must not redispatch its quick action");
+    for (const auto& entry :
+         {std::pair{QStringLiteral("quick.open-pin-to-screen-management"),
+                    snow_shot::presentation::GlobalShortcutAction::OpenPinToScreenManagement},
+          std::pair{QStringLiteral("quick.global-canvas"),
+                    snow_shot::presentation::GlobalShortcutAction::GlobalCanvas}}) {
+        auto* optionalAction = actionForId(entry.first);
+        require(optionalAction != nullptr && !optionalAction->isVisible(),
+                "management and canvas tray actions must start hidden");
+        controller.setMenuOptions({entry.first, QStringLiteral("tray.exit")});
+        require(optionalAction->isVisible(), "selected optional tray action must be visible");
+        const auto previousCount = quickActions.size();
+        optionalAction->trigger();
+        require(quickActions.size() == previousCount + 1 && quickActions.last() == entry.second,
+                "optional tray action must dispatch the corresponding command");
+        controller.setMenuOptions(defaultMenuOptions);
+        require(!optionalAction->isVisible() && quickActions.size() == previousCount + 1,
+                "restoring defaults must hide optional actions without dispatching");
+    }
     require(groupManager.setActiveGroup(QStringLiteral("default")),
             "the default group should be activatable for the localized title check");
 
@@ -725,7 +1067,7 @@ int main(int argc, char* argv[]) {
                       QStringLiteral("\u7a97\u53e3\u5206\u7ec4\uff1a\u9ed8\u8ba4"),
                       "the window group submenu title should translate to Simplified Chinese");
     requireActionText(groupActionNamed(QStringLiteral("systemTrayGroupAction-default")),
-                      QStringLiteral("\u9ed8\u8ba4\t0"),
+                      QStringLiteral("\u9ed8\u8ba4\t0/0"),
                       "the default group entry should translate to Simplified Chinese");
     requireActionText(groupActionNamed(QStringLiteral("systemTrayNewGroupAction")),
                       QStringLiteral("\u65b0\u5efa\u5206\u7ec4"),
@@ -738,7 +1080,7 @@ int main(int argc, char* argv[]) {
                       "tray Delete Specified Group should translate to Simplified Chinese");
     requireActionText(
         deleteSpecifiedActionNamed(QStringLiteral("systemTrayDeleteSpecifiedGroupAction-default")),
-        QStringLiteral("\u9ed8\u8ba4\t0"),
+        QStringLiteral("\u9ed8\u8ba4\t0/0"),
         "tray specified deletion should translate its Default entry to Simplified Chinese");
     require(QString::fromLatin1(groupManager.metaObject()->className()) ==
                     QStringLiteral("snow_shot::presentation::PinnedWindowGroupManager") &&
@@ -747,8 +1089,24 @@ int main(int argc, char* argv[]) {
                     QStringLiteral("\u5206\u7ec4\u540d\u79f0"),
             "the group manager translation context should resolve its catalog entries");
 
+    QAction* translatedDefaultDeletion =
+        deleteSpecifiedActionNamed(QStringLiteral("systemTrayDeleteSpecifiedGroupAction-default"));
+    require(translatedDefaultDeletion != nullptr,
+            "the translated Default group should remain available for confirmation");
+    translatedDefaultDeletion->trigger();
+    auto* translatedModal =
+        deletionModalNamed(QStringLiteral("pinnedWindowGroupDeleteSpecifiedModal"));
+    require(translatedModal != nullptr &&
+                translatedModal->windowTitle() ==
+                    QStringLiteral("\u6e05\u7a7a\u9ed8\u8ba4\u5206\u7ec4"),
+            "the Default deletion modal should open in Simplified Chinese");
     require(languageManager.setLanguage(QStringLiteral("zh_TW")),
             "the Traditional Chinese translation should load");
+    require(translatedModal->windowTitle() ==
+                QStringLiteral("\u6e05\u7a7a\u9810\u8a2d\u7fa4\u7d44"),
+            "an open group deletion modal should retranslate to Traditional Chinese");
+    translatedModal->reject();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     controller.showUpdateMessage(QStringLiteral("An update is ready."));
     requireBalloon(
         trayIcon, QStringLiteral("\u66f4\u65b0"), QStringLiteral("An update is ready."),
@@ -778,7 +1136,7 @@ int main(int argc, char* argv[]) {
                       QStringLiteral("\u8996\u7a97\u7fa4\u7d44\uff1a\u9810\u8a2d"),
                       "the window group submenu title should translate to Traditional Chinese");
     requireActionText(groupActionNamed(QStringLiteral("systemTrayGroupAction-default")),
-                      QStringLiteral("\u9810\u8a2d\t0"),
+                      QStringLiteral("\u9810\u8a2d\t0/0"),
                       "the default group entry should translate to Traditional Chinese");
     requireActionText(groupActionNamed(QStringLiteral("systemTrayNewGroupAction")),
                       QStringLiteral("\u65b0\u589e\u7fa4\u7d44"),
@@ -791,7 +1149,7 @@ int main(int argc, char* argv[]) {
                       "tray Delete Specified Group should translate to Traditional Chinese");
     requireActionText(
         deleteSpecifiedActionNamed(QStringLiteral("systemTrayDeleteSpecifiedGroupAction-default")),
-        QStringLiteral("\u9810\u8a2d\t0"),
+        QStringLiteral("\u9810\u8a2d\t0/0"),
         "tray specified deletion should translate its Default entry to Traditional Chinese");
     controller.setGlobalShortcuts(snow_shot::presentation::GlobalShortcutAction::Screenshot, {});
     requireActionText(screenshotMenuAction, QStringLiteral("\u622a\u5716"),

@@ -75,6 +75,79 @@ fn label(engine: &mut Engine, viewport: ViewportId, owner: ElementId, text: &str
 }
 
 #[test]
+fn draw_template_remaps_attached_arrow_text_and_detaches_external_endpoints() {
+    let (mut engine, viewport, arrow_id) = setup();
+    let label_id = label(&mut engine, viewport, arrow_id, "linked text");
+    engine
+        .editor
+        .select_element(&engine.model, arrow_id)
+        .unwrap();
+    let bytes = engine.serialize_selected_draw_template().unwrap();
+    let mut template: snow_draw_engine_editor::DrawTemplate =
+        serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(template.elements.len(), 2);
+    let arrow = template
+        .elements
+        .iter_mut()
+        .find_map(|record| match &mut record.data {
+            ElementData::Arrow(arrow) => Some(arrow),
+            _ => None,
+        })
+        .unwrap();
+    arrow.start_binding = Some(snow_draw_engine_document::ArrowEndpointBinding {
+        element_id: ElementId {
+            index: 999,
+            generation: 1,
+        },
+        fixed_point: [0.5, 0.5],
+        mode: snow_draw_engine_core::arrow::BindMode::Orbit,
+    });
+    arrow.end_binding = Some(snow_draw_engine_document::ArrowEndpointBinding {
+        element_id: label_id,
+        fixed_point: [0.5, 0.5],
+        mode: snow_draw_engine_core::arrow::BindMode::Orbit,
+    });
+    let payload = serde_json::to_vec(&template).unwrap();
+    let before = engine.model.paint_order().len();
+    engine
+        .insert_draw_template_with_viewport_changes(viewport, &payload, Point::new(500.0, 200.0))
+        .unwrap();
+    assert_eq!(engine.model.paint_order().len(), before + 2);
+    let inserted_arrow = engine.selected_ids()[0];
+    let inserted_label = engine
+        .model
+        .bound_text_id_for_arrow(inserted_arrow)
+        .unwrap();
+    assert_ne!(inserted_arrow, arrow_id);
+    assert_ne!(inserted_label, label_id);
+    assert_eq!(
+        engine.model.text(inserted_label).unwrap().text,
+        "linked text"
+    );
+    assert!(
+        engine
+            .model
+            .arrow(inserted_arrow)
+            .unwrap()
+            .start_binding
+            .is_none()
+    );
+    assert_eq!(
+        engine
+            .model
+            .arrow(inserted_arrow)
+            .unwrap()
+            .end_binding
+            .as_ref()
+            .unwrap()
+            .element_id,
+        inserted_label
+    );
+    engine.undo_with_viewport_changes().unwrap();
+    assert_eq!(engine.model.paint_order().len(), before);
+}
+
+#[test]
 fn arrow_text_anchor_matches_middle_vertex_segment_and_vertical_minimum() {
     for kind in [ArrowType::Straight, ArrowType::Curve, ArrowType::Elbow] {
         let a = arrow(&[[0.0, 0.0], [0.0, 100.0]], kind);
@@ -102,6 +175,230 @@ fn arrow_text_curve_uses_arc_length_without_changing_handles() {
     let parameter_midpoint = arrow_segment_midpoints(&a)[1].1;
     assert!((anchor.x - parameter_midpoint.x).hypot(anchor.y - parameter_midpoint.y) > 0.5);
     assert!(anchor.x.is_finite() && anchor.y.is_finite());
+}
+
+#[test]
+fn dragging_bound_text_moves_only_the_label_along_the_arrow_and_round_trips() {
+    use super::duplicate_drag_tests::pointer;
+    use snow_draw_engine_interaction::PointerEventType;
+
+    let (mut engine, viewport, owner) = setup();
+    let text_id = label(&mut engine, viewport, owner, "move me");
+    let original_arrow = engine.model.arrow(owner).unwrap().clone();
+    engine
+        .set_viewport_active_tool(viewport, ActiveTool::Select)
+        .unwrap();
+
+    pointer(
+        &mut engine,
+        viewport,
+        PointerEventType::Down,
+        430.0,
+        300.0,
+        false,
+    );
+    pointer(
+        &mut engine,
+        viewport,
+        PointerEventType::Move,
+        590.0,
+        350.0,
+        false,
+    );
+    assert_eq!(
+        engine.model.text(text_id).unwrap().center,
+        Point::new(0.0, 0.0)
+    );
+    let preview = engine.editor.presentation_state(
+        &engine.model,
+        &engine.viewports.get(&viewport).unwrap().view,
+    );
+    assert_eq!(
+        preview.arrow_text_previews[0].1.center,
+        Point::new(160.0, 0.0)
+    );
+    pointer(
+        &mut engine,
+        viewport,
+        PointerEventType::Up,
+        590.0,
+        350.0,
+        false,
+    );
+
+    assert_eq!(
+        engine.model.text(text_id).unwrap().center,
+        Point::new(160.0, 0.0)
+    );
+    let moved_arrow = engine.model.arrow(owner).unwrap();
+    assert_eq!(moved_arrow.global_points(), original_arrow.global_points());
+    assert_eq!(moved_arrow.text_path_fraction, Some(0.9));
+    let bytes = engine.serialize_document_session().unwrap();
+    let restored =
+        Engine::from_serialized_document_session_with_config(&bytes, EngineConfig::default())
+            .unwrap();
+    assert_eq!(
+        restored.model.text(text_id).unwrap().center,
+        Point::new(160.0, 0.0)
+    );
+    assert_eq!(
+        restored.model.arrow(owner).unwrap().text_path_fraction,
+        Some(0.9)
+    );
+
+    engine.undo().unwrap();
+    assert_eq!(
+        engine.model.text(text_id).unwrap().center,
+        Point::new(0.0, 0.0)
+    );
+    engine.redo().unwrap();
+    assert_eq!(
+        engine.model.text(text_id).unwrap().center,
+        Point::new(160.0, 0.0)
+    );
+    let mut translated = engine.model.arrow(owner).unwrap().clone();
+    translated.x += 20.0;
+    translated.y += 30.0;
+    let mut tx = Transaction::new("translate positioned arrow");
+    tx.update_arrow(owner, translated);
+    engine
+        .commit_transaction(
+            viewport,
+            ApplyTransactionCommand {
+                transaction: tx,
+                history_undo_snapshot: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        engine.model.text(text_id).unwrap().center,
+        Point::new(180.0, 30.0)
+    );
+}
+
+#[test]
+fn arrow_label_drag_projects_to_bent_path_and_clamps_at_ends() {
+    use super::duplicate_drag_tests::pointer;
+    use snow_draw_engine_interaction::PointerEventType;
+
+    for kind in [ArrowType::Straight, ArrowType::Curve, ArrowType::Elbow] {
+        let (mut engine, viewport, owner) = setup();
+        let text_id = label(&mut engine, viewport, owner, "bend");
+        let mut bent = arrow(
+            &[
+                [-150.0, -100.0],
+                [0.0, -100.0],
+                [0.0, 100.0],
+                [150.0, 100.0],
+            ],
+            kind,
+        );
+        bent.text_element_id = Some(text_id);
+        let mut tx = Transaction::new("bend arrow");
+        tx.update_arrow(owner, bent);
+        engine
+            .commit_transaction(
+                viewport,
+                ApplyTransactionCommand {
+                    transaction: tx,
+                    history_undo_snapshot: None,
+                },
+            )
+            .unwrap();
+        engine
+            .set_viewport_active_tool(viewport, ActiveTool::Select)
+            .unwrap();
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Down,
+            700.0,
+            550.0,
+            false,
+        );
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Up,
+            700.0,
+            550.0,
+            false,
+        );
+        let start = engine.model.text(text_id).unwrap().center;
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Down,
+            430.0 + start.x,
+            300.0 + start.y,
+            false,
+        );
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Move,
+            550.0 + start.x,
+            360.0 + start.y,
+            false,
+        );
+        let preview = engine.editor.presentation_state(
+            &engine.model,
+            &engine.viewports.get(&viewport).unwrap().view,
+        );
+        let center = preview.arrow_text_previews[0].1.center;
+        assert!(center.x.is_finite() && center.y.is_finite(), "{kind:?}");
+        assert_ne!(center, Point::new(start.x + 120.0, start.y + 60.0));
+        if kind == ArrowType::Straight {
+            assert_eq!(center, Point::new(120.0, 100.0));
+        }
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Move,
+            730.0 + start.x,
+            300.0 + start.y,
+            false,
+        );
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Up,
+            730.0 + start.x,
+            300.0 + start.y,
+            false,
+        );
+        let changed = engine.model.arrow(owner).unwrap();
+        assert_eq!(changed.text_path_fraction, Some(1.0), "{kind:?}");
+        assert_eq!(engine.model.text(text_id).unwrap().center, changed.end());
+        let end = changed.end();
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Down,
+            430.0 + end.x,
+            300.0 + end.y,
+            false,
+        );
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Move,
+            100.0,
+            200.0,
+            false,
+        );
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Up,
+            100.0,
+            200.0,
+            false,
+        );
+        let changed = engine.model.arrow(owner).unwrap();
+        assert_eq!(changed.text_path_fraction, Some(0.0), "{kind:?}");
+        assert_eq!(engine.model.text(text_id).unwrap().center, changed.start());
+    }
 }
 
 #[test]
@@ -262,7 +559,12 @@ fn arrow_text_measurements_are_keyed_and_join_the_next_geometry_transaction() {
     engine
         .apply_arrow_text_measurements(
             viewport,
-            &[(text_id, request.key + 1, TextLayoutSize::new(80.0, 90.0))],
+            &[(
+                text_id,
+                request.key + 1,
+                TextLayoutSize::new(80.0, 90.0),
+                0.0,
+            )],
         )
         .unwrap();
     assert_eq!(
@@ -276,6 +578,7 @@ fn arrow_text_measurements_are_keyed_and_join_the_next_geometry_transaction() {
                 text_id,
                 request.key,
                 TextLayoutSize::with_content(80.0, 90.0, 72.0, 90.0),
+                0.0,
             )],
         )
         .unwrap();
@@ -429,7 +732,12 @@ fn alt_drag_arrow_with_label_matches_duplicate_operation_and_preview() {
     use super::duplicate_drag_tests::pointer;
     use snow_draw_engine_display::SceneDisplayItem;
     use snow_draw_engine_interaction::PointerEventType;
-    for tool in [ActiveTool::Select, ActiveTool::Arrow, ActiveTool::Line] {
+    for (tool, press_x) in [
+        (ActiveTool::Select, 280.0),
+        (ActiveTool::Select, 430.0),
+        (ActiveTool::Arrow, 430.0),
+        (ActiveTool::Line, 430.0),
+    ] {
         let (mut engine, viewport, owner) = setup();
         let text_id = label(&mut engine, viewport, owner, "copy label");
         engine.set_viewport_active_tool(viewport, tool).unwrap();
@@ -441,7 +749,7 @@ fn alt_drag_arrow_with_label_matches_duplicate_operation_and_preview() {
             &mut engine,
             viewport,
             PointerEventType::Down,
-            280.0,
+            press_x,
             300.0,
             true,
         );
@@ -449,7 +757,7 @@ fn alt_drag_arrow_with_label_matches_duplicate_operation_and_preview() {
             &mut engine,
             viewport,
             PointerEventType::Move,
-            330.0,
+            press_x + 50.0,
             360.0,
             false,
         );
@@ -481,7 +789,7 @@ fn alt_drag_arrow_with_label_matches_duplicate_operation_and_preview() {
             &mut engine,
             viewport,
             PointerEventType::Up,
-            330.0,
+            press_x + 50.0,
             360.0,
             false,
         );
@@ -506,4 +814,29 @@ fn alt_drag_arrow_with_label_matches_duplicate_operation_and_preview() {
             assert_eq!(items.iter().filter(|i| matches!(i, SceneDisplayItem::Text(t) if t.center_x == 50.0 && t.center_y == 60.0)).count(), 1);
         }
     }
+}
+
+#[test]
+fn arrow_ratio_legacy_style_defaults_are_compatible() {
+    let defaults = snow_draw_engine_editor::EditorStyleDefaults::default();
+    let mut arrow = serde_json::to_value(defaults.arrow).unwrap();
+    arrow.as_object_mut().unwrap().remove("arrow_ratio");
+    let restored: snow_draw_engine_editor::ArrowStyle =
+        serde_json::from_value(arrow.clone()).unwrap();
+    assert_eq!(restored.arrow_ratio, 1.0);
+    arrow["arrow_ratio"] = serde_json::json!(9.0);
+    assert_eq!(
+        serde_json::from_value::<snow_draw_engine_editor::ArrowStyle>(arrow)
+            .unwrap()
+            .arrow_ratio,
+        3.0
+    );
+    let mut shape = serde_json::to_value(defaults.line).unwrap();
+    shape.as_object_mut().unwrap().remove("arrow_ratio");
+    assert_eq!(
+        serde_json::from_value::<snow_draw_engine_editor::ShapeStyle>(shape)
+            .unwrap()
+            .arrow_ratio,
+        1.0
+    );
 }

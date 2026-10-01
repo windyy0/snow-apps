@@ -82,6 +82,13 @@ pub struct ArrowStyle {
     pub end_arrowhead: Option<Arrowhead>,
     pub stroke_style: StrokeStyle,
     pub arrow_type: ArrowType,
+    #[serde(default)]
+    pub arrow_shaft_type: snow_draw_engine_core::arrow::ArrowShaftType,
+    #[serde(
+        default = "snow_draw_engine_core::arrow::default_arrow_ratio",
+        deserialize_with = "snow_draw_engine_core::arrow::deserialize_arrow_ratio"
+    )]
+    pub arrow_ratio: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -95,6 +102,13 @@ pub struct ShapeStyle {
     pub end_arrowhead: Option<Arrowhead>,
     pub stroke_style: StrokeStyle,
     pub arrow_type: ArrowType,
+    #[serde(default)]
+    pub arrow_shaft_type: snow_draw_engine_core::arrow::ArrowShaftType,
+    #[serde(
+        default = "snow_draw_engine_core::arrow::default_arrow_ratio",
+        deserialize_with = "snow_draw_engine_core::arrow::deserialize_arrow_ratio"
+    )]
+    pub arrow_ratio: f64,
     pub opacity: f64,
     pub highlight_shape: HighlightShape,
     pub shape: HighlightShape,
@@ -182,6 +196,8 @@ pub const SHAPE_STYLE_PROPERTY_CORNER_RADII: u32 = 1 << 4;
 pub const SHAPE_STYLE_PROPERTY_START_ARROWHEAD: u32 = 1 << 5;
 pub const SHAPE_STYLE_PROPERTY_END_ARROWHEAD: u32 = 1 << 6;
 pub const SHAPE_STYLE_PROPERTY_STROKE_STYLE: u32 = 1 << 7;
+pub const SHAPE_STYLE_PROPERTY_ARROW_RATIO: u32 = 1 << 13;
+pub const SHAPE_STYLE_PROPERTY_ARROW_SHAFT_TYPE: u32 = 1 << 12;
 pub const SHAPE_STYLE_PROPERTY_ARROW_TYPE: u32 = 1 << 8;
 pub const SHAPE_STYLE_PROPERTY_OPACITY: u32 = 1 << 9;
 pub const SHAPE_STYLE_PROPERTY_HIGHLIGHT_SHAPE: u32 = 1 << 10;
@@ -199,7 +215,9 @@ pub const SHAPE_STYLE_PROPERTY_ARROW: u32 = SHAPE_STYLE_PROPERTY_STROKE
     | SHAPE_STYLE_PROPERTY_START_ARROWHEAD
     | SHAPE_STYLE_PROPERTY_END_ARROWHEAD
     | SHAPE_STYLE_PROPERTY_STROKE_STYLE
-    | SHAPE_STYLE_PROPERTY_ARROW_TYPE;
+    | SHAPE_STYLE_PROPERTY_ARROW_TYPE
+    | SHAPE_STYLE_PROPERTY_ARROW_SHAFT_TYPE
+    | SHAPE_STYLE_PROPERTY_ARROW_RATIO;
 pub const SHAPE_STYLE_PROPERTY_LINE: u32 = SHAPE_STYLE_PROPERTY_FILL
     | SHAPE_STYLE_PROPERTY_FILL_STYLE
     | SHAPE_STYLE_PROPERTY_STROKE
@@ -245,6 +263,8 @@ pub const SHAPE_STYLE_MIXED_CORNER_RADII: u32 = SHAPE_STYLE_PROPERTY_CORNER_RADI
 pub const SHAPE_STYLE_MIXED_START_ARROWHEAD: u32 = SHAPE_STYLE_PROPERTY_START_ARROWHEAD;
 pub const SHAPE_STYLE_MIXED_END_ARROWHEAD: u32 = SHAPE_STYLE_PROPERTY_END_ARROWHEAD;
 pub const SHAPE_STYLE_MIXED_STROKE_STYLE: u32 = SHAPE_STYLE_PROPERTY_STROKE_STYLE;
+pub const SHAPE_STYLE_MIXED_ARROW_RATIO: u32 = SHAPE_STYLE_PROPERTY_ARROW_RATIO;
+pub const SHAPE_STYLE_MIXED_ARROW_SHAFT_TYPE: u32 = SHAPE_STYLE_PROPERTY_ARROW_SHAFT_TYPE;
 pub const SHAPE_STYLE_MIXED_ARROW_TYPE: u32 = SHAPE_STYLE_PROPERTY_ARROW_TYPE;
 pub const SHAPE_STYLE_MIXED_OPACITY: u32 = 1 << 9;
 pub const SHAPE_STYLE_MIXED_SHAPE: u32 = SHAPE_STYLE_PROPERTY_SHAPE;
@@ -268,6 +288,7 @@ pub const TEXT_STYLE_MIXED_CORNER_RADII: u32 = 1 << 7;
 pub const TEXT_STYLE_MIXED_HORIZONTAL_ALIGN: u32 = 1 << 8;
 pub const TEXT_STYLE_MIXED_VERTICAL_ALIGN: u32 = 1 << 9;
 pub const TEXT_STYLE_MIXED_OPACITY: u32 = 1 << 10;
+pub const TEXT_STYLE_ALL_PROPERTIES: u32 = (1 << 11) - 1;
 
 pub const SERIAL_NUMBER_STYLE_MIXED_NUMBER: u32 = 1 << 0;
 pub const SERIAL_NUMBER_STYLE_MIXED_COLOR: u32 = 1 << 1;
@@ -371,6 +392,8 @@ pub struct EditorPresentationState {
     /// Additive, uncommitted copies. Uses the same transaction builder as duplication.
     pub duplicate_preview: Option<snow_draw_engine_document::Transaction>,
     pub creation_preview: Option<ElementCreationPreview>,
+    pub free_draw_endpoint: Option<Point<f64>>,
+    pub free_draw_replacement: Option<(ElementId, Arc<FreeDrawPreview>)>,
     pub active_text_draft: Option<ActiveTextDraftPresentation>,
     pub arrow_text_previews: Vec<(ElementId, TextData)>,
     pub preview_arrows: Vec<SelectionArrowState>,

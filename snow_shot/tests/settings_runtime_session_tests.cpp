@@ -90,8 +90,14 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
         return {};
     }
 
+    mutable int fontOptionRequests = 0;
+
     QVector<settings::SettingsRuntimeOption>
     dynamicSelectOptions(settings::SettingsSelectBinding binding) const override {
+        if (binding == settings::SettingsSelectBinding::AppFont) {
+            ++fontOptionRequests;
+            return {{QStringLiteral("Test Font"), QStringLiteral("Test Font")}};
+        }
         if (binding == settings::SettingsSelectBinding::Language) {
             return {{QStringLiteral("en_US"), QStringLiteral("English")}};
         }
@@ -110,7 +116,8 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
         if (binding == settings::SettingsSwitchBinding::TranslationPageEnabled) {
             return m_translationPageEnabled;
         }
-        if (binding == settings::SettingsSwitchBinding::HistoryKeepPermanently) {
+        if (binding == settings::SettingsSwitchBinding::HistoryKeepPermanently ||
+            binding == settings::SettingsSwitchBinding::PinnedHistoryKeepPermanently) {
             return m_keepPermanently;
         }
         if (binding == settings::SettingsSwitchBinding::TrayEnabled) {
@@ -129,7 +136,8 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
                 QStringLiteral("extended-features.translation-page"), value,
                 [this](const QVariant& next) { m_translationPageEnabled = next.toBool(); });
         }
-        if (binding == settings::SettingsSwitchBinding::HistoryKeepPermanently) {
+        if (binding == settings::SettingsSwitchBinding::HistoryKeepPermanently ||
+            binding == settings::SettingsSwitchBinding::PinnedHistoryKeepPermanently) {
             m_keepPermanently = value;
             emit synchronized();
             return true;
@@ -627,6 +635,53 @@ settings::SettingsRegistry registryWithoutStandaloneDelay() {
     return settings::SettingsRegistry::fromCatalog(
         settings::SettingsCatalog({page}, {navigation}, {page.id, section.id, {}}),
         QStringLiteral("test-provider"));
+}
+
+void fontOptionsLoadOnlyWhenRequested() {
+    const auto registry = settings::buildBuiltInSettingsRegistry();
+    FakeSettingsBackend backend;
+    settings::SettingsRuntimeSession session(registry, backend);
+    session.refreshAll();
+    require(backend.fontOptionRequests == 0 &&
+                session.dynamicSelectOptions(settings::SettingsSelectBinding::AppFont).isEmpty(),
+            "session construction and refresh must not enumerate fonts");
+    session.requestFontOptions();
+    require(backend.fontOptionRequests == 1 &&
+                session.dynamicSelectOptions(settings::SettingsSelectBinding::AppFont).size() == 1,
+            "explicit font request loads options");
+    session.requestFontOptions();
+    session.refreshAll();
+    require(backend.fontOptionRequests == 1,
+            "font options are reused across requests and refreshes");
+}
+
+void notificationBurstsAreCoalesced() {
+    const auto registry = testRegistry();
+    FakeSettingsBackend backend;
+    settings::SettingsRuntimeSession session(registry, backend);
+    int refreshes = 0;
+    QObject::connect(&session, &settings::SettingsRuntimeSession::refreshed, &session,
+                     [&] { ++refreshes; });
+    for (int i = 0; i < 25; ++i) {
+        backend.notify();
+    }
+    require(refreshes == 0, "backend notifications must not refresh reentrantly");
+    flushEvents();
+    require(refreshes == 1, "a notification burst should perform one complete refresh");
+    backend.notify();
+    flushEvents();
+    require(refreshes == 2, "later changes must schedule another refresh");
+    bool notifiedDuringRefresh = false;
+    QObject::connect(&session, &settings::SettingsRuntimeSession::refreshed, &session, [&] {
+        if (!notifiedDuringRefresh) {
+            notifiedDuringRefresh = true;
+            backend.notify();
+        }
+    });
+    backend.notify();
+    flushEvents();
+    flushEvents();
+    require(refreshes == 4, "a notification during refresh must not be lost");
 }
 
 void initialStateAndNoOp() {
@@ -1311,8 +1366,37 @@ void permanentHistoryDisablesOnlyLimitControls() {
     }
     require(session.state(QStringLiteral("history.enabled")).enabled &&
                 session.state(QStringLiteral("history.clear")).enabled &&
+                session.state(QStringLiteral("history.compression-level")).enabled &&
                 session.state(toggle).enabled,
-            "permanent history must leave saving, clearing, and its own toggle available");
+            "permanent history must leave saving, compression, clearing, and its toggle available");
+    require(session.submitDraft(toggle, false), "disabling permanent history failed");
+    flushEvents();
+    for (const auto& id : limits)
+        require(session.state(id).enabled,
+                "disabling permanent history must restore limit controls");
+}
+
+void permanentPinnedHistoryDisablesOnlyLimitControls() {
+    FakeSettingsBackend backend;
+    settings::SettingsRuntimeSession session(settings::builtInSettingsRegistry(), backend);
+    const QString toggle = QStringLiteral("pinned-history.keep-permanently");
+    const QStringList limits{QStringLiteral("pinned-history.retention-days"),
+                             QStringLiteral("pinned-history.max-entries"),
+                             QStringLiteral("pinned-history.max-disk-mib")};
+    require(!session.state(toggle).acceptedValue.toBool() && session.state(toggle).enabled,
+            "permanent history toggle must default to off and be available");
+    for (const auto& id : limits)
+        require(session.state(id).enabled, "history limits must initially be enabled");
+    require(session.submitDraft(toggle, true), "permanent history toggle write failed");
+    flushEvents();
+    for (const auto& id : limits) {
+        require(!session.state(id).enabled, "permanent history must disable limit controls");
+    }
+    require(session.state(QStringLiteral("pinned-history.enabled")).enabled &&
+                session.state(QStringLiteral("pinned-history.clear")).enabled &&
+                session.state(QStringLiteral("pinned-history.compression-level")).enabled &&
+                session.state(toggle).enabled,
+            "permanent history must leave saving, compression, clearing, and its toggle available");
     require(session.submitDraft(toggle, false), "disabling permanent history failed");
     flushEvents();
     for (const auto& id : limits)
@@ -1403,10 +1487,13 @@ int main(int argc, char** argv) {
         globalMouseCombinationsUseTypedStateAndRejectDuplicates();
         return 0;
     }
+    fontOptionsLoadOnlyWhenRequested();
     customModelsPreserveAcceptedStateOnRejectedWrites();
+    notificationBurstsAreCoalesced();
     categoryResetFailuresRetainAcceptedValues();
     initialStateAndNoOp();
     permanentHistoryDisablesOnlyLimitControls();
+    permanentPinnedHistoryDisablesOnlyLimitControls();
     storageUsagePropagation();
     synchronousWriteAndFieldSignals();
     rejectedWriteRetainsDraftAndCanRetry();

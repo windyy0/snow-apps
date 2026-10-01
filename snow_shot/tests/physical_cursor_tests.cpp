@@ -1,9 +1,16 @@
 #include "snow_shot/platform/physicalcursor.h"
 
 #include <QPoint>
+#include <QApplication>
+#include <QMouseEvent>
+#include <QWidget>
+#include <QWindow>
 #include <QVector>
+#include <qpa/qwindowsysteminterface.h>
+#include <private/qhighdpiscaling_p.h>
 
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -25,6 +32,151 @@ void require(bool condition, const char* message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+class PointerSurface final : public QWidget {
+  public:
+    using QWidget::QWidget;
+    int moves = 0;
+    QPointF lastPosition;
+    QPointF lastGlobalPosition;
+    Qt::MouseButtons lastButtons;
+    Qt::KeyboardModifiers lastModifiers;
+    QRectF selection;
+    QPointF anchor;
+
+  protected:
+    void mousePressEvent(QMouseEvent* event) override {
+        anchor = event->position();
+        event->accept();
+    }
+    void mouseMoveEvent(QMouseEvent* event) override {
+        ++moves;
+        lastPosition = event->position();
+        lastGlobalPosition = event->globalPosition();
+        lastButtons = event->buttons();
+        lastModifiers = event->modifiers();
+        if (event->buttons().testFlag(Qt::LeftButton))
+            selection = QRectF(anchor, lastPosition).normalized();
+        event->accept();
+    }
+};
+
+void silentWarpsDeliverMovementThroughQt() {
+    QWidget window;
+    window.setGeometry(100, 100, 240, 180);
+    PointerSurface surface(&window);
+    surface.setGeometry(10, 10, 100, 100);
+    surface.setMouseTracking(true);
+    PointerSurface sibling(&window);
+    sibling.setGeometry(110, 10, 100, 100);
+    sibling.setMouseTracking(true);
+    window.show();
+    QCoreApplication::processEvents();
+    QPointF desktop = surface.mapToGlobal(QPointF(20, 30));
+    QPoint pixels = (desktop * 2).toPoint();
+    bool writeSucceeds = true;
+    bool generatesEvents = false;
+    auto makeCursor = [&] {
+        return PhysicalCursor(
+            PhysicalCursorAccess{true, [&] { return std::optional<QPoint>(pixels); },
+                                 [&](const QPoint& target) {
+                                     if (!writeSucceeds)
+                                         return false;
+                                     pixels = target;
+                                     desktop = QPointF(pixels) / 2;
+                                     return true;
+                                 },
+                                 [&] { return std::optional<QPointF>(desktop); }, generatesEvents});
+    };
+    auto cursor = makeCursor();
+    const auto hover = cursor.moveOnePixel(PhysicalCursorDirection::Right);
+    require(hover.mouseMoveDispatched && surface.moves == 1 &&
+                surface.lastPosition == QPointF(20.5, 30) &&
+                surface.lastGlobalPosition == desktop && surface.lastButtons == Qt::NoButton,
+            "a silent Retina warp must deliver fractional hover movement to the child");
+
+    const QPointF pressLocal = window.windowHandle()->mapFromGlobal(desktop);
+    QMouseEvent press(QEvent::MouseButtonPress, pressLocal, pressLocal, desktop, Qt::LeftButton,
+                      Qt::LeftButton, Qt::ShiftModifier);
+    QCoreApplication::sendEvent(window.windowHandle(), &press);
+    require(QGuiApplication::mouseButtons().testFlag(Qt::LeftButton),
+            "the drag fixture must retain Qt's pressed mouse button");
+    const auto drag = cursor.moveOnePixel(PhysicalCursorDirection::Down);
+    require(drag.mouseMoveDispatched && surface.moves == 2 &&
+                surface.lastButtons.testFlag(Qt::LeftButton) &&
+                surface.lastModifiers == Qt::ShiftModifier &&
+                surface.selection == QRectF(QPointF(20.5, 30), QPointF(20.5, 30.5)),
+            "keyboard cursor movement must update the pressed child's selection drag");
+    // Move the live cursor over a sibling while the original surface owns the press.
+    desktop = sibling.mapToGlobal(QPointF(20, 30));
+    pixels = (desktop * 2).toPoint();
+    static_cast<void>(cursor.moveOnePixel(PhysicalCursorDirection::Right));
+    require(surface.moves == 3 && sibling.moves == 0 && surface.lastGlobalPosition == desktop,
+            "cursor movement must preserve Qt's implicit grab across child boundaries");
+    QWidget otherWindow;
+    otherWindow.setGeometry(400, 100, 140, 140);
+    PointerSurface otherSurface(&otherWindow);
+    otherSurface.setGeometry(0, 0, 140, 140);
+    otherSurface.setMouseTracking(true);
+    otherWindow.show();
+    QCoreApplication::processEvents();
+    desktop = otherSurface.mapToGlobal(QPointF(20, 30));
+    pixels = (desktop * 2).toPoint();
+    static_cast<void>(cursor.moveOnePixel(PhysicalCursorDirection::Right));
+    require(surface.moves == 4 && otherSurface.moves == 0 && surface.lastGlobalPosition == desktop,
+            "a keyboard-driven drag must remain with its owner across top-level windows");
+    const QPointF releaseLocal = window.windowHandle()->mapFromGlobal(desktop);
+    QMouseEvent release(QEvent::MouseButtonRelease, releaseLocal, releaseLocal, desktop,
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(window.windowHandle(), &release);
+    writeSucceeds = false;
+    require(!cursor.moveOnePixel(PhysicalCursorDirection::Left).mouseMoveDispatched &&
+                surface.moves == 4 && sibling.moves == 0 && otherSurface.moves == 0,
+            "failed cursor writes must not fabricate movement");
+    writeSucceeds = true;
+    generatesEvents = true;
+    cursor = makeCursor();
+    require(!cursor.moveOnePixel(PhysicalCursorDirection::Left).mouseMoveDispatched &&
+                surface.moves == 4 && sibling.moves == 0 && otherSurface.moves == 0,
+            "backends producing native movement must not receive duplicate events");
+}
+
+void warpsKeepNativePointerStateSynchronized() {
+    PointerSurface surface;
+    surface.setGeometry(100, 100, 200, 160);
+    surface.setMouseTracking(true);
+    surface.show();
+    QCoreApplication::processEvents();
+    QWindow* window = surface.windowHandle();
+    const QPointF original = surface.mapToGlobal(QPointF(40, 50));
+    const auto nativeMove = [&](const QPointF& global) {
+        QWindowSystemInterface::handleMouseEvent<QWindowSystemInterface::SynchronousDelivery>(
+            window, QHighDpi::toNativeLocalPosition(window->mapFromGlobal(global), window),
+            QHighDpi::toNativePixels(global, window), Qt::NoButton, Qt::NoButton,
+            QEvent::MouseMove);
+    };
+    nativeMove(original);
+    QPoint pixels = (original * 2).toPoint();
+    PhysicalCursor cursor(
+        PhysicalCursorAccess{true, [&] { return std::optional<QPoint>(pixels); },
+                             [&](const QPoint& target) {
+                                 pixels = target;
+                                 return true;
+                             },
+                             [&] { return std::optional<QPointF>(QPointF(pixels) / 2); }, false});
+    const int before = surface.moves;
+    static_cast<void>(cursor.moveOnePixel(PhysicalCursorDirection::Right));
+    require(surface.moves == before + 1 && surface.lastGlobalPosition == original + QPointF(.5, 0),
+            "the silent warp must advance the pointer by one physical Retina pixel");
+    nativeMove(original);
+    require(surface.moves == before + 2 && surface.lastGlobalPosition == original,
+            "the next real movement back to the pre-warp position must not be discarded");
+    surface.grabMouse();
+    static_cast<void>(cursor.moveOnePixel(PhysicalCursorDirection::Down));
+    require(surface.moves == before + 3 && surface.lastGlobalPosition == QPointF(pixels) / 2,
+            "an explicit mouse grab must receive keyboard cursor movement");
+    surface.releaseMouse();
 }
 
 void everyDirectionRequestsOnePhysicalPixel() {
@@ -55,6 +207,84 @@ void everyDirectionRequestsOnePhysicalPixel() {
                     result.position == testCase.expected && writes.constLast() == testCase.expected,
                 "a cursor direction did not request exactly one physical pixel");
     }
+}
+
+void logicalRetinaStepsUseOneWarp() {
+    QPoint live(100, 80);
+    int writes = 0;
+    PhysicalCursor cursor(PhysicalCursorAccess{true, [&] { return std::optional<QPoint>(live); },
+                                               [&](const QPoint& target) {
+                                                   ++writes;
+                                                   live = target;
+                                                   return true;
+                                               }});
+    require(cursor.movePixels(PhysicalCursorDirection::Right, 2).position == QPoint(102, 80) &&
+                writes == 1,
+            "a logical Retina step must warp once across two backing pixels");
+    require(cursor.movePixels(PhysicalCursorDirection::Up, 0).status ==
+                    PhysicalCursorMoveStatus::InvalidTarget &&
+                writes == 1,
+            "invalid distances must not move the cursor");
+    live.setX(std::numeric_limits<int>::max() - 1);
+    require(cursor.movePixels(PhysicalCursorDirection::Right, 2).status ==
+                    PhysicalCursorMoveStatus::InvalidTarget &&
+                writes == 1,
+            "scaled cursor steps must reject overflow");
+}
+
+void nativeMovementGranularityIsSymmetric() {
+    QPointF desktop;
+    int scale = 2;
+    int currentScale = 1;
+    int writes = 0;
+    PhysicalCursor cursor(PhysicalCursorAccess{
+        true,
+        [&]() -> std::optional<QPoint> {
+            currentScale = scale;
+            return (desktop * scale).toPoint();
+        },
+        [&](const QPoint& target) {
+            ++writes;
+            const QPointF requested = QPointF(target) / scale;
+            // Model CGWarpMouseCursorPosition: fractional desktop points floor,
+            // including negative coordinates on displays left/above the primary.
+            desktop = QPointF(std::floor(requested.x()), std::floor(requested.y()));
+            return desktop == requested;
+        },
+        [&] { return std::optional<QPointF>(desktop); }, false, [&] { return currentScale; }});
+    const std::array<std::pair<PhysicalCursorDirection, QPoint>, 4> directions = {{
+        {PhysicalCursorDirection::Up, QPoint(0, -1)},
+        {PhysicalCursorDirection::Down, QPoint(0, 1)},
+        {PhysicalCursorDirection::Left, QPoint(-1, 0)},
+        {PhysicalCursorDirection::Right, QPoint(1, 0)},
+    }};
+    for (int displayScale : {2, 1, 2}) {
+        scale = displayScale;
+        for (const QPoint start : {QPoint(600, 400), QPoint(-600, -400)}) {
+            for (const auto& [direction, offset] : directions) {
+                desktop = start;
+                for (int repeat = 1; repeat <= 3; ++repeat) {
+                    const int before = writes;
+                    const auto result = cursor.moveOnePixel(direction);
+                    require(result.status == PhysicalCursorMoveStatus::Applied &&
+                                desktop == start + offset * repeat &&
+                                result.position == (start + offset * repeat) * scale &&
+                                writes == before + 1,
+                            "repeated cursor nudges must move one native step in every direction");
+                }
+                desktop = start;
+                const auto result = cursor.movePixels(direction, 3);
+                require(result.commandApplied() && desktop == start + offset * (scale == 2 ? 2 : 3),
+                        "larger requests must round up to a whole native step");
+            }
+        }
+    }
+    desktop = QPointF(std::numeric_limits<int>::max() - 1, 0) / scale;
+    const int before = writes;
+    require(cursor.moveOnePixel(PhysicalCursorDirection::Right).status ==
+                    PhysicalCursorMoveStatus::InvalidTarget &&
+                writes == before,
+            "rounding to a native step must still reject coordinate overflow");
 }
 
 void everyMoveStartsFromTheLivePosition() {
@@ -230,7 +460,9 @@ void windowsBackendMovesOnePhysicalPixelOnEveryMonitor() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    qputenv("QT_QPA_PLATFORM", "offscreen");
+    QApplication app(argc, argv);
     PhysicalCursor logical(
         PhysicalCursorAccess{true,
                              [] { return std::optional<QPoint>(QPoint(-1, 40)); },
@@ -240,7 +472,11 @@ int main() {
             "fractional desktop position must retain display ownership at a Retina boundary");
 
     try {
+        silentWarpsDeliverMovementThroughQt();
+        warpsKeepNativePointerStateSynchronized();
         everyDirectionRequestsOnePhysicalPixel();
+        logicalRetinaStepsUseOneWarp();
+        nativeMovementGranularityIsSymmetric();
         everyMoveStartsFromTheLivePosition();
         operatingSystemResolutionIsReadBack();
         failuresHaveDistinctOutcomes();

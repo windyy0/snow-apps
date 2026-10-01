@@ -4,11 +4,13 @@
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/styles/thememanager.h"
+#include "widgets/detail/top_level_popup_window.h"
 
 #include <QGuiApplication>
 #include <QPainter>
 #include <QPainterPath>
 #include <QScreen>
+#include <QWindow>
 
 #include <algorithm>
 #include <array>
@@ -61,9 +63,11 @@ QColor readableMarkerColor(const QColor& color) {
 }
 } // namespace
 
+// This HUD paints its own shadow. Cocoa must not outline those pixels.
 ScreenshotCanvasColorSamplerWindow::ScreenshotCanvasColorSamplerWindow(QWidget* parent)
     : QWidget(parent, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
-                          Qt::WindowDoesNotAcceptFocus | Qt::WindowTransparentForInput) {
+                          Qt::WindowDoesNotAcceptFocus | Qt::WindowTransparentForInput |
+                          Qt::NoDropShadowWindowHint) {
     setObjectName(QStringLiteral("screenshotCanvasColorSamplerWindow"));
     setAttribute(Qt::WA_TranslucentBackground, true);
     setAttribute(Qt::WA_NoSystemBackground, true);
@@ -92,11 +96,24 @@ ScreenshotCanvasColorSamplerWindow::ScreenshotCanvasColorSamplerWindow(QWidget* 
     hide();
 }
 
-void ScreenshotCanvasColorSamplerWindow::beginSampling() {
+void ScreenshotCanvasColorSamplerWindow::beginSampling(QWidget* owner) {
+    endSampling();
+    if (owner == nullptr) {
+        return;
+    }
+
+    owner = owner->window();
+    if (owner->windowHandle() == nullptr) {
+        static_cast<void>(owner->winId());
+    }
+    setScreen(owner->screen());
+    // Keep controller ownership, but join the sampling window's transient hierarchy.
+    // On macOS this lets the screenshot stacking policy elevate the HUD above its
+    // owner; an unowned stays-on-top tool remains below the screenshot overlay.
+    // create() avoids forcing native surfaces onto the owner's canvas children.
+    create();
+    adqt::widgets::detail::setTopLevelToolTransientParent(this, owner);
     m_sampling = true;
-    m_previewImage = QImage();
-    m_currentColor = QColor();
-    hide();
 }
 
 void ScreenshotCanvasColorSamplerWindow::updateSample(const QImage& previewImage,
@@ -124,6 +141,18 @@ void ScreenshotCanvasColorSamplerWindow::endSampling() {
     m_previewImage = QImage();
     m_currentColor = QColor();
     hide();
+    if (QWindow* handle = windowHandle()) {
+        handle->setTransientParent(nullptr);
+        // A native sampling surface belongs to one session. Cocoa can retain the
+        // previous owner's level after detaching; recreate it for the next owner.
+        destroy();
+    }
+}
+
+bool ScreenshotCanvasColorSamplerWindow::nativeEvent(const QByteArray& eventType, void* message,
+                                                     qintptr* result) {
+    adqt::widgets::detail::constrainTopLevelToolStackingToOwner(this, message);
+    return QWidget::nativeEvent(eventType, message, result);
 }
 
 QCursor ScreenshotCanvasColorSamplerWindow::samplingCursor() {

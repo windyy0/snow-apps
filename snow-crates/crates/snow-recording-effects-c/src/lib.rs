@@ -44,6 +44,13 @@ pub struct SnowRecordingEffectsConfig {
     pub trail_duration_ms: u32,
     pub generation: u64,
     pub keyboard_size: u32,
+    pub reserved_v3: u32,
+    pub highlight_rgba: u32,
+    pub record_mouse_clicks: u32,
+    pub keyboard_font_family_utf8: *const c_char,
+    pub keyboard_cjk_font_family_utf8: *const c_char,
+    pub keyboard_font_weight: u32,
+    pub canvas_scale: f64,
 }
 #[repr(C)]
 pub struct SnowRecordingEffectsTile {
@@ -85,7 +92,10 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
     let version = unsafe { *header };
     let size = match version {
         1 | 2 => std::mem::offset_of!(SnowRecordingEffectsConfig, keyboard_size),
-        3 => std::mem::size_of::<SnowRecordingEffectsConfig>(),
+        3 => std::mem::offset_of!(SnowRecordingEffectsConfig, highlight_rgba),
+        4 => std::mem::offset_of!(SnowRecordingEffectsConfig, keyboard_font_family_utf8),
+        5 => std::mem::offset_of!(SnowRecordingEffectsConfig, canvas_scale),
+        6 => std::mem::size_of::<SnowRecordingEffectsConfig>(),
         _ => return Err("unsupported effects configuration version".into()),
     };
     if unsafe { *header.add(1) } != size as u32 {
@@ -96,7 +106,16 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
         std::ptr::copy_nonoverlapping(raw.cast::<u8>(), (&raw mut value).cast::<u8>(), size);
     }
     let raw = &value;
+    let canvas_scale = if raw.version >= 6 {
+        raw.canvas_scale
+    } else {
+        1.0
+    };
+    if !canvas_scale.is_finite() || canvas_scale <= 0.0 {
+        return Err("invalid preview canvas scale".into());
+    }
     if raw.show_keyboard > 1
+        || (raw.version >= 4 && raw.record_mouse_clicks > 1)
         || (raw.version == 1 && raw.trail_duration_ms != 0)
         || (raw.version >= 3 && !(32..=128).contains(&raw.keyboard_size))
         || raw.label_count > 256
@@ -107,7 +126,9 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
     let mut labels = std::collections::BTreeMap::new();
     for index in 0..raw.label_count as usize {
         let label = unsafe { &*raw.labels.add(index) };
-        if label.virtual_key > 255 || label.label_utf8.is_null() {
+        if (label.virtual_key > 255 && !(0x200..=0x204).contains(&label.virtual_key))
+            || label.label_utf8.is_null()
+        {
             return Err("invalid key label".into());
         }
         let text = unsafe { CStr::from_ptr(label.label_utf8) }
@@ -120,6 +141,10 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
     }
     let value = PreviewConfig {
         region: (raw.x, raw.y, raw.width, raw.height),
+        canvas: (
+            (f64::from(raw.width) * canvas_scale).round() as u32,
+            (f64::from(raw.height) * canvas_scale).round() as u32,
+        ),
         output: (raw.output_width, raw.output_height),
         trail: raw.trail_rgba.to_be_bytes(),
         trail_duration_ms: if raw.version == 1 {
@@ -128,18 +153,42 @@ unsafe fn config(raw: *const SnowRecordingEffectsConfig) -> Result<PreviewConfig
             u64::from(raw.trail_duration_ms)
         },
         click: raw.click_rgba.to_be_bytes(),
+        highlight: if raw.version >= 4 {
+            raw.highlight_rgba.to_be_bytes()
+        } else {
+            [0; 4]
+        },
+        record_mouse_clicks: raw.version >= 4 && raw.record_mouse_clicks != 0,
+        show_keyboard: raw.show_keyboard != 0,
         generation: raw.generation,
-        keyboard: (raw.show_keyboard != 0).then_some(KeyboardOverlayConfig {
-            keycap_size: if raw.version < 3 {
-                64
-            } else {
-                raw.keyboard_size
-            },
-            background_rgba: raw.keyboard_background_rgba.to_be_bytes(),
-            text_rgba: raw.keyboard_text_rgba.to_be_bytes(),
-            border_rgba: raw.keyboard_border_rgba.to_be_bytes(),
-            labels,
-        }),
+        keyboard: (raw.show_keyboard != 0 || (raw.version >= 4 && raw.record_mouse_clicks != 0))
+            .then_some(KeyboardOverlayConfig {
+                font: if raw.version >= 5 && !raw.keyboard_font_family_utf8.is_null() {
+                    if raw.keyboard_cjk_font_family_utf8.is_null() {
+                        return Err("missing keyboard CJK font family".into());
+                    }
+                    Some(snow_recording_effects::KeyboardOverlayFont::new(
+                        unsafe { CStr::from_ptr(raw.keyboard_font_family_utf8) }
+                            .to_str()
+                            .map_err(|e| e.to_string())?,
+                        unsafe { CStr::from_ptr(raw.keyboard_cjk_font_family_utf8) }
+                            .to_str()
+                            .map_err(|e| e.to_string())?,
+                        raw.keyboard_font_weight,
+                    )?)
+                } else {
+                    None
+                },
+                keycap_size: if raw.version < 3 {
+                    64
+                } else {
+                    raw.keyboard_size
+                },
+                background_rgba: raw.keyboard_background_rgba.to_be_bytes(),
+                text_rgba: raw.keyboard_text_rgba.to_be_bytes(),
+                border_rgba: raw.keyboard_border_rgba.to_be_bytes(),
+                labels,
+            }),
     };
     value.validate()?;
     Ok(value)
@@ -309,7 +358,7 @@ pub unsafe extern "C" fn snow_recording_effects_frame_info(
     };
     1
 }
-/// Keyboard tiles are a separate, complete layer in physical capture coordinates.
+/// Keyboard tiles are a separate, complete layer in desktop capture coordinates.
 /// Both layer views borrow the same immutable frame lease.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn snow_recording_effects_frame_keyboard_info(
@@ -345,6 +394,107 @@ mod tests {
     use super::*;
     use std::time::Duration;
     #[test]
+    fn preview_canvas_scale_preserves_desktop_input_units_and_legacy_configs() {
+        let mut raw = valid();
+        raw.width = 641;
+        raw.height = 479;
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            raw.canvas_scale = scale;
+            let parsed = unsafe { config(&raw) }.unwrap();
+            assert_eq!(parsed.region, (-1920, -100, 641, 479));
+            assert_eq!(parsed.output, (1280, 720));
+            assert_eq!(
+                parsed.canvas,
+                (
+                    (641.0 * scale).round() as u32,
+                    (479.0 * scale).round() as u32
+                )
+            );
+        }
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY, 100.0, 0.00001] {
+            raw.canvas_scale = scale;
+            assert!(unsafe { config(&raw) }.is_err());
+        }
+        for (version, size) in [
+            (
+                1,
+                std::mem::offset_of!(SnowRecordingEffectsConfig, keyboard_size),
+            ),
+            (
+                2,
+                std::mem::offset_of!(SnowRecordingEffectsConfig, keyboard_size),
+            ),
+            (
+                3,
+                std::mem::offset_of!(SnowRecordingEffectsConfig, highlight_rgba),
+            ),
+            (
+                4,
+                std::mem::offset_of!(SnowRecordingEffectsConfig, keyboard_font_family_utf8),
+            ),
+            (
+                5,
+                std::mem::offset_of!(SnowRecordingEffectsConfig, canvas_scale),
+            ),
+        ] {
+            raw.version = version;
+            raw.struct_size = size as u32;
+            raw.trail_duration_ms = if version == 1 { 0 } else { 500 };
+            raw.canvas_scale = f64::NAN;
+            let parsed = unsafe { config(&raw) }.unwrap();
+            assert_eq!(parsed.canvas, (641, 479));
+        }
+    }
+
+    #[test]
+    fn keyboard_font_is_owned_validated_and_legacy_compatible() {
+        let mut raw = valid();
+        raw.show_keyboard = 1;
+        let family = CString::new("Courier New").unwrap();
+        let cjk = CString::new("Microsoft JhengHei UI").unwrap();
+        raw.keyboard_font_family_utf8 = family.as_ptr();
+        raw.keyboard_cjk_font_family_utf8 = cjk.as_ptr();
+        raw.keyboard_font_weight = 700;
+        let parsed = unsafe { config(&raw) }.unwrap().keyboard.unwrap();
+        drop(family);
+        drop(cjk);
+        let font = parsed.font.unwrap();
+        assert_eq!(font.family, "Courier New");
+        assert_eq!(font.cjk_family, "Microsoft JhengHei UI");
+        assert_eq!(font.weight, 700);
+        raw.keyboard_font_family_utf8 = c"Segoe UI".as_ptr();
+        raw.keyboard_cjk_font_family_utf8 = c"Microsoft YaHei UI".as_ptr();
+        raw.keyboard_font_weight = 1000;
+        assert!(unsafe { config(&raw) }.is_err());
+        raw.keyboard_font_weight = 400;
+        raw.keyboard_cjk_font_family_utf8 = std::ptr::null();
+        assert!(unsafe { config(&raw) }.is_err());
+        raw.version = 4;
+        raw.struct_size =
+            std::mem::offset_of!(SnowRecordingEffectsConfig, keyboard_font_family_utf8) as u32;
+        assert!(
+            (unsafe { config(&raw) }.unwrap().keyboard.unwrap())
+                .font
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn mouse_options_are_independent_and_v3_padding_is_ignored() {
+        let mut raw = valid();
+        raw.highlight_rgba = 0xffff0080;
+        raw.record_mouse_clicks = 1;
+        let parsed = unsafe { config(&raw) }.unwrap();
+        assert!(parsed.record_mouse_clicks && !parsed.show_keyboard && parsed.keyboard.is_some());
+        assert_eq!(parsed.highlight, [255, 255, 0, 128]);
+        raw.version = 3;
+        raw.struct_size = std::mem::offset_of!(SnowRecordingEffectsConfig, highlight_rgba) as u32;
+        raw.reserved_v3 = u32::MAX;
+        let parsed = unsafe { config(&raw) }.unwrap();
+        assert!(!parsed.record_mouse_clicks && parsed.keyboard.is_none());
+        assert_eq!(parsed.highlight, [0; 4]);
+    }
+    #[test]
     fn duration_versions_and_bounds() {
         let mut raw = valid();
         assert_eq!(unsafe { config(&raw) }.unwrap().trail_duration_ms, 500);
@@ -367,7 +517,7 @@ mod tests {
 
     fn valid() -> SnowRecordingEffectsConfig {
         SnowRecordingEffectsConfig {
-            version: 3,
+            version: 6,
             struct_size: std::mem::size_of::<SnowRecordingEffectsConfig>() as u32,
             x: -1920,
             y: -100,
@@ -386,6 +536,13 @@ mod tests {
             trail_duration_ms: 500,
             generation: 12,
             keyboard_size: 64,
+            reserved_v3: 0,
+            highlight_rgba: 0,
+            record_mouse_clicks: 0,
+            keyboard_font_family_utf8: std::ptr::null(),
+            keyboard_cjk_font_family_utf8: std::ptr::null(),
+            keyboard_font_weight: 0,
+            canvas_scale: 1.0,
         }
     }
     #[test]
@@ -481,7 +638,8 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (sender, receiver) = std::sync::mpsc::channel::<()>();
-        let raw = valid();
+        let mut raw = valid();
+        raw.canvas_scale = 1.5;
         let handle = unsafe {
             snow_recording_effects_create(&raw, Some(notify), (&raw const sender).cast_mut().cast())
         };
@@ -505,7 +663,7 @@ mod tests {
         );
         let info = unsafe { info.assume_init() };
         assert_eq!(info.generation, 12);
-        assert_eq!((info.width, info.height), (1280, 720));
+        assert_eq!((info.width, info.height), (2880, 1620));
         assert_eq!(info.tile_count, 0);
         assert!(info.error_utf8.is_null());
         let mut keyboard = std::mem::MaybeUninit::uninit();
@@ -515,7 +673,7 @@ mod tests {
         );
         let keyboard = unsafe { keyboard.assume_init() };
         assert_eq!(keyboard.generation, 12);
-        assert_eq!((keyboard.width, keyboard.height), (1920, 1080));
+        assert_eq!((keyboard.width, keyboard.height), (2880, 1620));
         assert_eq!(keyboard.tile_count, 0);
         assert_eq!(
             unsafe { snow_recording_effects_frame_keyboard_info(frame, std::ptr::null_mut()) },

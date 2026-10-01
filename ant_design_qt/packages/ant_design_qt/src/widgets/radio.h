@@ -138,6 +138,9 @@ class AdRadio final : public QRadioButton, public AdControlScaleParticipant {
 
   QSize sizeHint() const override;
   QSize minimumSizeHint() const override;
+  // Unscaled design metrics; inherited Qt setters retain their usual semantics.
+  void setReferenceFont(const QFont& font);
+  void setReferenceIconSize(const QSize& size);
   void prepareControlScale(const AdControlScaleContext& context) override;
   void commitControlScale(const AdControlScaleContext& context) override;
 
@@ -219,7 +222,6 @@ class AdRadio final : public QRadioButton, public AdControlScaleParticipant {
   std::optional<ControlSize> controlSizeOverride_;
   std::optional<Variant> variantOverride_;
   std::optional<ButtonStyle> buttonStyleOverride_;
-  bool hovered_ = false;
   bool pressed_ = false;
   bool focusVisible_ = false;
   GroupPosition groupPosition_ = GroupPosition::None;

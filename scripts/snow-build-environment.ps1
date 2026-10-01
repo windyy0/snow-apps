@@ -64,6 +64,7 @@ function Resolve-SnowQtDir {
 
     $requiredConfiguration = switch ($Preset) {
         "windows-msvc-debug" { "Debug" }
+        "windows-clang-portability" { "Debug" }
         "windows-msvc-performance" { "Release" }
         "snow-shot-msvc-release" { "Release" }
         "snow-shot-msvc-fast" { "Release" }
@@ -303,13 +304,38 @@ function Test-SnowCacheAlignment {
         }
     }
 
-    return $qtAligned -and $powerShellAligned -and
+    $generatorAligned = if ($Preset -eq "windows-clang-portability") {
+        $cache -match "(?m)^CMAKE_GENERATOR:INTERNAL=Ninja$lineEnd" -and
+            $cache -match "(?im)^CMAKE_CXX_COMPILER:(?:FILEPATH|STRING)=.*clang-cl(?:\.exe)?$lineEnd"
+    }
+    else {
+        $cache -match "(?m)^CMAKE_GENERATOR:INTERNAL=Visual Studio 18 2026$lineEnd" -and
+            $cache -match "(?m)^CMAKE_GENERATOR_PLATFORM:INTERNAL=x64$lineEnd" -and
+            $cache -match "(?m)^CMAKE_GENERATOR_TOOLSET:INTERNAL=host=x64,version=14\.51$lineEnd"
+    }
+
+    return $qtAligned -and $powerShellAligned -and $generatorAligned -and
         $cache -match "(?m)^VCPKG_TARGET_TRIPLET:.*=$([regex]::Escape($expectedTriplet))$lineEnd" -and
         $cache -match "(?m)^VCPKG_INSTALLED_DIR:PATH=$installedDirNeedle$lineEnd" -and
-        $cache -match "(?m)^CMAKE_HOME_DIRECTORY:INTERNAL=$repoNeedle$lineEnd" -and
-        $cache -match "(?m)^CMAKE_GENERATOR:INTERNAL=Visual Studio 18 2026$lineEnd" -and
-        $cache -match "(?m)^CMAKE_GENERATOR_PLATFORM:INTERNAL=x64$lineEnd" -and
-        $cache -match "(?m)^CMAKE_GENERATOR_TOOLSET:INTERNAL=host=x64,version=14\.51$lineEnd"
+        $cache -match "(?m)^CMAKE_HOME_DIRECTORY:INTERNAL=$repoNeedle$lineEnd"
+}
+
+function Get-SnowConfigureArguments {
+    param(
+        [Parameter(Mandatory = $true)][string]$Preset,
+        [Parameter(Mandatory = $true)][string]$BuildDirectory
+    )
+
+    $cachePath = Join-Path $BuildDirectory "CMakeCache.txt"
+    $arguments = @("--preset", $Preset, "-S", $script:SnowRepoRoot, "-B", $BuildDirectory)
+    if (Test-Path -LiteralPath $cachePath -PathType Leaf) {
+        if (-not (Test-SnowCacheAlignment -CachePath $cachePath -Preset $Preset)) {
+            Write-Host "The existing CMake cache does not match preset $Preset; configuring from a fresh cache."
+            return @("--fresh") + $arguments
+        }
+        Write-Host "Reusing the existing CMake cache for preset $Preset."
+    }
+    return $arguments
 }
 
 function Resolve-SnowExecutable {

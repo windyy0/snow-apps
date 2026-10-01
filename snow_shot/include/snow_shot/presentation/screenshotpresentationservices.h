@@ -15,6 +15,7 @@
 #include <QStringList>
 
 #include <optional>
+#include <functional>
 
 struct ScreenshotCaptureState;
 struct ScreenshotColorPickerContext;
@@ -37,6 +38,7 @@ struct ScreenshotPresentationServicesContext {
     ScreenshotSelectionModel& selection;
     ScreenshotIntelligentSelectionModel& intelligentSelection;
     QSet<SnowCanvasTool> quickSelectionDisabledTools;
+    std::function<void()> stateChanged = [] {};
 };
 
 class ScreenshotPresentationServices final {
@@ -55,6 +57,7 @@ class ScreenshotPresentationServices final {
     void setQuickSelectionDisabledTools(const QSet<SnowCanvasTool>& tools);
     void reloadConfiguredShortcuts();
 
+    void setSelectionMovementActive(bool active);
     void updateOverlayState();
     void updateOverlayCursors() const;
 
@@ -70,6 +73,7 @@ class ScreenshotPresentationServices final {
     ScreenshotUiPreferences m_uiPreferences;
     std::optional<snow_shot::shortcuts::ShortcutBindingMap> m_configuredShortcuts;
     bool m_selectionToolbarHovered = false;
+    bool m_selectionMovementActive = false;
 };
 
 #endif // SNOW_SHOT_PRESENTATION_SCREENSHOTPRESENTATIONSERVICES_H

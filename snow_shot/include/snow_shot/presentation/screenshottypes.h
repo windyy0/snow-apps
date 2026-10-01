@@ -8,6 +8,7 @@
 #include <QtGlobal>
 #include <QVector>
 
+#include <cstdint>
 #include <optional>
 #include <memory>
 
@@ -59,6 +60,7 @@ struct ScreenshotCaptureRequest {
     ScreenshotCapturePurpose purpose = ScreenshotCapturePurpose::Initial;
     // Owned before worker dispatch; native snapshot data is immutable.
     std::shared_ptr<SnowCaptureCursorSnapshotImpl> cursorSnapshot;
+    QVector<std::uint32_t> excludedWindowIds;
 };
 
 struct ScreenshotDisplayPresentationState {
@@ -81,7 +83,17 @@ struct CapturedDisplayModel {
     QRect capturedLogicalRect;
     quint32 nativeDisplayId = 0;
     qreal backingScale = 1.0;
+    // Qt logical-to-device scale; rounded screen extents cannot recover this value.
+    qreal logicalToPhysicalScale = 0.0;
     bool canvasUsesPoints = false;
+    bool primary = false;
+    bool geometryResolved = false;
+};
+
+struct ScreenshotCaptureLayout {
+    quint64 requestId = 0;
+    quint64 generation = 0;
+    QVector<CapturedDisplayModel> displays;
 };
 
 struct ScreenshotCaptureResult {

@@ -11,6 +11,7 @@ use super::{
     SerialNumberToolbarState, ShapeStyle, ShapeStylePatch, StyleToolbarSource, TextDraftCommit,
     TextLayoutOverride, TextResizeMeasurementRequest, TextStyle, state::EditorState,
 };
+use crate::DrawTemplate;
 use crate::defaults::EditorStyleDefaults;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -75,15 +76,19 @@ impl EditorSession {
     ) -> Vec<crate::ArrowTextLayoutRequest> {
         self.editor.arrow_text_layout_requests(document)
     }
+    pub fn invalidate_arrow_text_measurements(&mut self) {
+        self.editor.invalidate_arrow_text_measurements();
+    }
     pub fn apply_arrow_text_measurement(
         &mut self,
         document: &DocumentModel,
         id: ElementId,
         key: u64,
         size: TextLayoutSize,
+        natural_width: f64,
     ) -> Result<bool, ErrorCode> {
         self.editor
-            .apply_arrow_text_measurement(document, id, key, size)
+            .apply_arrow_text_measurement(document, id, key, size, natural_width)
     }
     pub fn append_arrow_text_layouts(
         &self,
@@ -154,6 +159,8 @@ impl EditorSession {
         state.default_arrow_style = persisted.arrow;
         state.default_line_style = ShapeStyle {
             arrow_type: crate::style::normalized_line_arrow_type(persisted.line.arrow_type),
+            arrow_shaft_type: Default::default(),
+            arrow_ratio: 1.0,
             ..persisted.line
         };
         state.default_free_draw_style = persisted.free_draw;
@@ -223,6 +230,15 @@ impl EditorSession {
 
     pub fn reset_editing_state(&mut self) {
         self.editor.reset_editing_state();
+    }
+
+    /// Discards measurements and transient storage belonging to the old document.
+    pub fn reset_document_retained_state(&mut self) {
+        self.editor.reset_editing_state();
+        self.editor.invalidate_arrow_text_measurements();
+        self.editor.state.arrow_text_measurements = Vec::new();
+        self.editor.state.selection = Default::default();
+        self.editor.state.ui = Default::default();
     }
 
     pub fn style_toolbar_source(&self, document: &DocumentModel) -> StyleToolbarSource {
@@ -326,13 +342,33 @@ impl EditorSession {
         self.editor.set_rectangle_shape_style(document, style)
     }
 
+    pub fn set_text_creation_style(
+        &mut self,
+        style: TextStyle,
+        properties: u32,
+    ) -> Result<(), ErrorCode> {
+        self.editor.set_text_creation_style(style, properties)
+    }
+
     pub fn set_text_style(
         &mut self,
         document: &DocumentModel,
         style: TextStyle,
+        properties: u32,
         layouts: &[TextLayoutOverride],
     ) -> Result<Option<EditorCommand>, ErrorCode> {
-        self.editor.set_text_style(document, style, layouts)
+        self.editor
+            .set_text_style(document, style, properties, layouts)
+    }
+
+    pub fn set_serial_number_style_patch(
+        &mut self,
+        document: &DocumentModel,
+        style: SerialNumberStyle,
+        properties: u32,
+    ) -> Result<Option<EditorCommand>, ErrorCode> {
+        self.editor
+            .set_serial_number_style_patch(document, style, properties)
     }
 
     pub fn set_serial_number_style(
@@ -432,6 +468,22 @@ impl EditorSession {
         offset: Point<f64>,
     ) -> Result<Option<EditorCommand>, ErrorCode> {
         self.editor.duplicate_selected(document, offset)
+    }
+
+    pub fn selected_draw_template(
+        &self,
+        document: &DocumentModel,
+    ) -> Result<DrawTemplate, ErrorCode> {
+        self.editor.selected_draw_template(document)
+    }
+
+    pub fn insert_draw_template(
+        &mut self,
+        document: &DocumentModel,
+        template: &DrawTemplate,
+        center: Point<f64>,
+    ) -> Result<EditorCommand, ErrorCode> {
+        self.editor.insert_draw_template(document, template, center)
     }
 
     pub fn filter_style(&self, document: &DocumentModel) -> FilterStyle {
@@ -641,4 +693,53 @@ fn validate_persisted_editor_styles(persisted: &PersistedEditorSession) -> Resul
         return Err(ErrorCode::InvalidArgument);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod document_reset_tests {
+    use super::*;
+
+    #[test]
+    fn document_reset_releases_layouts_and_preserves_creation_styles() {
+        let mut session = EditorSession::new(EngineConfig::default()).unwrap();
+        session
+            .editor
+            .state
+            .default_rectangle_shape_style
+            .stroke_width = 17.0;
+        session.editor.state.arrow_text_measurements.reserve(64);
+        session.editor.state.arrow_text_measurements.push(
+            crate::arrow_text::ArrowTextMeasurement {
+                text_id: ElementId {
+                    index: 5,
+                    generation: 3,
+                },
+                key: 7,
+                size: TextLayoutSize::new(20.0, 10.0),
+                text_key: 11,
+                natural_width: 20.0,
+            },
+        );
+        session.editor.state.ui.snap_guides.reserve(64);
+        session.editor.state.selection.ids.reserve(64);
+        session.set_quick_selection_disabled_tools(3);
+        let config = session.config();
+        let generation = session.editor.state.arrow_text_measurement_generation;
+
+        session.reset_document_retained_state();
+        assert_eq!(session.editor.state.arrow_text_measurements.capacity(), 0);
+        assert_eq!(session.editor.state.ui.snap_guides.capacity(), 0);
+        assert_eq!(session.editor.state.selection.ids.capacity(), 0);
+        assert!(session.editor.state.arrow_text_measurement_generation > generation);
+        assert_eq!(
+            session
+                .editor
+                .state
+                .default_rectangle_shape_style
+                .stroke_width,
+            17.0
+        );
+        assert_eq!(session.config(), config);
+        assert_eq!(session.quick_selection_disabled_tools(), 3);
+    }
 }

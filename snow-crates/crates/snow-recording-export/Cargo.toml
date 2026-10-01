@@ -13,6 +13,8 @@ bench-experiments = []
 snow-core = { path = "../snow-core" }
 snow-audio-recorder = { path = "../snow-audio-recorder" }
 snow-recording-model = { path = "../snow-recording-model" }
+snow-recording-effects = { path = "../snow-recording-effects" }
+bincode.workspace = true
 crossbeam-channel.workspace = true
 ffmpeg-next.workspace = true
 rayon.workspace = true
@@ -29,6 +31,7 @@ snow-d3d11 = { path = "../snow-d3d11" }
 windows = { workspace = true, features = ["Win32_Graphics_Direct3D11"] }
 
 [dev-dependencies]
+gif = "0.14.2"
 anyhow.workspace = true
 proptest = "1.11.0"
 symphonia = { version = "0.5.4", default-features = false, features = ["aac", "isomp4"] }
