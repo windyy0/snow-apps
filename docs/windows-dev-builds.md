@@ -42,6 +42,9 @@ Rust dependencies and build outputs are cached separately, including the updater
 workspace. Cache entries are subject to GitHub's branch visibility rules; run on
 the same branch when testing cache reuse. These caches do not provide live local
 validation, and the application is still built and packaged on the hosted runner.
+Before packaging, the workflow also fetches the Cargo packages needed by the
+offline third-party license audit, including packages used only by development
+dependencies.
 
 ## Failures
 

@@ -106,6 +106,24 @@ jobs:
             snow_rust_ffi -> ../build/snow-shot-msvc-release/cargo
             snow_shot/rust/snow-shot-updater -> ../../../build/snow-shot-msvc-release/cargo
           cache-on-failure: true
+          # The release license audit uses cargo metadata --offline and can
+          # inspect dev-only crates that the production build never compiles.
+          cache-all-crates: true
+
+      - name: Prefetch Rust license dependencies
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cargoManifests = @(
+            "snow-crates/Cargo.toml",
+            "snow_rust_ffi/Cargo.toml",
+            "snow_shot/rust/snow-shot-updater/Cargo.toml"
+          )
+          foreach ($manifest in $cargoManifests) {
+            cargo fetch --locked --target x86_64-pc-windows-msvc --manifest-path $manifest
+            if ($LASTEXITCODE -ne 0) {
+              throw "Cargo dependency prefetch failed for $manifest."
+            }
+          }
 
       - name: Install Windows static dependencies
         id: dependencies
