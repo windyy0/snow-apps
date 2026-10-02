@@ -172,7 +172,7 @@ jobs:
           key: ${{ steps.qt-cache.outputs.cache-primary-key }}
 
       - name: Build and package Windows artifacts
-        run: .\scripts\stage-snow-shot-release.ps1 -Parallelism 4
+        run: .\scripts\stage-snow-shot-release.ps1 -Parallelism 4 -SkipMini
 
       - name: Verify downloadable packages
         run: |

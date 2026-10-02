@@ -3,7 +3,8 @@ param(
     [string]$BuildDirectory = "build\snow-shot-msvc-release",
     [string]$InstallDirectory = "artifacts\snow-shot",
     [ValidateRange(1, 256)][int]$Parallelism = 4,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$SkipMini
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,6 +21,9 @@ $forwardedParameters = @{
 }
 if ($SkipBuild) {
     $forwardedParameters.SkipBuild = $true
+}
+if ($SkipMini) {
+    $forwardedParameters.SkipMini = $true
 }
 
 & $packageScript @forwardedParameters

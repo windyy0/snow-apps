@@ -4,6 +4,7 @@ param(
     [string]$InstallDirectory = "artifacts\snow-shot",
     [ValidateRange(1, 256)][int]$Parallelism = 4,
     [switch]$SkipBuild,
+    [switch]$SkipMini,
     [switch]$PrepareOcrRuntimeOnly
 )
 
@@ -244,6 +245,11 @@ $cachePath = Join-Path $buildDirectory "CMakeCache.txt"
 if (-not $SkipBuild) {
     $configureArguments = @(Get-SnowConfigureArguments -Preset "snow-shot-msvc-release" `
         -BuildDirectory $buildDirectory)
+    if ($SkipMini) {
+        # The production release keeps Mini enabled by default.  The Windows
+        # development workflow can opt out without changing that release preset.
+        $configureArguments += "-DSNOW_APPS_BUILD_SNOW_SHOT_MINI:BOOL=OFF"
+    }
     & cmake @configureArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Snow Shot release configuration failed."
@@ -253,13 +259,14 @@ elseif (-not (Test-Path -LiteralPath $cachePath)) {
     throw "CMake cache was not found: $cachePath"
 }
 
+$miniCacheValue = if ($SkipMini) { "OFF" } else { "ON" }
 $requiredCacheEntries = @(
     "SNOW_APPS_BUILD_TESTS:BOOL=OFF",
     "SNOW_APPS_BUILD_BENCHMARKS:BOOL=OFF",
     "SNOW_APPS_RELEASE_STATIC:BOOL=ON",
     "SNOW_APPS_QT_STATIC:BOOL=ON",
     "SNOW_APPS_PACKAGE_SNOW_SHOT:BOOL=ON",
-    "SNOW_APPS_BUILD_SNOW_SHOT_MINI:BOOL=ON",
+    "SNOW_APPS_BUILD_SNOW_SHOT_MINI:BOOL=$miniCacheValue",
     "SNOW_SHOT_IMAGE_CODEC_BACKEND_STATIC:INTERNAL=ON",
     "QT_FEATURE_static:INTERNAL=ON"
 )
@@ -271,7 +278,13 @@ foreach ($entry in $requiredCacheEntries) {
 }
 
 if (-not $SkipBuild) {
-    & cmake --build $buildDirectory --config Release --target snow_shot snow_shot_mini --parallel $Parallelism
+    $buildTargets = @("snow_shot")
+    if (-not $SkipMini) {
+        $buildTargets += "snow_shot_mini"
+    }
+    $buildArguments = @("--build", $buildDirectory, "--config", "Release", "--target") +
+        $buildTargets + @("--parallel", $Parallelism)
+    & cmake @buildArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Snow Shot release build failed."
     }
@@ -1394,4 +1407,6 @@ Write-Output "OCR runtime upload artifact: $runtimeArchivePath"
 Write-Output "OCR runtime checksum: $runtimeArchiveChecksum"
 Write-Output "OCR runtime manifest: $runtimeReleaseManifest"
 
-. (Join-Path $PSScriptRoot "package-snow-shot-mini.ps1")
+if (-not $SkipMini) {
+    . (Join-Path $PSScriptRoot "package-snow-shot-mini.ps1")
+}
