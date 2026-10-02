@@ -5,6 +5,7 @@ param(
     [ValidateRange(1, 256)][int]$Parallelism = 4,
     [switch]$SkipBuild,
     [switch]$SkipMini,
+    [switch]$SkipOffline,
     [switch]$PrepareOcrRuntimeOnly
 )
 
@@ -1177,10 +1178,13 @@ if ($manifestDrift) {
 # already verified its size, hash, and complete file inventory.
 $runtimeArchive.sha256 | Set-Content -LiteralPath $runtimePublishedMarker -Encoding ascii
 
-$variantStages = [ordered]@{
-    online = Join-Path $artifactRoot "snow-shot-$packageVersion-online-stage"
-    offline = Join-Path $artifactRoot "snow-shot-$packageVersion-offline-stage"
-    portable = Join-Path $artifactRoot "snow-shot-$packageVersion-portable-stage"
+$packageVariants = @("online", "portable")
+if (-not $SkipOffline) {
+    $packageVariants = @("online", "offline", "portable")
+}
+$variantStages = [ordered]@{}
+foreach ($variant in $packageVariants) {
+    $variantStages[$variant] = Join-Path $artifactRoot "snow-shot-$packageVersion-$variant-stage"
 }
 $defaultOcrModel = @($ocrModels | Where-Object { $_.Type -eq $ocrDefaultModelType })[0]
 $defaultModelCache = Join-Path $artifactRoot "ocr-models-$($defaultOcrModel.Id)"
@@ -1221,46 +1225,50 @@ $onlineAssetFiles = @(Get-ChildItem -LiteralPath (Join-Path $variantStages.onlin
 if ($onlineAssetFiles.Count -ne 1 -or $onlineAssetFiles[0].Name -ne "asset-manifest.json") {
     throw "The online installer stage must contain only the trusted OCR asset manifest."
 }
-$offlineAssetRoot = Join-Path $variantStages.offline "bin\assets\ocr"
-$expectedOfflineDirectories = @(
-    "models",
-    "models\$ocrDefaultModelId",
-    "runtimes",
-    "runtimes\$ocrRuntimeVersion",
-    "runtimes\$ocrRuntimeVersion\$ocrPlatform"
-) | Sort-Object
-$actualOfflineDirectories = @(Get-ChildItem -LiteralPath $offlineAssetRoot -Recurse -Directory |
-    ForEach-Object { [System.IO.Path]::GetRelativePath($offlineAssetRoot, $_.FullName) } |
-    Sort-Object)
-$expectedOfflineFiles = @(
-    "asset-manifest.json",
-    "models\$ocrDefaultModelId\.complete.json",
-    "models\$ocrDefaultModelId\$($defaultOcrModel.Detector)",
-    "models\$ocrDefaultModelId\$($defaultOcrModel.Recognizer)",
-    "models\$ocrDefaultModelId\$($defaultOcrModel.Dictionary)",
-    "runtimes\$ocrRuntimeVersion\$ocrPlatform\.complete.json",
-    "runtimes\$ocrRuntimeVersion\$ocrPlatform\DirectML.dll",
-    "runtimes\$ocrRuntimeVersion\$ocrPlatform\runtime-manifest.json",
-    "runtimes\$ocrRuntimeVersion\$ocrPlatform\$ocrRuntimeFileName"
-) | Sort-Object
-$actualOfflineFiles = @(Get-ChildItem -LiteralPath $offlineAssetRoot -Recurse -File |
-    ForEach-Object { [System.IO.Path]::GetRelativePath($offlineAssetRoot, $_.FullName) } |
-    Sort-Object)
-if (@(Compare-Object $expectedOfflineDirectories $actualOfflineDirectories).Count -ne 0 -or
-    @(Compare-Object $expectedOfflineFiles $actualOfflineFiles).Count -ne 0) {
-    throw "The offline installer must contain exactly runtime $ocrRuntimeVersion and the Small OCR model."
+if (-not $SkipOffline) {
+    $offlineAssetRoot = Join-Path $variantStages.offline "bin\assets\ocr"
+    $expectedOfflineDirectories = @(
+        "models",
+        "models\$ocrDefaultModelId",
+        "runtimes",
+        "runtimes\$ocrRuntimeVersion",
+        "runtimes\$ocrRuntimeVersion\$ocrPlatform"
+    ) | Sort-Object
+    $actualOfflineDirectories = @(Get-ChildItem -LiteralPath $offlineAssetRoot -Recurse -Directory |
+        ForEach-Object { [System.IO.Path]::GetRelativePath($offlineAssetRoot, $_.FullName) } |
+        Sort-Object)
+    $expectedOfflineFiles = @(
+        "asset-manifest.json",
+        "models\$ocrDefaultModelId\.complete.json",
+        "models\$ocrDefaultModelId\$($defaultOcrModel.Detector)",
+        "models\$ocrDefaultModelId\$($defaultOcrModel.Recognizer)",
+        "models\$ocrDefaultModelId\$($defaultOcrModel.Dictionary)",
+        "runtimes\$ocrRuntimeVersion\$ocrPlatform\.complete.json",
+        "runtimes\$ocrRuntimeVersion\$ocrPlatform\DirectML.dll",
+        "runtimes\$ocrRuntimeVersion\$ocrPlatform\runtime-manifest.json",
+        "runtimes\$ocrRuntimeVersion\$ocrPlatform\$ocrRuntimeFileName"
+    ) | Sort-Object
+    $actualOfflineFiles = @(Get-ChildItem -LiteralPath $offlineAssetRoot -Recurse -File |
+        ForEach-Object { [System.IO.Path]::GetRelativePath($offlineAssetRoot, $_.FullName) } |
+        Sort-Object)
+    if (@(Compare-Object $expectedOfflineDirectories $actualOfflineDirectories).Count -ne 0 -or
+        @(Compare-Object $expectedOfflineFiles $actualOfflineFiles).Count -ne 0) {
+        throw "The offline installer must contain exactly runtime $ocrRuntimeVersion and the Small OCR model."
+    }
 }
 $portableProcess = Join-Path $variantStages.portable "bin\assets\ocr\runtimes\$ocrRuntimeVersion\$ocrPlatform\$ocrRuntimeFileName"
 if (-not (Test-Path -LiteralPath $portableProcess -PathType Leaf)) {
     throw "The portable package stage is missing its versioned OCR runtime: $portableProcess"
 }
-$offlineOcrManifest = Get-ReleaseTreeFileManifest `
-    -Root (Join-Path $variantStages.offline "bin\assets\ocr")
 $portableOcrManifest = Get-ReleaseTreeFileManifest `
     -Root (Join-Path $variantStages.portable "bin\assets\ocr")
-if (($offlineOcrManifest | ConvertTo-Json -Depth 4 -Compress) -cne
-    ($portableOcrManifest | ConvertTo-Json -Depth 4 -Compress)) {
-    throw "The portable package OCR resources do not match the offline installer resources."
+if (-not $SkipOffline) {
+    $offlineOcrManifest = Get-ReleaseTreeFileManifest `
+        -Root (Join-Path $variantStages.offline "bin\assets\ocr")
+    if (($offlineOcrManifest | ConvertTo-Json -Depth 4 -Compress) -cne
+        ($portableOcrManifest | ConvertTo-Json -Depth 4 -Compress)) {
+        throw "The portable package OCR resources do not match the offline installer resources."
+    }
 }
 $portableDataMarker = Join-Path $variantStages.portable "bin\__data_directory"
 if (-not (Test-Path -LiteralPath $portableDataMarker -PathType Leaf) -or
@@ -1269,7 +1277,7 @@ if (-not (Test-Path -LiteralPath $portableDataMarker -PathType Leaf) -or
 }
 
 $producedPackages = @()
-foreach ($variant in @('online', 'offline')) {
+foreach ($variant in @($packageVariants | Where-Object { $_ -ne 'portable' })) {
     $updateName = "snow-shot-$packageVersion-windows-x64-$variant-update"
     $updatePath = Join-Path $buildDirectory "$updateName.zip"
     New-DeterministicZip -SourceDirectory $variantStages[$variant] -Destination $updatePath
@@ -1285,7 +1293,7 @@ foreach ($variant in @('online', 'offline')) {
 # NSIS still uses MAX_PATH for payload input, including long third-party license names.
 $nsisWorkDirectory = Join-Path $repoRoot "build\nsis"
 New-Item -ItemType Directory -Path $nsisWorkDirectory -Force | Out-Null
-foreach ($variant in @("online", "offline")) {
+foreach ($variant in @($packageVariants | Where-Object { $_ -ne 'portable' })) {
     $packageBaseName = "snow-shot-$packageVersion-windows-x64-$variant"
     $variantConfig = Join-Path $buildDirectory "CPackConfig-$variant.cmake"
     $baseConfigPath = $cpackConfig.Replace('\', '/')

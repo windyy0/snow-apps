@@ -11,13 +11,13 @@ without installing the native build toolchain locally. It only runs through
 3. Select the branch containing your changes and start the workflow.
 4. After success, download `snow-shot-windows-dev-<run number>` under **Artifacts**.
 
-The artifact contains the full Snow Shot online and offline Windows installers,
-a portable ZIP, their SHA-256 checksums, and package manifests. The offline
-installer and portable ZIP include the default OCR resources. The development
-workflow deliberately skips the Snow Shot Mini edition to reduce build time;
-the production release workflow still builds both editions. Packages are
-retained for 14 days. The workflow does not create a release or build macOS,
-Linux, or Snow Image Viewer.
+The artifact contains the full Snow Shot online Windows installer, a portable
+ZIP, their SHA-256 checksums, and package manifests. The portable ZIP includes
+the default OCR resources. The development workflow deliberately skips the Snow
+Shot Mini edition and the offline installer to reduce build and packaging time;
+the production release workflow still builds both editions and all release
+variants. Packages are retained for 14 days. The workflow does not create a
+release or build macOS, Linux, or Snow Image Viewer.
 
 ## Build environment and caches
 

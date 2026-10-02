@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build-windows:
-    name: Build Windows installers and portable package
+    name: Build Windows online installer and portable package
     runs-on: windows-2025-vs2026
     timeout-minutes: 360
     defaults:
@@ -172,14 +172,14 @@ jobs:
           key: ${{ steps.qt-cache.outputs.cache-primary-key }}
 
       - name: Build and package Windows artifacts
-        run: .\scripts\stage-snow-shot-release.ps1 -Parallelism 4 -SkipMini
+        run: .\scripts\stage-snow-shot-release.ps1 -Parallelism 4 -SkipMini -SkipOffline
 
       - name: Verify downloadable packages
         run: |
           $ErrorActionPreference = "Stop"
           $version = [regex]::Match((Get-Content -Raw CMakeLists.txt), 'set\(SNOW_SHOT_VERSION "([^"]+)"\)').Groups[1].Value
           if (-not $version) { throw "Snow Shot version was not found." }
-          foreach ($variant in @("online", "offline", "portable")) {
+          foreach ($variant in @("online", "portable")) {
             $extension = if ($variant -eq "portable") { "zip" } else { "exe" }
             $base = "build/snow-shot-msvc-release/snow-shot-$version-windows-x64-$variant"
             $package = Get-Item -LiteralPath "$base.$extension" -ErrorAction Stop
@@ -200,9 +200,6 @@ jobs:
             build/snow-shot-msvc-release/snow-shot-*-windows-x64-online.exe
             build/snow-shot-msvc-release/snow-shot-*-windows-x64-online.exe.sha256
             build/snow-shot-msvc-release/snow-shot-*-windows-x64-online.manifest.json
-            build/snow-shot-msvc-release/snow-shot-*-windows-x64-offline.exe
-            build/snow-shot-msvc-release/snow-shot-*-windows-x64-offline.exe.sha256
-            build/snow-shot-msvc-release/snow-shot-*-windows-x64-offline.manifest.json
             build/snow-shot-msvc-release/snow-shot-*-windows-x64-portable.zip
             build/snow-shot-msvc-release/snow-shot-*-windows-x64-portable.zip.sha256
             build/snow-shot-msvc-release/snow-shot-*-windows-x64-portable.manifest.json
